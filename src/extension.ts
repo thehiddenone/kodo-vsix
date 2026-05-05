@@ -1,132 +1,173 @@
+/**
+ * Kōdo VS Code extension — M1 entry point.
+ *
+ * Lifecycle:
+ *   1. Activation: launch kodo-server subprocess for the workspace root.
+ *   2. "Kōdo: Open Panel" command: create/reveal the WebView panel.
+ *   3. WebView ↔ extension host: status, tokens, ping/pong.
+ *   4. Deactivation: dispose server process and WS client.
+ */
+
+import * as path from 'path';
 import * as vscode from 'vscode';
+import { makeRequest } from './envelope';
+import type { Envelope } from './envelope';
+import { ServerLauncher } from './server-launcher';
+import { WsClient } from './ws-client';
 
-export function activate(context: vscode.ExtensionContext) {
-	const disposable = vscode.commands.registerCommand('kodo.open', () => {
-		const panel = vscode.window.createWebviewPanel(
-			'kodoConsole',
-			'Kōdo',
-			vscode.ViewColumn.One,
-			{ enableScripts: true }
-		);
+const WS_PORT = 9042;
+const WS_URL = `ws://127.0.0.1:${WS_PORT}/ws`;
+const SERVER_STARTUP_DELAY_MS = 1_500;
 
-		panel.webview.html = getWebviewContent();
+let launcher: ServerLauncher | null = null;
+let wsClient: WsClient | null = null;
+let panel: vscode.WebviewPanel | null = null;
 
-		panel.webview.onDidReceiveMessage(
-			message => {
-				if (message.type === 'submit') {
-					panel.webview.postMessage({ type: 'output', text: `> ${message.text}` });
-				}
-			},
-			undefined,
-			context.subscriptions
-		);
-	});
+export function activate(context: vscode.ExtensionContext): void {
+  // Determine project root (first workspace folder, or extension dir for dev)
+  const projectRoot =
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+    context.extensionPath;
 
-	context.subscriptions.push(disposable);
+  // Launch server
+  launcher = new ServerLauncher();
+  launcher.launch(projectRoot, WS_PORT);
+
+  // WS client: forward server envelopes to WebView
+  wsClient = new WsClient(
+    WS_URL,
+    (env: Envelope) => handleServerEnvelope(env),
+    (connected: boolean) => {
+      panel?.webview.postMessage({ type: 'status', connected });
+      if (connected) {
+        sendHello();
+      }
+    },
+  );
+
+  // Give the server a moment to bind before connecting
+  setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
+
+  // Register commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand('kodo.openPanel', () =>
+      openPanel(context),
+    ),
+    vscode.commands.registerCommand('kodo.initProject', () =>
+      vscode.window.showInformationMessage(
+        'Kōdo: Init Project — coming in M2.',
+      ),
+    ),
+  );
 }
 
-function getWebviewContent(): string {
-	return `<!DOCTYPE html>
+export function deactivate(): void {
+  wsClient?.dispose();
+  wsClient = null;
+  launcher?.dispose();
+  launcher = null;
+  panel = null;
+}
+
+// ---------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------
+
+function openPanel(context: vscode.ExtensionContext): void {
+  if (panel !== null) {
+    panel.reveal(vscode.ViewColumn.One);
+    return;
+  }
+
+  panel = vscode.window.createWebviewPanel(
+    'kodoPanel',
+    'Kōdo',
+    vscode.ViewColumn.One,
+    {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.file(path.join(context.extensionPath, 'dist')),
+      ],
+    },
+  );
+
+  const webviewJsUri = panel.webview.asWebviewUri(
+    vscode.Uri.file(path.join(context.extensionPath, 'dist', 'webview.js')),
+  );
+
+  const nonce = generateNonce();
+  panel.webview.html = buildHtml(webviewJsUri, nonce);
+
+  // Messages from WebView → extension host
+  panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
+    if (msg.type === 'ping') {
+      wsClient?.send(makeRequest('ping'));
+    }
+  });
+
+  panel.onDidDispose(() => {
+    panel = null;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Server → WebView routing
+// ---------------------------------------------------------------------------
+
+function handleServerEnvelope(env: Envelope): void {
+  if (env.kind === 'stream_chunk') {
+    const text = String(env.payload.text ?? '');
+    panel?.webview.postMessage({ type: 'token', text });
+    return;
+  }
+
+  const evtType = String(env.payload.type ?? '');
+
+  if (env.kind === 'response' && evtType === 'pong') {
+    panel?.webview.postMessage({ type: 'pong' });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'state') {
+    const stage = String(env.payload.stage ?? 'IDLE');
+    panel?.webview.postMessage({ type: 'stage', stage });
+    return;
+  }
+}
+
+function sendHello(): void {
+  wsClient?.send(
+    makeRequest('hello', { client: 'vsix', version: '0.1.0' }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function generateNonce(): string {
+  let text = '';
+  const possible =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
+}
+
+function buildHtml(webviewJsUri: vscode.Uri, nonce: string): string {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--vscode-editor-font-size, 13px);
-    background: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
-  }
-  #output {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-  #input-row {
-    display: flex;
-    border-top: 1px solid var(--vscode-panel-border);
-    padding: 6px;
-    gap: 6px;
-  }
-  #input {
-    flex: 1;
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, transparent);
-    padding: 4px 8px;
-    font-family: inherit;
-    font-size: inherit;
-    resize: none;
-    outline: none;
-    border-radius: 2px;
-    min-height: 28px;
-    max-height: 120px;
-  }
-  #send {
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border: none;
-    padding: 4px 12px;
-    cursor: pointer;
-    border-radius: 2px;
-    font-size: inherit;
-    align-self: flex-end;
-  }
-  #send:hover { background: var(--vscode-button-hoverBackground); }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'nonce-${nonce}';">
+  <title>Kōdo</title>
 </head>
 <body>
-<div id="output"></div>
-<div id="input-row">
-  <textarea id="input" rows="1" placeholder="Type a message..."></textarea>
-  <button id="send">Send</button>
-</div>
-<script>
-  const vscode = acquireVsCodeApi();
-  const output = document.getElementById('output');
-  const input = document.getElementById('input');
-  const send = document.getElementById('send');
-
-  function submit() {
-    const text = input.value.trim();
-    if (!text) return;
-    vscode.postMessage({ type: 'submit', text });
-    input.value = '';
-    input.style.height = 'auto';
-  }
-
-  send.addEventListener('click', submit);
-
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  });
-
-  input.addEventListener('input', () => {
-    input.style.height = 'auto';
-    input.style.height = input.scrollHeight + 'px';
-  });
-
-  window.addEventListener('message', e => {
-    const msg = e.data;
-    if (msg.type === 'output') {
-      const line = document.createElement('div');
-      line.textContent = msg.text;
-      output.appendChild(line);
-      output.scrollTop = output.scrollHeight;
-    }
-  });
-</script>
+  <div id="root"></div>
+  <script nonce="${nonce}" src="${webviewJsUri}"></script>
 </body>
 </html>`;
 }
-
-export function deactivate() {}
