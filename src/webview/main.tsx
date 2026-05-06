@@ -80,6 +80,9 @@ function App() {
       }
     }
     window.addEventListener('message', onMessage);
+    // Tell the extension host the listener is live; it replies with the
+    // cached connection state so a reopened panel shows live status.
+    vscode.postMessage({ type: 'ready' });
     return () => window.removeEventListener('message', onMessage);
   }, []);
 

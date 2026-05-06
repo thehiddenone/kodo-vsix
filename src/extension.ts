@@ -2,12 +2,17 @@
  * Kōdo VS Code extension — M1 entry point.
  *
  * Lifecycle:
- *   1. Activation: launch kodo-server subprocess for the workspace root.
- *   2. "Kōdo: Open Panel" command: create/reveal the WebView panel.
- *   3. WebView ↔ extension host: status, tokens, ping/pong.
- *   4. Deactivation: dispose server process and WS client.
+ *   1. Activation: pick a free loopback port, launch kodo-server bound to it,
+ *      open a persistent WebSocket client.
+ *   2. The WS client runs for the lifetime of the VS Code window — even when
+ *      the Kōdo panel is closed. State updates flow into an in-memory cache
+ *      maintained by the extension host.
+ *   3. "Kōdo: Open Panel" command: create/reveal the WebView panel, which
+ *      is a view onto the cached state (rehydrated on first mount).
+ *   4. Deactivation: dispose WS client and server subprocess.
  */
 
+import * as net from 'net';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeRequest } from './envelope';
@@ -15,29 +20,44 @@ import type { Envelope } from './envelope';
 import { ServerLauncher } from './server-launcher';
 import { WsClient } from './ws-client';
 
-const WS_PORT = 9042;
-const WS_URL = `ws://127.0.0.1:${WS_PORT}/ws`;
 const SERVER_STARTUP_DELAY_MS = 1_500;
+const TOKEN_BUFFER_MAX = 64 * 1024; // soft cap on cached stream text
 
 let launcher: ServerLauncher | null = null;
 let wsClient: WsClient | null = null;
 let panel: vscode.WebviewPanel | null = null;
 
-export function activate(context: vscode.ExtensionContext): void {
+// ---------------------------------------------------------------------------
+// Persistent state owned by the extension host
+//
+// The Kōdo panel is a thin view onto these values. While the panel is closed,
+// the WebSocket keeps running and keeps mutating this state; reopening the
+// panel rehydrates from here so the user sees the live picture, not a fresh
+// "Disconnected" UI.
+// ---------------------------------------------------------------------------
+let connState = false;
+let stageState = 'IDLE';
+let tokensState = '';
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // Determine project root (first workspace folder, or extension dir for dev)
   const projectRoot =
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
     context.extensionPath;
 
-  // Launch server
-  launcher = new ServerLauncher();
-  launcher.launch(projectRoot, WS_PORT);
+  // Pick a free ephemeral port. Each VS Code window gets its own port so
+  // multiple Kōdo sessions can run in parallel without clashing.
+  const port = await findFreePort();
+  const wsUrl = `ws://127.0.0.1:${port}/ws`;
 
-  // WS client: forward server envelopes to WebView
+  launcher = new ServerLauncher();
+  launcher.launch(projectRoot, port);
+
   wsClient = new WsClient(
-    WS_URL,
+    wsUrl,
     (env: Envelope) => handleServerEnvelope(env),
     (connected: boolean) => {
+      connState = connected;
       panel?.webview.postMessage({ type: 'status', connected });
       if (connected) {
         sendHello();
@@ -48,7 +68,6 @@ export function activate(context: vscode.ExtensionContext): void {
   // Give the server a moment to bind before connecting
   setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
 
-  // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('kodo.openPanel', () =>
       openPanel(context),
@@ -98,9 +117,16 @@ function openPanel(context: vscode.ExtensionContext): void {
   const nonce = generateNonce();
   panel.webview.html = buildHtml(webviewJsUri, nonce);
 
-  // Messages from WebView → extension host
   panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
-    if (msg.type === 'ping') {
+    if (msg.type === 'ready') {
+      // First message after the Preact app mounts: rehydrate the panel
+      // from the persistent extension-host state.
+      panel?.webview.postMessage({ type: 'status', connected: connState });
+      panel?.webview.postMessage({ type: 'stage', stage: stageState });
+      if (tokensState.length > 0) {
+        panel?.webview.postMessage({ type: 'token', text: tokensState });
+      }
+    } else if (msg.type === 'ping') {
       wsClient?.send(makeRequest('ping'));
     }
   });
@@ -111,12 +137,13 @@ function openPanel(context: vscode.ExtensionContext): void {
 }
 
 // ---------------------------------------------------------------------------
-// Server → WebView routing
+// Server → state cache → WebView routing
 // ---------------------------------------------------------------------------
 
 function handleServerEnvelope(env: Envelope): void {
   if (env.kind === 'stream_chunk') {
     const text = String(env.payload.text ?? '');
+    appendTokens(text);
     panel?.webview.postMessage({ type: 'token', text });
     return;
   }
@@ -130,8 +157,18 @@ function handleServerEnvelope(env: Envelope): void {
 
   if (env.kind === 'event' && evtType === 'state') {
     const stage = String(env.payload.stage ?? 'IDLE');
+    stageState = stage;
     panel?.webview.postMessage({ type: 'stage', stage });
     return;
+  }
+}
+
+function appendTokens(chunk: string): void {
+  tokensState += chunk;
+  if (tokensState.length > TOKEN_BUFFER_MAX) {
+    // Drop the oldest half so memory doesn't grow without bound during
+    // long sessions. Display will pick up wherever the cache currently is.
+    tokensState = tokensState.slice(-TOKEN_BUFFER_MAX / 2);
   }
 }
 
@@ -144,6 +181,30 @@ function sendHello(): void {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Bind a TCP server to port 0 to let the OS pick a free port, then close it.
+ *
+ * There's a small race between releasing the port and the kodo-server binding
+ * to it, but for a per-window dev launcher this is acceptable.
+ */
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const addr = probe.address();
+      if (typeof addr === 'object' && addr !== null) {
+        const picked = addr.port;
+        probe.close(() => resolve(picked));
+      } else {
+        probe.close();
+        reject(new Error('failed to read free port from probe socket'));
+      }
+    });
+  });
+}
 
 function generateNonce(): string {
   let text = '';
