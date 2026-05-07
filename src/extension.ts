@@ -1,5 +1,5 @@
 /**
- * Kōdo VS Code extension — M1 entry point.
+ * Kōdo VS Code extension — M2 entry point.
  *
  * Lifecycle:
  *   1. Activation: pick a free loopback port, launch kodo-server bound to it,
@@ -9,9 +9,12 @@
  *      maintained by the extension host.
  *   3. "Kōdo: Open Panel" command: create/reveal the WebView panel, which
  *      is a view onto the cached state (rehydrated on first mount).
- *   4. Deactivation: dispose WS client and server subprocess.
+ *   4. "Kōdo: Init Project" command: create kodo.md + src/ + gen/ + .kodo/
+ *      in the workspace root.
+ *   5. Deactivation: dispose WS client and server subprocess.
  */
 
+import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -22,36 +25,47 @@ import { WsClient } from './ws-client';
 
 const SERVER_STARTUP_DELAY_MS = 1_500;
 const TOKEN_BUFFER_MAX = 64 * 1024; // soft cap on cached stream text
+const API_KEY_SECRET = 'kodo.anthropicApiKey';
 
 let launcher: ServerLauncher | null = null;
 let wsClient: WsClient | null = null;
 let panel: vscode.WebviewPanel | null = null;
+let extensionContext: vscode.ExtensionContext | null = null;
 
 // ---------------------------------------------------------------------------
 // Persistent state owned by the extension host
-//
-// The Kōdo panel is a thin view onto these values. While the panel is closed,
-// the WebSocket keeps running and keeps mutating this state; reopening the
-// panel rehydrates from here so the user sees the live picture, not a fresh
-// "Disconnected" UI.
 // ---------------------------------------------------------------------------
 let connState = false;
 let stageState = 'IDLE';
 let tokensState = '';
+let usageState: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
+
+interface UsageSummary {
+  cumulativeUsd: number;
+  lastCallTokens: LastCallTokens | null;
+}
+
+interface LastCallTokens {
+  input: number;
+  output: number;
+  cache_write: number;
+  cache_read: number;
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  // Determine project root (first workspace folder, or extension dir for dev)
+  extensionContext = context;
+
   const projectRoot =
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
     context.extensionPath;
 
-  // Pick a free ephemeral port. Each VS Code window gets its own port so
-  // multiple Kōdo sessions can run in parallel without clashing.
+  const apiKey = await getOrPromptApiKey(context);
+
   const port = await findFreePort();
   const wsUrl = `ws://127.0.0.1:${port}/ws`;
 
   launcher = new ServerLauncher();
-  launcher.launch(projectRoot, port);
+  launcher.launch(projectRoot, port, apiKey);
 
   wsClient = new WsClient(
     wsUrl,
@@ -73,9 +87,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       openPanel(context),
     ),
     vscode.commands.registerCommand('kodo.initProject', () =>
-      vscode.window.showInformationMessage(
-        'Kōdo: Init Project — coming in M2.',
-      ),
+      initProject(projectRoot),
     ),
   );
 }
@@ -86,6 +98,60 @@ export function deactivate(): void {
   launcher?.dispose();
   launcher = null;
   panel = null;
+  extensionContext = null;
+}
+
+// ---------------------------------------------------------------------------
+// Init Project (FR-VSIX-05)
+// ---------------------------------------------------------------------------
+
+async function initProject(root: string): Promise<void> {
+  const kodoMd = path.join(root, 'kodo.md');
+  if (fs.existsSync(kodoMd)) {
+    const choice = await vscode.window.showWarningMessage(
+      'kodo.md already exists. Overwrite?',
+      'Overwrite',
+      'Cancel',
+    );
+    if (choice !== 'Overwrite') {
+      return;
+    }
+  }
+
+  try {
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'gen'), { recursive: true });
+    fs.mkdirSync(path.join(root, '.kodo', 'logs'), { recursive: true });
+    fs.mkdirSync(path.join(root, '.kodo', 'sessions'), { recursive: true });
+
+    const template = [
+      '# Kodo Project',
+      '',
+      '> Project marker. Required.',
+      '',
+      '## Toolchain',
+      '',
+      '- python',
+      '',
+      '## Components',
+      '',
+      '(empty until Architect runs; agents append entries)',
+      '',
+      '## Settings overrides',
+      '',
+      '(optional inline overrides; structured-but-prose)',
+      '',
+    ].join('\n');
+
+    fs.writeFileSync(kodoMd, template, 'utf8');
+    vscode.window.showInformationMessage('Kōdo project initialised.');
+
+    // Open kodo.md in the editor
+    const doc = await vscode.workspace.openTextDocument(kodoMd);
+    await vscode.window.showTextDocument(doc);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Kōdo: Init Project failed — ${String(err)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -119,15 +185,20 @@ function openPanel(context: vscode.ExtensionContext): void {
 
   panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
     if (msg.type === 'ready') {
-      // First message after the Preact app mounts: rehydrate the panel
-      // from the persistent extension-host state.
+      // Rehydrate the panel from the persistent extension-host state.
       panel?.webview.postMessage({ type: 'status', connected: connState });
       panel?.webview.postMessage({ type: 'stage', stage: stageState });
       if (tokensState.length > 0) {
         panel?.webview.postMessage({ type: 'token', text: tokensState });
       }
+      panel?.webview.postMessage({ type: 'usage', ...usageState });
     } else if (msg.type === 'ping') {
       wsClient?.send(makeRequest('ping'));
+    } else if (msg.type === 'prompt') {
+      const text = String(msg.text ?? '').trim();
+      if (text) {
+        wsClient?.send(makeRequest('prompt.submit', { text }));
+      }
     }
   });
 
@@ -161,13 +232,37 @@ function handleServerEnvelope(env: Envelope): void {
     panel?.webview.postMessage({ type: 'stage', stage });
     return;
   }
+
+  if (env.kind === 'event' && evtType === 'usage.update') {
+    const cumulativeUsd = Number(env.payload.cumulative_usd ?? 0);
+    const raw = env.payload.last_call_tokens;
+    const lastCallTokens: LastCallTokens | null =
+      raw && typeof raw === 'object'
+        ? {
+            input: Number((raw as Record<string, unknown>).input ?? 0),
+            output: Number((raw as Record<string, unknown>).output ?? 0),
+            cache_write: Number((raw as Record<string, unknown>).cache_write ?? 0),
+            cache_read: Number((raw as Record<string, unknown>).cache_read ?? 0),
+          }
+        : null;
+    usageState = { cumulativeUsd, lastCallTokens };
+    panel?.webview.postMessage({ type: 'usage', cumulativeUsd, lastCallTokens });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'error') {
+    const message = String(env.payload.message ?? 'Unknown server error');
+    const recoverable = Boolean(env.payload.recoverable ?? true);
+    if (!recoverable) {
+      vscode.window.showErrorMessage(`Kōdo: ${message}`);
+    }
+    return;
+  }
 }
 
 function appendTokens(chunk: string): void {
   tokensState += chunk;
   if (tokensState.length > TOKEN_BUFFER_MAX) {
-    // Drop the oldest half so memory doesn't grow without bound during
-    // long sessions. Display will pick up wherever the cache currently is.
     tokensState = tokensState.slice(-TOKEN_BUFFER_MAX / 2);
   }
 }
@@ -179,15 +274,35 @@ function sendHello(): void {
 }
 
 // ---------------------------------------------------------------------------
+// SecretStorage: Anthropic API key (FR-VSIX-04)
+// ---------------------------------------------------------------------------
+
+async function getOrPromptApiKey(context: vscode.ExtensionContext): Promise<string> {
+  const stored = await context.secrets.get(API_KEY_SECRET);
+  if (stored) {
+    return stored;
+  }
+
+  const input = await vscode.window.showInputBox({
+    title: 'Kōdo — Anthropic API Key',
+    prompt: 'Enter your Anthropic API key. It will be stored in VS Code SecretStorage.',
+    password: true,
+    placeHolder: 'sk-ant-...',
+    ignoreFocusOut: true,
+  });
+
+  if (input && input.trim()) {
+    await context.secrets.store(API_KEY_SECRET, input.trim());
+    return input.trim();
+  }
+
+  return '';
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Bind a TCP server to port 0 to let the OS pick a free port, then close it.
- *
- * There's a small race between releasing the port and the kodo-server binding
- * to it, but for a per-window dev launcher this is acceptable.
- */
 function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
