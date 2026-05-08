@@ -1,19 +1,16 @@
 /**
- * Kōdo WebView — M2 UI.
+ * Kōdo WebView — M3 UI.
  *
- * Renders inside a VS Code WebviewPanel (Chromium context).
- * Communicates with the extension host via acquireVsCodeApi().postMessage.
- *
- * New in M2:
- *  - Prompt input bar sends prompt.submit to the server via the extension host.
- *  - UsagePanel shows cumulative USD cost and per-call token breakdown.
- *  - Streaming tokens clear between prompts.
+ * New in M3:
+ *  - ApprovalGate card: Agree / Feedback buttons with free-text input.
+ *  - FileEvent cards: list of files written by agents with "Open" link.
+ *  - Agent status shown in header (current agent name).
+ *  - stream_end properly resets the streaming flag.
  */
 
 import { h, render } from 'preact';
 import { useEffect, useReducer, useRef } from 'preact/hooks';
 
-// VS Code WebView API — injected by the extension host at runtime
 declare function acquireVsCodeApi(): {
   postMessage(msg: Record<string, unknown>): void;
 };
@@ -21,7 +18,7 @@ declare function acquireVsCodeApi(): {
 const vscode = acquireVsCodeApi();
 
 // ---------------------------------------------------------------------------
-// State
+// Data types
 // ---------------------------------------------------------------------------
 
 interface LastCallTokens {
@@ -31,14 +28,33 @@ interface LastCallTokens {
   cache_read: number;
 }
 
+interface FileEventData {
+  path: string;
+  kind: string;
+}
+
+interface GateData {
+  gateId: string;
+  gateType: string;
+  summary: string;
+  artifactPath: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
 interface State {
   connected: boolean;
   stage: string;
+  agent: string | null;
   tokens: string;
   lastPong: string | null;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
   streaming: boolean;
+  fileEvents: FileEventData[];
+  pendingGate: GateData | null;
 }
 
 type Action =
@@ -46,8 +62,13 @@ type Action =
   | { type: 'token'; text: string }
   | { type: 'stream_end' }
   | { type: 'pong' }
-  | { type: 'stage'; stage: string }
-  | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null };
+  | { type: 'stage'; stage: string; agent: string | null }
+  | { type: 'agent_started'; agent: string }
+  | { type: 'agent_finished'; agent: string }
+  | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null }
+  | { type: 'file_change'; path: string; kind: string }
+  | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
+  | { type: 'approval_cleared' };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -60,20 +81,42 @@ function reducer(state: State, action: Action): State {
     case 'pong':
       return { ...state, lastPong: new Date().toLocaleTimeString() };
     case 'stage': {
-      // Clear token buffer when a new agent run starts
       const clearTokens = action.stage !== 'IDLE' && !state.streaming;
       return {
         ...state,
         stage: action.stage,
+        agent: action.agent,
         tokens: clearTokens ? '' : state.tokens,
       };
     }
+    case 'agent_started':
+      return { ...state, agent: action.agent };
+    case 'agent_finished':
+      return { ...state, agent: null };
     case 'usage':
       return {
         ...state,
         cumulativeUsd: action.cumulativeUsd,
         lastCallTokens: action.lastCallTokens,
       };
+    case 'file_change':
+      return {
+        ...state,
+        fileEvents: [...state.fileEvents, { path: action.path, kind: action.kind }],
+      };
+    case 'approval_request':
+      return {
+        ...state,
+        pendingGate: {
+          gateId: action.gateId,
+          gateType: action.gateType,
+          summary: action.summary,
+          artifactPath: action.artifactPath,
+        },
+        streaming: false,
+      };
+    case 'approval_cleared':
+      return { ...state, pendingGate: null };
     default:
       return state;
   }
@@ -82,11 +125,14 @@ function reducer(state: State, action: Action): State {
 const initial: State = {
   connected: false,
   stage: 'IDLE',
+  agent: null,
   tokens: '',
   lastPong: null,
   cumulativeUsd: 0,
   lastCallTokens: null,
   streaming: false,
+  fileEvents: [],
+  pendingGate: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -114,13 +160,39 @@ function App() {
           dispatch({ type: 'pong' });
           break;
         case 'stage':
-          dispatch({ type: 'stage', stage: String(msg.stage ?? 'IDLE') });
+          dispatch({
+            type: 'stage',
+            stage: String(msg.stage ?? 'IDLE'),
+            agent: msg.agent ? String(msg.agent) : null,
+          });
+          break;
+        case 'agent_started':
+          dispatch({ type: 'agent_started', agent: String(msg.agent ?? '') });
+          break;
+        case 'agent_finished':
+          dispatch({ type: 'agent_finished', agent: String(msg.agent ?? '') });
           break;
         case 'usage':
           dispatch({
             type: 'usage',
             cumulativeUsd: Number(msg.cumulativeUsd ?? 0),
             lastCallTokens: (msg.lastCallTokens as LastCallTokens | null) ?? null,
+          });
+          break;
+        case 'file_change':
+          dispatch({
+            type: 'file_change',
+            path: String(msg.path ?? ''),
+            kind: String(msg.kind ?? 'modify'),
+          });
+          break;
+        case 'approval_request':
+          dispatch({
+            type: 'approval_request',
+            gateId: String(msg.gateId ?? ''),
+            gateType: String(msg.gateType ?? ''),
+            summary: String(msg.summary ?? ''),
+            artifactPath: msg.artifactPath ? String(msg.artifactPath) : null,
           });
           break;
       }
@@ -137,6 +209,7 @@ function App() {
     if (!text || !state.connected) return;
     vscode.postMessage({ type: 'prompt', text });
     el.value = '';
+    dispatch({ type: 'stage', stage: 'NARRATIVE', agent: null });
   }
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -146,21 +219,24 @@ function App() {
     }
   }
 
-  function sendPing() {
-    vscode.postMessage({ type: 'ping' });
-  }
-
   const connColor = state.connected ? '#4ec9b0' : '#f48771';
   const connLabel = state.connected ? '● Connected' : '○ Disconnected';
   const isRunning = state.stage !== 'IDLE' && state.stage !== 'STOPPED' && state.stage !== 'ERROR';
+  const isBlocked = state.pendingGate !== null;
+
+  const agentLabel = state.agent ? ` › ${state.agent}` : '';
 
   return (
     <div style={styles.root}>
       {/* Header */}
       <div style={styles.header}>
         <span style={{ ...styles.status, color: connColor }}>{connLabel}</span>
-        <span style={styles.stageBadge}>{state.stage}</span>
-        <button style={styles.pingBtn} onClick={sendPing} disabled={!state.connected}>
+        <span style={styles.stageBadge}>{state.stage}{agentLabel}</span>
+        <button
+          style={styles.pingBtn}
+          onClick={() => vscode.postMessage({ type: 'ping' })}
+          disabled={!state.connected}
+        >
           Ping
         </button>
       </div>
@@ -169,7 +245,7 @@ function App() {
         <div style={styles.pongLine}>Pong at {state.lastPong}</div>
       )}
 
-      {/* Usage panel (FR-COS-01) */}
+      {/* Usage panel */}
       <UsagePanel
         cumulativeUsd={state.cumulativeUsd}
         lastCallTokens={state.lastCallTokens}
@@ -186,24 +262,44 @@ function App() {
           : 'Not connected to server.'}
       </div>
 
-      {/* Prompt input */}
-      <div style={styles.inputRow}>
-        <textarea
-          ref={inputRef}
-          style={styles.input}
-          placeholder="Type a prompt and press Enter…"
-          rows={2}
-          disabled={!state.connected || isRunning}
-          onKeyDown={handleKeyDown}
+      {/* File events */}
+      {state.fileEvents.length > 0 && (
+        <FileEventList events={state.fileEvents} />
+      )}
+
+      {/* Approval gate (replaces prompt input when pending) */}
+      {state.pendingGate !== null ? (
+        <ApprovalGate
+          gate={state.pendingGate}
+          onRespond={(action, feedback) => {
+            vscode.postMessage({
+              type: 'approval_respond',
+              gateId: state.pendingGate!.gateId,
+              action,
+              feedback,
+            });
+            dispatch({ type: 'approval_cleared' });
+          }}
         />
-        <button
-          style={styles.sendBtn}
-          onClick={sendPrompt}
-          disabled={!state.connected || isRunning}
-        >
-          {isRunning ? '…' : '↑'}
-        </button>
-      </div>
+      ) : (
+        <div style={styles.inputRow}>
+          <textarea
+            ref={inputRef}
+            style={styles.input}
+            placeholder="Type a prompt and press Enter…"
+            rows={2}
+            disabled={!state.connected || isRunning || isBlocked}
+            onKeyDown={handleKeyDown}
+          />
+          <button
+            style={styles.sendBtn}
+            onClick={sendPrompt}
+            disabled={!state.connected || isRunning || isBlocked}
+          >
+            {isRunning ? '…' : '↑'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -221,7 +317,6 @@ function UsagePanel({ cumulativeUsd, lastCallTokens }: UsagePanelProps) {
   if (cumulativeUsd === 0 && lastCallTokens === null) {
     return null;
   }
-
   return (
     <div style={styles.usagePanel}>
       <span style={styles.usageTotal}>
@@ -238,7 +333,108 @@ function UsagePanel({ cumulativeUsd, lastCallTokens }: UsagePanelProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal inline styles
+// FileEventList component
+// ---------------------------------------------------------------------------
+
+interface FileEventListProps {
+  events: FileEventData[];
+}
+
+function FileEventList({ events }: FileEventListProps) {
+  return (
+    <div style={styles.fileEvents}>
+      <div style={styles.fileEventsHeader}>Files written</div>
+      {events.map((fe, i) => (
+        <div key={i} style={styles.fileEvent}>
+          <span style={styles.fileEventKind}>{fe.kind}</span>
+          <span style={styles.fileEventPath}>{fe.path}</span>
+          <button
+            style={styles.openBtn}
+            onClick={() => vscode.postMessage({ type: 'open_file', path: fe.path })}
+          >
+            Open
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ApprovalGate component
+// ---------------------------------------------------------------------------
+
+interface ApprovalGateProps {
+  gate: GateData;
+  onRespond: (action: string, feedback: string) => void;
+}
+
+function ApprovalGate({ gate, onRespond }: ApprovalGateProps) {
+  const feedbackRef = useRef<HTMLTextAreaElement>(null);
+
+  function handleAgree() {
+    onRespond('agree', '');
+  }
+
+  function handleFeedback() {
+    const text = feedbackRef.current?.value.trim() ?? '';
+    if (!text) return;
+    onRespond('feedback', text);
+    if (feedbackRef.current) feedbackRef.current.value = '';
+  }
+
+  function handleFeedbackKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleFeedback();
+    }
+  }
+
+  return (
+    <div style={styles.gateCard}>
+      <div style={styles.gateHeader}>
+        <span style={styles.gateType}>{gate.gateType.toUpperCase()}</span>
+        <span style={styles.gateTitle}>Approval Gate</span>
+      </div>
+      {gate.summary && <div style={styles.gateSummary}>{gate.summary}</div>}
+      {gate.artifactPath && (
+        <div style={styles.gateArtifact}>
+          <button
+            style={styles.openBtn}
+            onClick={() => vscode.postMessage({ type: 'open_file', path: gate.artifactPath! })}
+          >
+            Open {gate.artifactPath}
+          </button>
+        </div>
+      )}
+      <div style={styles.gateActions}>
+        <div style={styles.gateTopRow}>
+          <button style={styles.agreeBtn} onClick={handleAgree}>
+            ✓ Agree
+          </button>
+          <button style={styles.stopBtn} onClick={() => onRespond('stop', '')}>
+            ◼ Stop
+          </button>
+        </div>
+        <div style={styles.feedbackRow}>
+          <textarea
+            ref={feedbackRef}
+            style={styles.feedbackInput}
+            placeholder="Feedback (Enter to send)…"
+            rows={2}
+            onKeyDown={handleFeedbackKey}
+          />
+          <button style={styles.feedbackBtn} onClick={handleFeedback}>
+            ↵ Feedback
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Styles
 // ---------------------------------------------------------------------------
 
 const styles: Record<string, h.JSX.CSSProperties> = {
@@ -259,9 +455,7 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     gap: '12px',
     marginBottom: '6px',
   },
-  status: {
-    fontWeight: 'bold',
-  },
+  status: { fontWeight: 'bold' },
   stageBadge: {
     background: 'var(--vscode-badge-background)',
     color: 'var(--vscode-badge-foreground)',
@@ -290,12 +484,8 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     padding: '4px 0',
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
-  usageTotal: {
-    fontVariantNumeric: 'tabular-nums',
-  },
-  usageDetail: {
-    opacity: 0.8,
-  },
+  usageTotal: { fontVariantNumeric: 'tabular-nums' },
+  usageDetail: { opacity: 0.8 },
   stream: {
     flex: 1,
     overflowY: 'auto',
@@ -304,7 +494,128 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     borderTop: '1px solid var(--vscode-panel-border)',
     paddingTop: '8px',
     marginBottom: '8px',
+    minHeight: '80px',
   },
+  // File events
+  fileEvents: {
+    borderTop: '1px solid var(--vscode-panel-border)',
+    padding: '6px 0',
+    marginBottom: '8px',
+  },
+  fileEventsHeader: {
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginBottom: '4px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  fileEvent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '12px',
+    marginBottom: '2px',
+  },
+  fileEventKind: {
+    background: 'var(--vscode-badge-background)',
+    color: 'var(--vscode-badge-foreground)',
+    borderRadius: '3px',
+    padding: '1px 4px',
+    fontSize: '10px',
+    flexShrink: 0,
+  },
+  fileEventPath: {
+    flex: 1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontFamily: 'monospace',
+  },
+  openBtn: {
+    background: 'transparent',
+    color: 'var(--vscode-textLink-foreground)',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '11px',
+    padding: '0 4px',
+    textDecoration: 'underline',
+    flexShrink: 0,
+  },
+  // Approval gate
+  gateCard: {
+    border: '1px solid var(--vscode-focusBorder)',
+    borderRadius: '4px',
+    padding: '10px',
+    marginBottom: '8px',
+    background: 'var(--vscode-editor-background)',
+  },
+  gateHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '6px',
+  },
+  gateType: {
+    background: 'var(--vscode-badge-background)',
+    color: 'var(--vscode-badge-foreground)',
+    borderRadius: '3px',
+    padding: '1px 5px',
+    fontSize: '10px',
+    fontWeight: 'bold',
+  },
+  gateTitle: { fontWeight: 'bold', fontSize: '13px' },
+  gateSummary: {
+    fontSize: '12px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginBottom: '8px',
+    fontStyle: 'italic',
+  },
+  gateArtifact: { marginBottom: '8px' },
+  gateActions: { display: 'flex', flexDirection: 'column', gap: '6px' },
+  gateTopRow: { display: 'flex', gap: '8px', alignItems: 'center' },
+  agreeBtn: {
+    background: 'var(--vscode-button-background)',
+    color: 'var(--vscode-button-foreground)',
+    border: 'none',
+    borderRadius: '2px',
+    padding: '6px 16px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    alignSelf: 'flex-start',
+  },
+  stopBtn: {
+    background: 'transparent',
+    color: 'var(--vscode-errorForeground)',
+    border: '1px solid var(--vscode-errorForeground)',
+    borderRadius: '2px',
+    padding: '6px 12px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    alignSelf: 'flex-start',
+  },
+  feedbackRow: { display: 'flex', gap: '6px', alignItems: 'flex-end' },
+  feedbackInput: {
+    flex: 1,
+    background: 'var(--vscode-input-background)',
+    color: 'var(--vscode-input-foreground)',
+    border: '1px solid var(--vscode-input-border)',
+    borderRadius: '2px',
+    padding: '4px 6px',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    resize: 'none',
+  },
+  feedbackBtn: {
+    background: 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
+    color: 'var(--vscode-button-secondaryForeground, var(--vscode-button-foreground))',
+    border: 'none',
+    borderRadius: '2px',
+    padding: '6px 10px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    alignSelf: 'stretch',
+  },
+  // Prompt input
   inputRow: {
     display: 'flex',
     gap: '6px',

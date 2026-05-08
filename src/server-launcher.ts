@@ -50,40 +50,32 @@ export class ServerLauncher {
       return; // already running
     }
 
-    let cmd: string;
-    let args: string[];
-    let detached: boolean;
+    // Spawn the venv Python directly instead of going through a shell wrapper.
+    //
+    // The previous approach (cmd.exe /c "call activate.bat && python ..." on
+    // Windows, bash -c "source activate && exec python ..." on POSIX) caused
+    // argument-quoting bugs: nested double-quotes inside the cmd.exe /c string
+    // mangled paths that contained backslashes, stripping drive letters and
+    // producing nonsense project roots like "E:\source\kodo\sourcekodo-vsix".
+    //
+    // Spawning the venv interpreter directly avoids any shell in the middle.
+    // Node's spawn() handles argument quoting correctly via CreateProcess on
+    // Windows and execvp on POSIX, so projectRoot is always passed verbatim.
+    // The venv Python already has all packages installed; no activation needed.
+    const python = IS_WINDOWS
+      ? `${KODO_VENV_DIR_WIN}\\Scripts\\python.exe`
+      : `${KODO_VENV_DIR_POSIX}/bin/python`;
 
-    if (IS_WINDOWS) {
-      // cmd.exe /c "call activate.bat && python -m kodo.server ..."
-      //
-      // The whole second argument must be wrapped in literal quotes so cmd
-      // sees it as one /c command. Node.js normally escapes embedded quotes
-      // with backslashes, which cmd doesn't understand — hence the
-      // ``windowsVerbatimArguments`` flag below.
-      const activate = `${KODO_VENV_DIR_WIN}\\Scripts\\activate.bat`;
-      cmd = 'cmd.exe';
-      args = [
-        '/c',
-        `"call "${activate}" && python -m kodo.server ` +
-          `--project "${projectRoot}" --port ${port} --log-level DEBUG"`,
-      ];
-      detached = false;
-    } else {
-      // bash -c "source activate && exec python -m kodo.server ..."
-      // `detached: true` puts the child in its own process group so we can
-      // kill the entire group on dispose (POSIX equivalent of taskkill /T).
-      // `exec` replaces the bash process with python so killing the group
-      // reliably terminates python.
-      const activate = `${KODO_VENV_DIR_POSIX}/bin/activate`;
-      cmd = 'bash';
-      args = [
-        '-c',
-        `. "${activate}" && exec python -m kodo.server ` +
-          `--project "${projectRoot}" --port ${port} --log-level DEBUG`,
-      ];
-      detached = true;
-    }
+    const cmd = python;
+    const args = [
+      '-m', 'kodo.server',
+      '--project', projectRoot,
+      '--port', String(port),
+      '--log-level', 'DEBUG',
+    ];
+    // detached=true on POSIX puts the child in its own process group so
+    // dispose() can kill the whole group (see dispose() below).
+    const detached = !IS_WINDOWS;
 
     this.output.appendLine(`$ ${cmd} ${args.join(' ')}`);
 
@@ -97,10 +89,6 @@ export class ServerLauncher {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached,
       env: childEnv,
-      // Windows: keep our manual quoting in the cmd.exe /c argument intact.
-      // Without this, Node escapes embedded ``"`` as ``\"`` and cmd fails
-      // to parse the activation path.
-      windowsVerbatimArguments: IS_WINDOWS,
     });
 
     this.proc.stdout?.on('data', (data: Buffer) => {

@@ -20,8 +20,8 @@
         "title": "Kōdo: Open Panel"
       },
       {
-        "command": "kodo.initProject",
-        "title": "Kōdo: Init Project"
+        "command": "kodo.createProject",
+        "title": "Kōdo: Create New Project"
       }
     ]
   },

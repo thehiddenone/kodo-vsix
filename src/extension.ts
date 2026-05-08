@@ -1,5 +1,5 @@
 /**
- * Kōdo VS Code extension — M2 entry point.
+ * Kōdo VS Code extension — M3 entry point.
  *
  * Lifecycle:
  *   1. Activation: pick a free loopback port, launch kodo-server bound to it,
@@ -30,7 +30,7 @@ const API_KEY_SECRET = 'kodo.anthropicApiKey';
 let launcher: ServerLauncher | null = null;
 let wsClient: WsClient | null = null;
 let panel: vscode.WebviewPanel | null = null;
-let extensionContext: vscode.ExtensionContext | null = null;
+let projectRoot = '';
 
 // ---------------------------------------------------------------------------
 // Persistent state owned by the extension host
@@ -38,7 +38,10 @@ let extensionContext: vscode.ExtensionContext | null = null;
 let connState = false;
 let stageState = 'IDLE';
 let tokensState = '';
+let agentState: string | null = null;
 let usageState: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
+let fileEventsState: FileEventData[] = [];
+let pendingGateState: GateData | null = null;
 
 interface UsageSummary {
   cumulativeUsd: number;
@@ -52,10 +55,20 @@ interface LastCallTokens {
   cache_read: number;
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  extensionContext = context;
+interface FileEventData {
+  path: string;
+  kind: string;
+}
 
-  const projectRoot =
+interface GateData {
+  gateId: string;
+  gateType: string;
+  summary: string;
+  artifactPath: string | null;
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  projectRoot =
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
     context.extensionPath;
 
@@ -86,8 +99,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('kodo.openPanel', () =>
       openPanel(context),
     ),
-    vscode.commands.registerCommand('kodo.initProject', () =>
-      initProject(projectRoot),
+    vscode.commands.registerCommand('kodo.createProject', () =>
+      createProject(),
     ),
   );
 }
@@ -98,18 +111,31 @@ export function deactivate(): void {
   launcher?.dispose();
   launcher = null;
   panel = null;
-  extensionContext = null;
 }
 
 // ---------------------------------------------------------------------------
 // Init Project (FR-VSIX-05)
 // ---------------------------------------------------------------------------
 
-async function initProject(root: string): Promise<void> {
+async function createProject(): Promise<void> {
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'Select project folder',
+    title: 'Kōdo: Select or create a project folder',
+  });
+
+  if (!picked || picked.length === 0) {
+    return;
+  }
+
+  const root = picked[0].fsPath;
   const kodoMd = path.join(root, 'kodo.md');
+
   if (fs.existsSync(kodoMd)) {
     const choice = await vscode.window.showWarningMessage(
-      'kodo.md already exists. Overwrite?',
+      `${kodoMd} already exists. Overwrite?`,
       'Overwrite',
       'Cancel',
     );
@@ -144,11 +170,20 @@ async function initProject(root: string): Promise<void> {
     ].join('\n');
 
     fs.writeFileSync(kodoMd, template, 'utf8');
-    vscode.window.showInformationMessage('Kōdo project initialised.');
 
-    // Open kodo.md in the editor
+    const folderUri = vscode.Uri.file(root);
+    const alreadyInWorkspace = vscode.workspace.workspaceFolders?.some(
+      (f) => f.uri.fsPath === folderUri.fsPath,
+    ) ?? false;
+    if (!alreadyInWorkspace) {
+      const insertAt = vscode.workspace.workspaceFolders?.length ?? 0;
+      vscode.workspace.updateWorkspaceFolders(insertAt, 0, { uri: folderUri });
+    }
+
     const doc = await vscode.workspace.openTextDocument(kodoMd);
     await vscode.window.showTextDocument(doc);
+
+    vscode.window.showInformationMessage(`Kōdo project initialised at ${root}`);
   } catch (err) {
     vscode.window.showErrorMessage(`Kōdo: Init Project failed — ${String(err)}`);
   }
@@ -185,19 +220,46 @@ function openPanel(context: vscode.ExtensionContext): void {
 
   panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
     if (msg.type === 'ready') {
-      // Rehydrate the panel from the persistent extension-host state.
+      // Rehydrate from persistent state
       panel?.webview.postMessage({ type: 'status', connected: connState });
-      panel?.webview.postMessage({ type: 'stage', stage: stageState });
+      panel?.webview.postMessage({ type: 'stage', stage: stageState, agent: agentState });
       if (tokensState.length > 0) {
         panel?.webview.postMessage({ type: 'token', text: tokensState });
       }
       panel?.webview.postMessage({ type: 'usage', ...usageState });
+      for (const fe of fileEventsState) {
+        panel?.webview.postMessage({ type: 'file_change', ...fe });
+      }
+      if (pendingGateState !== null) {
+        panel?.webview.postMessage({ type: 'approval_request', ...pendingGateState });
+      }
     } else if (msg.type === 'ping') {
       wsClient?.send(makeRequest('ping'));
     } else if (msg.type === 'prompt') {
       const text = String(msg.text ?? '').trim();
       if (text) {
+        // Clear accumulated state for new workflow run
+        tokensState = '';
+        fileEventsState = [];
+        pendingGateState = null;
         wsClient?.send(makeRequest('prompt.submit', { text }));
+      }
+    } else if (msg.type === 'approval_respond') {
+      const gateId = String(msg.gateId ?? '');
+      const action = String(msg.action ?? 'agree');
+      const feedback = String(msg.feedback ?? '');
+      wsClient?.send(makeRequest('approval.respond', { gate_id: gateId, action, feedback }));
+      pendingGateState = null;
+    } else if (msg.type === 'open_file') {
+      const filePath = String(msg.path ?? '');
+      if (filePath && projectRoot) {
+        const fileUri = vscode.Uri.file(path.join(projectRoot, filePath));
+        vscode.commands.executeCommand('vscode.open', fileUri).then(
+          () => undefined,
+          (err: unknown) => {
+            vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`);
+          },
+        );
       }
     }
   });
@@ -212,10 +274,17 @@ function openPanel(context: vscode.ExtensionContext): void {
 // ---------------------------------------------------------------------------
 
 function handleServerEnvelope(env: Envelope): void {
+  // Token streaming
   if (env.kind === 'stream_chunk') {
     const text = String(env.payload.text ?? '');
     appendTokens(text);
     panel?.webview.postMessage({ type: 'token', text });
+    return;
+  }
+
+  // Stream end — signals the WebView that streaming is done
+  if (env.kind === 'stream_end') {
+    panel?.webview.postMessage({ type: 'stream_end' });
     return;
   }
 
@@ -228,8 +297,45 @@ function handleServerEnvelope(env: Envelope): void {
 
   if (env.kind === 'event' && evtType === 'state') {
     const stage = String(env.payload.stage ?? 'IDLE');
+    const agent = env.payload.agent ? String(env.payload.agent) : null;
     stageState = stage;
-    panel?.webview.postMessage({ type: 'stage', stage });
+    agentState = agent;
+    panel?.webview.postMessage({ type: 'stage', stage, agent });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'agent.started') {
+    const agent = String(env.payload.agent ?? '');
+    agentState = agent;
+    panel?.webview.postMessage({ type: 'agent_started', agent });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'agent.finished') {
+    const agent = String(env.payload.agent ?? '');
+    panel?.webview.postMessage({ type: 'agent_finished', agent });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'file.change') {
+    const fileEvent: FileEventData = {
+      path: String(env.payload.path ?? ''),
+      kind: String(env.payload.kind ?? 'modify'),
+    };
+    fileEventsState.push(fileEvent);
+    panel?.webview.postMessage({ type: 'file_change', ...fileEvent });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'approval.request') {
+    const gate: GateData = {
+      gateId: String(env.payload.gate_id ?? ''),
+      gateType: String(env.payload.gate_type ?? ''),
+      summary: String(env.payload.summary ?? ''),
+      artifactPath: env.payload.artifact_path ? String(env.payload.artifact_path) : null,
+    };
+    pendingGateState = gate;
+    panel?.webview.postMessage({ type: 'approval_request', ...gate });
     return;
   }
 
@@ -254,7 +360,9 @@ function handleServerEnvelope(env: Envelope): void {
     const message = String(env.payload.message ?? 'Unknown server error');
     const recoverable = Boolean(env.payload.recoverable ?? true);
     if (!recoverable) {
-      vscode.window.showErrorMessage(`Kōdo: ${message}`);
+      vscode.window.showErrorMessage(
+        `Kōdo: an error occurred and the workflow cannot proceed — ${message}`,
+      );
     }
     return;
   }
@@ -278,24 +386,22 @@ function sendHello(): void {
 // ---------------------------------------------------------------------------
 
 async function getOrPromptApiKey(context: vscode.ExtensionContext): Promise<string> {
+  const envKey = process.env['KODO_ANTHROPIC_API_KEY']?.trim() ?? '';
+
+  if (envKey) {
+    await context.secrets.store(API_KEY_SECRET, envKey);
+    return envKey;
+  }
+
   const stored = await context.secrets.get(API_KEY_SECRET);
   if (stored) {
     return stored;
   }
 
-  const input = await vscode.window.showInputBox({
-    title: 'Kōdo — Anthropic API Key',
-    prompt: 'Enter your Anthropic API key. It will be stored in VS Code SecretStorage.',
-    password: true,
-    placeHolder: 'sk-ant-...',
-    ignoreFocusOut: true,
-  });
-
-  if (input && input.trim()) {
-    await context.secrets.store(API_KEY_SECRET, input.trim());
-    return input.trim();
-  }
-
+  vscode.window.showWarningMessage(
+    'Kōdo: KODO_ANTHROPIC_API_KEY is not set. ' +
+      'Set the environment variable and restart VS Code to enable LLM calls.',
+  );
   return '';
 }
 
