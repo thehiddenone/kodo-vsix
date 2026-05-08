@@ -42,6 +42,8 @@ let agentState: string | null = null;
 let usageState: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
 let fileEventsState: FileEventData[] = [];
 let pendingGateState: GateData | null = null;
+let autonomousState = false;
+let resumeSessionId: string | null = null;
 
 interface UsageSummary {
   cumulativeUsd: number;
@@ -233,6 +235,10 @@ function openPanel(context: vscode.ExtensionContext): void {
       if (pendingGateState !== null) {
         panel?.webview.postMessage({ type: 'approval_request', ...pendingGateState });
       }
+      panel?.webview.postMessage({ type: 'autonomous_changed', autonomous: autonomousState });
+      if (resumeSessionId !== null) {
+        panel?.webview.postMessage({ type: 'resume_offer', sessionId: resumeSessionId });
+      }
     } else if (msg.type === 'ping') {
       wsClient?.send(makeRequest('ping'));
     } else if (msg.type === 'prompt') {
@@ -249,6 +255,20 @@ function openPanel(context: vscode.ExtensionContext): void {
       const action = String(msg.action ?? 'agree');
       const feedback = String(msg.feedback ?? '');
       wsClient?.send(makeRequest('approval.respond', { gate_id: gateId, action, feedback }));
+      pendingGateState = null;
+    } else if (msg.type === 'stop') {
+      wsClient?.send(makeRequest('stop', {}));
+    } else if (msg.type === 'mode_set') {
+      const autonomous = Boolean(msg.autonomous);
+      autonomousState = autonomous;
+      wsClient?.send(makeRequest('mode.set', { autonomous }));
+    } else if (msg.type === 'resume') {
+      const sessionId = String(msg.sessionId ?? '');
+      resumeSessionId = null;
+      wsClient?.send(makeRequest('session.resume', { session_id: sessionId }));
+      // Clear old accumulated UI state
+      tokensState = '';
+      fileEventsState = [];
       pendingGateState = null;
     } else if (msg.type === 'open_file') {
       const filePath = String(msg.path ?? '');
@@ -298,9 +318,14 @@ function handleServerEnvelope(env: Envelope): void {
   if (env.kind === 'event' && evtType === 'state') {
     const stage = String(env.payload.stage ?? 'IDLE');
     const agent = env.payload.agent ? String(env.payload.agent) : null;
+    const autonomous = Boolean(env.payload.autonomous ?? false);
     stageState = stage;
     agentState = agent;
     panel?.webview.postMessage({ type: 'stage', stage, agent });
+    if (autonomous !== autonomousState) {
+      autonomousState = autonomous;
+      panel?.webview.postMessage({ type: 'autonomous_changed', autonomous });
+    }
     return;
   }
 
@@ -364,6 +389,13 @@ function handleServerEnvelope(env: Envelope): void {
         `Kōdo: an error occurred and the workflow cannot proceed — ${message}`,
       );
     }
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'resume_offer') {
+    const sid = String(env.payload.session_id ?? '');
+    resumeSessionId = sid;
+    panel?.webview.postMessage({ type: 'resume_offer', sessionId: sid });
     return;
   }
 }

@@ -1,11 +1,10 @@
 /**
- * Kōdo WebView — M3 UI.
+ * Kōdo WebView — M5 UI.
  *
- * New in M3:
- *  - ApprovalGate card: Agree / Feedback buttons with free-text input.
- *  - FileEvent cards: list of files written by agents with "Open" link.
- *  - Agent status shown in header (current agent name).
- *  - stream_end properly resets the streaming flag.
+ * New in M5:
+ *  - AutonomousToggle: pinned top-left, sends mode.set to server.
+ *  - Global StopButton: pinned top-right, sends stop to server at any time.
+ *  - ResumeBanner: shown when server emits resume_offer at connection time.
  */
 
 import { h, render } from 'preact';
@@ -55,6 +54,8 @@ interface State {
   streaming: boolean;
   fileEvents: FileEventData[];
   pendingGate: GateData | null;
+  autonomous: boolean;
+  resumeSessionId: string | null;
 }
 
 type Action =
@@ -68,7 +69,10 @@ type Action =
   | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null }
   | { type: 'file_change'; path: string; kind: string }
   | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
-  | { type: 'approval_cleared' };
+  | { type: 'approval_cleared' }
+  | { type: 'autonomous_changed'; autonomous: boolean }
+  | { type: 'resume_offer'; sessionId: string }
+  | { type: 'resume_dismissed' };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -117,6 +121,12 @@ function reducer(state: State, action: Action): State {
       };
     case 'approval_cleared':
       return { ...state, pendingGate: null };
+    case 'autonomous_changed':
+      return { ...state, autonomous: action.autonomous };
+    case 'resume_offer':
+      return { ...state, resumeSessionId: action.sessionId };
+    case 'resume_dismissed':
+      return { ...state, resumeSessionId: null };
     default:
       return state;
   }
@@ -133,6 +143,8 @@ const initial: State = {
   streaming: false,
   fileEvents: [],
   pendingGate: null,
+  autonomous: false,
+  resumeSessionId: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -195,6 +207,12 @@ function App() {
             artifactPath: msg.artifactPath ? String(msg.artifactPath) : null,
           });
           break;
+        case 'autonomous_changed':
+          dispatch({ type: 'autonomous_changed', autonomous: Boolean(msg.autonomous) });
+          break;
+        case 'resume_offer':
+          dispatch({ type: 'resume_offer', sessionId: String(msg.sessionId ?? '') });
+          break;
       }
     }
     window.addEventListener('message', onMessage);
@@ -226,20 +244,56 @@ function App() {
 
   const agentLabel = state.agent ? ` › ${state.agent}` : '';
 
+  function handleStop() {
+    vscode.postMessage({ type: 'stop' });
+  }
+
+  function handleToggleAutonomous() {
+    const next = !state.autonomous;
+    vscode.postMessage({ type: 'mode_set', autonomous: next });
+    dispatch({ type: 'autonomous_changed', autonomous: next });
+  }
+
+  function handleResume() {
+    vscode.postMessage({ type: 'resume', sessionId: state.resumeSessionId ?? '' });
+    dispatch({ type: 'resume_dismissed' });
+  }
+
   return (
     <div style={styles.root}>
       {/* Header */}
       <div style={styles.header}>
+        <button
+          style={{
+            ...styles.autonomousBtn,
+            background: state.autonomous
+              ? 'var(--vscode-button-background)'
+              : 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
+            opacity: state.autonomous ? 1 : 0.7,
+          }}
+          onClick={handleToggleAutonomous}
+          title={state.autonomous ? 'Autonomous mode ON — click to disable' : 'Click to enable autonomous mode'}
+        >
+          {state.autonomous ? '⚡ Auto' : '⚡ Manual'}
+        </button>
+
         <span style={{ ...styles.status, color: connColor }}>{connLabel}</span>
         <span style={styles.stageBadge}>{state.stage}{agentLabel}</span>
+
         <button
-          style={styles.pingBtn}
-          onClick={() => vscode.postMessage({ type: 'ping' })}
-          disabled={!state.connected}
+          style={styles.globalStopBtn}
+          onClick={handleStop}
+          disabled={!state.connected || !isRunning}
+          title="Stop all running agent work"
         >
-          Ping
+          ◼ Stop
         </button>
       </div>
+
+      {/* Resume banner */}
+      {state.resumeSessionId !== null && (
+        <ResumeBanner onResume={handleResume} onDismiss={() => dispatch({ type: 'resume_dismissed' })} />
+      )}
 
       {state.lastPong !== null && (
         <div style={styles.pongLine}>Pong at {state.lastPong}</div>
@@ -300,6 +354,31 @@ function App() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ResumeBanner component
+// ---------------------------------------------------------------------------
+
+interface ResumeBannerProps {
+  onResume: () => void;
+  onDismiss: () => void;
+}
+
+function ResumeBanner({ onResume, onDismiss }: ResumeBannerProps) {
+  return (
+    <div style={styles.resumeBanner}>
+      <span style={styles.resumeText}>
+        An unfinished session was found. Resume where you left off?
+      </span>
+      <button style={styles.resumeBtn} onClick={onResume}>
+        ↺ Resume
+      </button>
+      <button style={styles.resumeDismissBtn} onClick={onDismiss}>
+        Dismiss
+      </button>
     </div>
   );
 }
@@ -452,16 +531,71 @@ const styles: Record<string, h.JSX.CSSProperties> = {
   header: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
+    gap: '8px',
     marginBottom: '6px',
   },
-  status: { fontWeight: 'bold' },
+  status: { fontWeight: 'bold', flexShrink: 0 },
   stageBadge: {
     background: 'var(--vscode-badge-background)',
     color: 'var(--vscode-badge-foreground)',
     borderRadius: '4px',
     padding: '2px 6px',
     fontSize: '11px',
+    flex: 1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  autonomousBtn: {
+    color: 'var(--vscode-button-foreground)',
+    border: 'none',
+    borderRadius: '2px',
+    padding: '2px 8px',
+    cursor: 'pointer',
+    fontSize: '11px',
+    flexShrink: 0,
+  },
+  globalStopBtn: {
+    background: 'transparent',
+    color: 'var(--vscode-errorForeground)',
+    border: '1px solid var(--vscode-errorForeground)',
+    borderRadius: '2px',
+    padding: '2px 8px',
+    cursor: 'pointer',
+    fontSize: '11px',
+    fontWeight: 'bold',
+    flexShrink: 0,
+  },
+  resumeBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    background: 'var(--vscode-notifications-background, var(--vscode-editor-background))',
+    border: '1px solid var(--vscode-focusBorder)',
+    borderRadius: '4px',
+    padding: '6px 10px',
+    marginBottom: '6px',
+    fontSize: '12px',
+  },
+  resumeText: { flex: 1 },
+  resumeBtn: {
+    background: 'var(--vscode-button-background)',
+    color: 'var(--vscode-button-foreground)',
+    border: 'none',
+    borderRadius: '2px',
+    padding: '3px 10px',
+    cursor: 'pointer',
+    fontSize: '11px',
+    fontWeight: 'bold',
+    flexShrink: 0,
+  },
+  resumeDismissBtn: {
+    background: 'transparent',
+    color: 'var(--vscode-descriptionForeground)',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '11px',
+    flexShrink: 0,
   },
   pingBtn: {
     background: 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
