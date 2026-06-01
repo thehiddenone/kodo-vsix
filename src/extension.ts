@@ -18,19 +18,27 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { makeRequest } from './envelope';
+import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
+import { SidebarProvider } from './sidebar-provider';
 import { ServerLauncher } from './server-launcher';
 import { WsClient } from './ws-client';
 
 const SERVER_STARTUP_DELAY_MS = 1_500;
 const TOKEN_BUFFER_MAX = 64 * 1024; // soft cap on cached stream text
-const API_KEY_SECRET = 'kodo.anthropicApiKey';
+
+let extensionContext: vscode.ExtensionContext | null = null;
+// Serial queue for api_key.request handling — ensures at most one "enter key"
+// dialog is shown at a time; subsequent requests for the same vendor will find
+// the key in SecretStorage once the first completes.
+let _apiKeyQueue: Promise<void> = Promise.resolve();
 
 let launcher: ServerLauncher | null = null;
 let wsClient: WsClient | null = null;
 let panel: vscode.WebviewPanel | null = null;
+let sidebarProvider: SidebarProvider | null = null;
 let projectRoot = '';
+let modeState: 'local' | 'cloud' = 'local';
 
 // ---------------------------------------------------------------------------
 // Persistent state owned by the extension host
@@ -70,17 +78,16 @@ interface GateData {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extensionContext = context;
   projectRoot =
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
     context.extensionPath;
-
-  const apiKey = await getOrPromptApiKey(context);
 
   const port = await findFreePort();
   const wsUrl = `ws://127.0.0.1:${port}/ws`;
 
   launcher = new ServerLauncher();
-  launcher.launch(projectRoot, port, apiKey);
+  launcher.launch(projectRoot, port);
 
   wsClient = new WsClient(
     wsUrl,
@@ -88,6 +95,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     (connected: boolean) => {
       connState = connected;
       panel?.webview.postMessage({ type: 'status', connected });
+      sidebarProvider?.update({ connected });
       if (connected) {
         sendHello();
       }
@@ -97,12 +105,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Give the server a moment to bind before connecting
   setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
 
+  modeState = _readMode();
+  sidebarProvider = new SidebarProvider(
+    { connected: connState, stage: stageState, autonomous: autonomousState, mode: modeState },
+    (msg) => {
+      if (msg.type === 'open_panel') {
+        openPanel(context);
+      } else if (msg.type === 'set_mode') {
+        _setMode(msg.mode);
+      } else if (msg.type === 'toggle_autonomous') {
+        autonomousState = !autonomousState;
+        wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
+        sidebarProvider?.update({ autonomous: autonomousState });
+      }
+    },
+  );
+
   context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('kodo.view', sidebarProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     vscode.commands.registerCommand('kodo.openPanel', () =>
       openPanel(context),
     ),
     vscode.commands.registerCommand('kodo.createProject', () =>
       createProject(),
+    ),
+    vscode.commands.registerCommand('kodo.useCloudLLMs', () =>
+      _setMode('cloud'),
+    ),
+    vscode.commands.registerCommand('kodo.useLocalLLM', () =>
+      _setMode('local'),
     ),
   );
 }
@@ -113,6 +146,7 @@ export function deactivate(): void {
   launcher?.dispose();
   launcher = null;
   panel = null;
+  sidebarProvider = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,9 +356,11 @@ function handleServerEnvelope(env: Envelope): void {
     stageState = stage;
     agentState = agent;
     panel?.webview.postMessage({ type: 'stage', stage, agent });
+    sidebarProvider?.update({ stage });
     if (autonomous !== autonomousState) {
       autonomousState = autonomous;
       panel?.webview.postMessage({ type: 'autonomous_changed', autonomous });
+      sidebarProvider?.update({ autonomous });
     }
     return;
   }
@@ -398,6 +434,27 @@ function handleServerEnvelope(env: Envelope): void {
     panel?.webview.postMessage({ type: 'resume_offer', sessionId: sid });
     return;
   }
+
+  // Server-initiated API key request (WS_PROTOCOL.md §6 api_key.request).
+  // Enqueued to serialize concurrent requests — the 2nd request waits until
+  // the 1st completes, then retrieves the now-stored key immediately.
+  if (env.kind === 'request' && evtType === 'api_key.request') {
+    const vendor = String(env.payload.vendor ?? '');
+    const requestId = env.id;
+    _apiKeyQueue = _apiKeyQueue.then(() => _handleApiKeyRequest(vendor, requestId));
+    return;
+  }
+
+  // Server tells VSIX to clear a stored key (e.g. after a 401 rejection).
+  if (env.kind === 'event' && evtType === 'api_key.revoke') {
+    const vendor = String(env.payload.vendor ?? '');
+    if (vendor && extensionContext) {
+      extensionContext.secrets
+        .delete(`kodo.apiKey.${vendor}`)
+        .then(undefined, () => undefined);
+    }
+    return;
+  }
 }
 
 function appendTokens(chunk: string): void {
@@ -413,28 +470,85 @@ function sendHello(): void {
   );
 }
 
-// ---------------------------------------------------------------------------
-// SecretStorage: Anthropic API key (FR-VSIX-04)
-// ---------------------------------------------------------------------------
+function _readMode(): 'local' | 'cloud' {
+  if (!projectRoot) { return 'local'; }
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
+    return s['mode'] === 'cloud' ? 'cloud' : 'local';
+  } catch {
+    return 'local';
+  }
+}
 
-async function getOrPromptApiKey(context: vscode.ExtensionContext): Promise<string> {
-  const envKey = process.env['KODO_ANTHROPIC_API_KEY']?.trim() ?? '';
-
-  if (envKey) {
-    await context.secrets.store(API_KEY_SECRET, envKey);
-    return envKey;
+function _setMode(mode: 'cloud' | 'local'): void {
+  if (!projectRoot) {
+    vscode.window.showErrorMessage('Kōdo: no project folder is open.');
+    return;
   }
 
-  const stored = await context.secrets.get(API_KEY_SECRET);
+  const kodoDir = path.join(projectRoot, '.kodo');
+  const settingsPath = path.join(kodoDir, 'settings.json');
+
+  // Read existing project settings (if any), update mode, write back.
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      // Unreadable — start fresh with just the mode key.
+    }
+  }
+
+  settings['mode'] = mode;
+  fs.mkdirSync(kodoDir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+
+  wsClient?.send(makeRequest('config.reload'));
+  modeState = mode;
+  sidebarProvider?.update({ mode });
+
+  const label = mode === 'cloud' ? 'cloud AI (API key required)' : 'local AI via llama.cpp';
+  vscode.window.showInformationMessage(`Kōdo: switched to ${label}.`);
+}
+
+// ---------------------------------------------------------------------------
+// SecretStorage: per-vendor API key management (WS_PROTOCOL.md §6)
+// ---------------------------------------------------------------------------
+
+async function _handleApiKeyRequest(vendor: string, requestId: string): Promise<void> {
+  if (!extensionContext) {
+    return;
+  }
+
+  const secretKey = `kodo.apiKey.${vendor}`;
+
+  // Return the stored key if available — no user prompt needed.
+  const stored = await extensionContext.secrets.get(secretKey);
   if (stored) {
-    return stored;
+    wsClient?.send(makeResponse(requestId, { api_key: stored }));
+    return;
   }
 
-  vscode.window.showWarningMessage(
-    'Kōdo: KODO_ANTHROPIC_API_KEY is not set. ' +
-      'Set the environment variable and restart VS Code to enable LLM calls.',
-  );
-  return '';
+  // Ask the user to enter the key.
+  const entered = await vscode.window.showInputBox({
+    title: `Kōdo: API key required`,
+    prompt: `Enter the API key for ${vendor}`,
+    password: true,
+    placeHolder: `${vendor} API key`,
+    ignoreFocusOut: true,
+  });
+
+  if (!entered?.trim()) {
+    vscode.window.showErrorMessage(
+      `Kōdo: prompt not sent. A ${vendor} API key is needed to run AI — without it Kōdo cannot do anything. ` +
+        'If you prefer not to use a cloud API, you can point Kōdo at a local AI running on your machine (llama.cpp).',
+    );
+    wsClient?.send(makeResponse(requestId, { error: 'cancelled' }));
+    return;
+  }
+
+  await extensionContext.secrets.store(secretKey, entered.trim());
+  wsClient?.send(makeResponse(requestId, { api_key: entered.trim() }));
 }
 
 // ---------------------------------------------------------------------------

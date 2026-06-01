@@ -29,6 +29,18 @@ export function makeRequest(
   };
 }
 
+export function makeResponse(
+  correlationId: string,
+  payload: Record<string, unknown>,
+): Envelope {
+  return {
+    kind: 'response',
+    id: newId(),
+    correlation_id: correlationId,
+    payload,
+  };
+}
+
 export function toJson(env: Envelope): string {
   return JSON.stringify(env);
 }

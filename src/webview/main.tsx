@@ -227,6 +227,7 @@ function App() {
     if (!text || !state.connected) return;
     vscode.postMessage({ type: 'prompt', text });
     el.value = '';
+    el.style.height = '';
     dispatch({ type: 'stage', stage: 'NARRATIVE', agent: null });
   }
 
@@ -237,8 +238,6 @@ function App() {
     }
   }
 
-  const connColor = state.connected ? '#4ec9b0' : '#f48771';
-  const connLabel = state.connected ? '● Connected' : '○ Disconnected';
   const isRunning = state.stage !== 'IDLE' && state.stage !== 'STOPPED' && state.stage !== 'ERROR';
   const isBlocked = state.pendingGate !== null;
 
@@ -248,10 +247,10 @@ function App() {
     vscode.postMessage({ type: 'stop' });
   }
 
-  function handleToggleAutonomous() {
-    const next = !state.autonomous;
-    vscode.postMessage({ type: 'mode_set', autonomous: next });
-    dispatch({ type: 'autonomous_changed', autonomous: next });
+  function handleInput(e: Event) {
+    const el = e.currentTarget as HTMLTextAreaElement;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
   }
 
   function handleResume() {
@@ -261,35 +260,6 @@ function App() {
 
   return (
     <div style={styles.root}>
-      {/* Header */}
-      <div style={styles.header}>
-        <button
-          style={{
-            ...styles.autonomousBtn,
-            background: state.autonomous
-              ? 'var(--vscode-button-background)'
-              : 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
-            opacity: state.autonomous ? 1 : 0.7,
-          }}
-          onClick={handleToggleAutonomous}
-          title={state.autonomous ? 'Autonomous mode ON — click to disable' : 'Click to enable autonomous mode'}
-        >
-          {state.autonomous ? '⚡ Auto' : '⚡ Manual'}
-        </button>
-
-        <span style={{ ...styles.status, color: connColor }}>{connLabel}</span>
-        <span style={styles.stageBadge}>{state.stage}{agentLabel}</span>
-
-        <button
-          style={styles.globalStopBtn}
-          onClick={handleStop}
-          disabled={!state.connected || !isRunning}
-          title="Stop all running agent work"
-        >
-          ◼ Stop
-        </button>
-      </div>
-
       {/* Resume banner */}
       {state.resumeSessionId !== null && (
         <ResumeBanner onResume={handleResume} onDismiss={() => dispatch({ type: 'resume_dismissed' })} />
@@ -336,22 +306,36 @@ function App() {
           }}
         />
       ) : (
-        <div style={styles.inputRow}>
+        <div style={styles.inputArea}>
           <textarea
             ref={inputRef}
             style={styles.input}
             placeholder="Type a prompt and press Enter…"
-            rows={2}
             disabled={!state.connected || isRunning || isBlocked}
             onKeyDown={handleKeyDown}
+            onInput={handleInput}
           />
-          <button
-            style={styles.sendBtn}
-            onClick={sendPrompt}
-            disabled={!state.connected || isRunning || isBlocked}
-          >
-            {isRunning ? '…' : '↑'}
-          </button>
+          <div style={styles.inputFooter}>
+            <span style={styles.stageBadgeBottom}>{state.stage}{agentLabel}</span>
+            <div style={{ flex: 1 }} />
+            <div style={styles.footerButtons}>
+              <button
+                style={styles.sendBtn}
+                onClick={sendPrompt}
+                disabled={!state.connected || isRunning || isBlocked}
+              >
+                {isRunning ? '…' : '↑'}
+              </button>
+              <button
+                style={styles.globalStopBtn}
+                onClick={handleStop}
+                disabled={!state.connected || !isRunning}
+                title="Stop all running agent work"
+              >
+                ◼
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -528,41 +512,24 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     padding: '12px',
     boxSizing: 'border-box',
   },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    marginBottom: '6px',
-  },
-  status: { fontWeight: 'bold', flexShrink: 0 },
-  stageBadge: {
-    background: 'var(--vscode-badge-background)',
-    color: 'var(--vscode-badge-foreground)',
-    borderRadius: '4px',
-    padding: '2px 6px',
+  stageBadgeBottom: {
     fontSize: '11px',
-    flex: 1,
+    color: 'var(--vscode-descriptionForeground)',
+    width: '80px',
+    minWidth: '80px',
+    flexShrink: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-  },
-  autonomousBtn: {
-    color: 'var(--vscode-button-foreground)',
-    border: 'none',
-    borderRadius: '2px',
-    padding: '2px 8px',
-    cursor: 'pointer',
-    fontSize: '11px',
-    flexShrink: 0,
   },
   globalStopBtn: {
     background: 'transparent',
     color: 'var(--vscode-errorForeground)',
     border: '1px solid var(--vscode-errorForeground)',
     borderRadius: '2px',
-    padding: '2px 8px',
+    width: '40px',
     cursor: 'pointer',
-    fontSize: '11px',
+    fontSize: '13px',
     fontWeight: 'bold',
     flexShrink: 0,
   },
@@ -750,13 +717,12 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     alignSelf: 'stretch',
   },
   // Prompt input
-  inputRow: {
+  inputArea: {
     display: 'flex',
-    gap: '6px',
-    alignItems: 'flex-end',
+    flexDirection: 'column',
   },
   input: {
-    flex: 1,
+    width: '100%',
     background: 'var(--vscode-input-background)',
     color: 'var(--vscode-input-foreground)',
     border: '1px solid var(--vscode-input-border)',
@@ -765,16 +731,31 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     fontFamily: 'inherit',
     fontSize: 'inherit',
     resize: 'none',
+    minHeight: '80px',
+    maxHeight: '180px',
+    overflowY: 'auto',
+    boxSizing: 'border-box',
+  },
+  inputFooter: {
+    display: 'flex',
+    alignItems: 'center',
+    height: '50px',
+    paddingTop: '6px',
+  },
+  footerButtons: {
+    display: 'flex',
+    gap: '10px',
+    alignSelf: 'stretch',
+    alignItems: 'stretch',
   },
   sendBtn: {
-    background: 'var(--vscode-button-background)',
-    color: 'var(--vscode-button-foreground)',
+    background: '#2ea043',
+    color: '#ffffff',
     border: 'none',
     borderRadius: '2px',
-    padding: '6px 12px',
+    width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
-    alignSelf: 'stretch',
   },
 };
 

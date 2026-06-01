@@ -38,14 +38,13 @@ export class ServerLauncher {
   /**
    * Launch the Kōdo server for ``projectRoot``.
    *
-   * The Anthropic API key is passed via the child process environment so
-   * it is never written to disk (FR-VSIX-04, NFR-06).
+   * API keys are delivered at runtime over the WebSocket via ``api_key.request``
+   * / ``api_key.response`` — never via environment variables.
    *
    * @param projectRoot  Absolute path to the Kodo project directory.
    * @param port         WebSocket port (default 9042).
-   * @param apiKey       Anthropic API key to inject as ANTHROPIC_API_KEY.
    */
-  launch(projectRoot: string, port = 9042, apiKey = ''): void {
+  launch(projectRoot: string, port = 9042): void {
     if (this.proc !== null) {
       return; // already running
     }
@@ -79,16 +78,10 @@ export class ServerLauncher {
 
     this.output.appendLine(`$ ${cmd} ${args.join(' ')}`);
 
-    // Pass the API key via environment; it is never written to disk.
-    const childEnv: NodeJS.ProcessEnv = { ...process.env };
-    if (apiKey) {
-      childEnv['ANTHROPIC_API_KEY'] = apiKey;
-    }
-
     this.proc = spawn(cmd, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached,
-      env: childEnv,
+      env: process.env,
     });
 
     this.proc.stdout?.on('data', (data: Buffer) => {

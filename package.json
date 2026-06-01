@@ -14,16 +14,52 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "kodo",
+          "title": "Kōdo",
+          "icon": "images/Kodo_24x24.svg"
+        }
+      ]
+    },
+    "views": {
+      "kodo": [
+        {
+          "id": "kodo.view",
+          "name": "Kōdo",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "kodo.openPanel",
-        "title": "Kōdo: Open Panel"
+        "title": "Kōdo: Open Panel",
+        "icon": "images/Kodo_16x16.svg"
       },
       {
         "command": "kodo.createProject",
         "title": "Kōdo: Create New Project"
+      },
+      {
+        "command": "kodo.useCloudLLMs",
+        "title": "Kōdo: Use Cloud LLMs"
+      },
+      {
+        "command": "kodo.useLocalLLM",
+        "title": "Kōdo: Use Local LLM via llama.cpp"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "kodo.openPanel",
+          "when": "view == kodo.view",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "dependencies": {
     "ws": "^8.18.0"
