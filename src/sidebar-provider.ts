@@ -1,20 +1,41 @@
 import * as vscode from 'vscode';
 
+export interface ModelInfo {
+  name: string;
+  residence: 'local' | 'cloud';
+  description: string;
+  model_id: string;
+  repo_id: string;
+  filename: string;
+}
+
 export interface SidebarState {
   connected: boolean;
   stage: string;
   autonomous: boolean;
   mode: 'local' | 'cloud';
+  models: ModelInfo[];
+  installedModels: string[];
+  activeLocalModel: string;
+  effectiveLocalModel: string;
+  llamaInstalled: boolean;
+  llamaVersion: string;
+  llamaInstalling: boolean;
 }
 
 export type SidebarMessage =
   | { type: 'open_panel' }
   | { type: 'set_mode'; mode: 'local' | 'cloud' }
-  | { type: 'toggle_autonomous' };
+  | { type: 'toggle_autonomous' }
+  | { type: 'set_active_model'; name: string }
+  | { type: 'restart_llamacpp' }
+  | { type: 'install_llamacpp' }
+  | { type: 'ready' };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view: vscode.WebviewView | undefined;
   private _state: SidebarState;
+  private _ready = false;
 
   constructor(
     initialState: SidebarState,
@@ -25,20 +46,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this._view = webviewView;
+    this._ready = false;
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = buildHtml();
 
     webviewView.webview.onDidReceiveMessage((msg: SidebarMessage) => {
+      if (msg.type === 'ready') {
+        this._ready = true;
+        this._post(this._state);
+        return;
+      }
       this.onMessage(msg);
     });
-
-    // Push current state immediately so the view isn't stale on first render.
-    this._post(this._state);
   }
 
   update(patch: Partial<SidebarState>): void {
     this._state = { ...this._state, ...patch };
-    this._post(this._state);
+    if (this._ready) {
+      this._post(this._state);
+    }
   }
 
   private _post(state: SidebarState): void {
@@ -83,8 +109,11 @@ function buildHtml(): string {
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .conn-dot.on  { background: #4caf50; }
-    .conn-dot.off { background: var(--vscode-disabledForeground, #666); }
+    .conn-dot.on      { background: #4caf50; }
+    .conn-dot.off     { background: var(--vscode-disabledForeground, #666); }
+    .conn-dot.working { background: #f0a500; }
+    .conn-dot.waiting { background: #f0a500; }
+    .conn-dot.error   { background: var(--vscode-errorForeground, #f44336); }
     button {
       display: block;
       width: 100%;
@@ -97,8 +126,14 @@ function buildHtml(): string {
       cursor: pointer;
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
+      box-sizing: border-box;
     }
     button:hover { background: var(--vscode-button-hoverBackground); }
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+      background: var(--vscode-button-background);
+    }
     #auto-btn {
       flex: 1;
       width: auto;
@@ -128,6 +163,60 @@ function buildHtml(): string {
       cursor: pointer;
       margin: 0;
     }
+    /* Model cards */
+    #cards-section { margin-top: 4px; }
+    .card {
+      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+      border-radius: 4px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      background: var(--vscode-editor-inactiveSelectionBackground, transparent);
+    }
+    .card.active {
+      border-color: var(--vscode-focusBorder, var(--vscode-button-background));
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .card-header input[type="radio"] { flex-shrink: 0; }
+    .card-name {
+      font-weight: 600;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card-badge {
+      font-size: 0.78em;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: #4caf5033;
+      color: #4caf50;
+      flex-shrink: 0;
+    }
+    .card-desc {
+      font-size: 0.88em;
+      color: var(--vscode-descriptionForeground);
+      line-height: 1.4;
+      margin-bottom: 6px;
+    }
+    .card-install-btn {
+      display: block;
+      width: 100%;
+      padding: 3px 8px;
+      margin-bottom: 0;
+      font-size: 0.85em;
+      background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+      color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+    }
+    .card-install-btn:hover {
+      background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+    }
+    #restart-btn { margin-bottom: 8px; }
+    #restart-btn:disabled { opacity: 0.45; cursor: default; }
   </style>
 </head>
 <body>
@@ -148,13 +237,18 @@ function buildHtml(): string {
     </label>
     <label>
       <input type="radio" name="llm-mode" value="cloud" id="mode-cloud">
-      Use a cloud AI service
+      Use cloud AI service
     </label>
   </div>
   <hr>
 
+  <div id="cards-section"></div>
+
   <script nonce="${nonce}">
     const vsc = acquireVsCodeApi();
+
+    // Notify extension that webview is ready to receive state.
+    vsc.postMessage({ type: 'ready' });
 
     document.getElementById('auto-btn').addEventListener('click', () => {
       vsc.postMessage({ type: 'toggle_autonomous' });
@@ -170,17 +264,174 @@ function buildHtml(): string {
       });
     });
 
+    // ----------------------------------------------------------------
+    // State
+    // ----------------------------------------------------------------
+    let _state = {
+      connected: false,
+      stage: 'intake',
+      mode: 'local',
+      models: [],
+      installedModels: [],
+      activeLocalModel: '',
+      effectiveLocalModel: '',
+      llamaInstalled: false,
+      llamaVersion: '',
+      llamaInstalling: false,
+    };
+
+    function statusDisplay(connected, stage) {
+      if (!connected) { return { cls: 'off', label: 'Disconnected' }; }
+      switch (stage) {
+        case 'running':       return { cls: 'working', label: 'Working…' };
+        case 'awaiting_user': return { cls: 'waiting', label: 'Waiting for you' };
+        case 'error':         return { cls: 'error',   label: 'Error' };
+        case 'stopped':       return { cls: 'off',     label: 'Stopped' };
+        case 'done':          return { cls: 'on',      label: 'Done' };
+        default:              return { cls: 'on',      label: 'Ready' };
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Cards rendering
+    // ----------------------------------------------------------------
+    function renderCards() {
+      const section = document.getElementById('cards-section');
+      section.innerHTML = '';
+
+      const residence = _state.mode === 'local' ? 'local' : 'cloud';
+      const filtered = _state.models.filter(m => m.residence === residence);
+
+      if (filtered.length === 0) { return; }
+
+      // llama.cpp action button + version — local only, above cards
+      if (_state.mode === 'local') {
+        if (!_state.llamaInstalled || _state.llamaInstalling) {
+          const installBtn = document.createElement('button');
+          installBtn.id = 'restart-btn';
+          installBtn.textContent = _state.llamaInstalling ? 'Installing…' : 'Install llama.cpp';
+          installBtn.disabled = _state.llamaInstalling;
+          installBtn.addEventListener('click', () => {
+            vsc.postMessage({ type: 'install_llamacpp' });
+          });
+          section.appendChild(installBtn);
+        } else {
+          const restartBtn = document.createElement('button');
+          restartBtn.id = 'restart-btn';
+          restartBtn.textContent = '↺ Restart llama.cpp';
+          const needsRestart =
+            _state.activeLocalModel !== '' &&
+            _state.effectiveLocalModel !== '' &&
+            _state.activeLocalModel !== _state.effectiveLocalModel;
+          restartBtn.disabled = !needsRestart;
+          restartBtn.addEventListener('click', () => {
+            vsc.postMessage({ type: 'restart_llamacpp' });
+          });
+          section.appendChild(restartBtn);
+
+          if (_state.llamaVersion) {
+            const ver = document.createElement('div');
+            ver.style.cssText = 'font-size:0.8em;color:var(--vscode-descriptionForeground);margin-bottom:6px;';
+            ver.textContent = 'llama.cpp ' + _state.llamaVersion;
+            section.appendChild(ver);
+          }
+        }
+      }
+
+      filtered.forEach(model => {
+        const isLocal = model.residence === 'local';
+        const isInstalled = _state.installedModels.includes(model.name);
+        const isActive = _state.activeLocalModel === model.name;
+
+        const card = document.createElement('div');
+        card.className = 'card' + (isActive ? ' active' : '');
+        card.dataset.name = model.name;
+
+        // Header: radio + name + installed badge
+        const header = document.createElement('div');
+        header.className = 'card-header';
+
+        if (isLocal) {
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'active-model';
+          radio.value = model.name;
+          radio.checked = isActive;
+          radio.disabled = !isInstalled;
+          radio.addEventListener('change', () => {
+            if (radio.checked) {
+              vsc.postMessage({ type: 'set_active_model', name: model.name });
+            }
+          });
+          header.appendChild(radio);
+        }
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'card-name';
+        nameEl.textContent = model.name;
+        header.appendChild(nameEl);
+
+        if (isInstalled) {
+          const badge = document.createElement('span');
+          badge.className = 'card-badge';
+          badge.textContent = 'Installed';
+          header.appendChild(badge);
+        }
+
+        card.appendChild(header);
+
+        // Description
+        const desc = document.createElement('div');
+        desc.className = 'card-desc';
+        desc.textContent = model.description;
+        card.appendChild(desc);
+
+        // Install button for uninstalled local models (placeholder)
+        if (isLocal && !isInstalled) {
+          const installBtn = document.createElement('button');
+          installBtn.className = 'card-install-btn';
+          installBtn.textContent = 'Install';
+          installBtn.disabled = true;
+          card.appendChild(installBtn);
+        }
+
+        section.appendChild(card);
+      });
+    }
+
+    // ----------------------------------------------------------------
+    // Message handler
+    // ----------------------------------------------------------------
     window.addEventListener('message', ({ data }) => {
-      if (data.type !== 'update') return;
+      if (data.type !== 'update') { return; }
 
-      const dot = document.getElementById('conn-dot');
-      dot.className = 'conn-dot ' + (data.connected ? 'on' : 'off');
-      document.getElementById('conn-lbl').textContent = data.connected ? 'Connected' : 'Disconnected';
+      // Unified status
+      _state.connected = Boolean(data.connected);
+      if (typeof data.stage === 'string') { _state.stage = data.stage; }
+      const { cls, label } = statusDisplay(_state.connected, _state.stage);
+      document.getElementById('conn-dot').className = 'conn-dot ' + cls;
+      document.getElementById('conn-lbl').textContent = label;
 
-      document.getElementById('auto-btn').textContent = data.autonomous ? '⚡ Autonomous' : '⚡ Manual';
+      document.getElementById('auto-btn').textContent =
+        data.autonomous ? '⚡ Autonomous' : '⚡ Manual';
 
+      // Mode radio
       const radio = document.querySelector('input[value="' + data.mode + '"]');
       if (radio) { radio.checked = true; }
+
+      // Update local state for cards
+      _state.mode = data.mode || _state.mode;
+      _state.models = data.models || _state.models;
+      _state.installedModels = data.installedModels || _state.installedModels;
+      _state.activeLocalModel = data.activeLocalModel !== undefined
+        ? data.activeLocalModel : _state.activeLocalModel;
+      _state.effectiveLocalModel = data.effectiveLocalModel !== undefined
+        ? data.effectiveLocalModel : _state.effectiveLocalModel;
+      if (data.llamaInstalled !== undefined) { _state.llamaInstalled = Boolean(data.llamaInstalled); }
+      if (typeof data.llamaVersion === 'string') { _state.llamaVersion = data.llamaVersion; }
+      if (data.llamaInstalling !== undefined) { _state.llamaInstalling = Boolean(data.llamaInstalling); }
+
+      renderCards();
     });
   </script>
 </body>

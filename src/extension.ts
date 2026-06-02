@@ -16,11 +16,13 @@
 
 import * as fs from 'fs';
 import * as net from 'net';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
 import { SidebarProvider } from './sidebar-provider';
+import type { ModelInfo } from './sidebar-provider';
 import { ServerLauncher } from './server-launcher';
 import { WsClient } from './ws-client';
 
@@ -52,6 +54,13 @@ let fileEventsState: FileEventData[] = [];
 let pendingGateState: GateData | null = null;
 let autonomousState = false;
 let resumeSessionId: string | null = null;
+let modelsState: ModelInfo[] = [];
+let installedModelsState: string[] = [];
+let activeLocalModelState = '';
+let effectiveLocalModelState = '';
+let llamaInstalledState = false;
+let llamaVersionState = '';
+let llamaInstallingState = false;
 
 interface UsageSummary {
   cumulativeUsd: number;
@@ -106,8 +115,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
 
   modeState = _readMode();
+  activeLocalModelState = _readActiveLocalModel();
+  installedModelsState = _readInstalledModels();
+
   sidebarProvider = new SidebarProvider(
-    { connected: connState, stage: stageState, autonomous: autonomousState, mode: modeState },
+    {
+      connected: connState,
+      stage: stageState,
+      autonomous: autonomousState,
+      mode: modeState,
+      models: modelsState,
+      installedModels: installedModelsState,
+      activeLocalModel: activeLocalModelState,
+      effectiveLocalModel: effectiveLocalModelState,
+      llamaInstalled: llamaInstalledState,
+      llamaVersion: llamaVersionState,
+      llamaInstalling: llamaInstallingState,
+    },
     (msg) => {
       if (msg.type === 'open_panel') {
         openPanel(context);
@@ -117,6 +141,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         autonomousState = !autonomousState;
         wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
         sidebarProvider?.update({ autonomous: autonomousState });
+      } else if (msg.type === 'set_active_model') {
+        _setActiveLocalModel(msg.name);
+      } else if (msg.type === 'restart_llamacpp') {
+        vscode.window.showInformationMessage(
+          '🦙 The llamas are mid-nap. Full restart support is on the roadmap — sit tight!',
+        );
+      } else if (msg.type === 'install_llamacpp') {
+        _installLlamaCpp();
       }
     },
   );
@@ -349,6 +381,27 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  if (env.kind === 'response' && evtType === 'hello.ack') {
+    const raw = env.payload.models;
+    if (Array.isArray(raw)) {
+      modelsState = raw as ModelInfo[];
+    }
+    const statePayload = env.payload.state as Record<string, unknown> | undefined;
+    if (statePayload && typeof statePayload.effective_model === 'string') {
+      effectiveLocalModelState = statePayload.effective_model;
+    }
+    llamaInstalledState = Boolean(env.payload.llama_installed);
+    llamaVersionState = typeof env.payload.llama_version === 'string' ? env.payload.llama_version : '';
+    sidebarProvider?.update({
+      models: modelsState,
+      installedModels: installedModelsState,
+      effectiveLocalModel: effectiveLocalModelState,
+      llamaInstalled: llamaInstalledState,
+      llamaVersion: llamaVersionState,
+    });
+    return;
+  }
+
   if (env.kind === 'event' && evtType === 'state') {
     const stage = String(env.payload.stage ?? 'IDLE');
     const agent = env.payload.agent ? String(env.payload.agent) : null;
@@ -435,6 +488,13 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  if (env.kind === 'event' && evtType === 'llamacpp.install.progress') {
+    const pct = Number(env.payload.percent ?? 0);
+    const msg = String(env.payload.message ?? '');
+    _onLlamaProgress(pct, msg);
+    return;
+  }
+
   // Server-initiated API key request (WS_PROTOCOL.md §6 api_key.request).
   // Enqueued to serialize concurrent requests — the 2nd request waits until
   // the 1st completes, then retrieves the now-stored key immediately.
@@ -478,6 +538,105 @@ function _readMode(): 'local' | 'cloud' {
   } catch {
     return 'local';
   }
+}
+
+function _readActiveLocalModel(): string {
+  if (!projectRoot) { return ''; }
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
+    const models = s['models'] as Record<string, unknown> | undefined;
+    return typeof models?.['local'] === 'string' ? models['local'] : '';
+  } catch {
+    return '';
+  }
+}
+
+function _readInstalledModels(): string[] {
+  try {
+    const indexPath = path.join(os.homedir(), '.kodo', 'local-llm-index.json');
+    const parsed = JSON.parse(fs.readFileSync(indexPath, 'utf8')) as Record<string, unknown>;
+    return Object.keys(parsed).filter(k => typeof parsed[k] === 'string' && parsed[k] !== '');
+  } catch {
+    return [];
+  }
+}
+
+let _llamaProgressReporter: vscode.Progress<{ message?: string; increment?: number }> | null = null;
+let _llamaProgressResolve: (() => void) | null = null;
+let _llamaProgressReject: ((err: Error) => void) | null = null;
+let _llamaLastPct = 0;
+
+function _installLlamaCpp(): void {
+  if (llamaInstallingState) { return; }
+  llamaInstallingState = true;
+  sidebarProvider?.update({ llamaInstalling: true });
+  wsClient?.send(makeRequest('llamacpp.install'));
+
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'Installing llama.cpp', cancellable: false },
+    (progress) => new Promise<void>((resolve, reject) => {
+      _llamaProgressReporter = progress;
+      _llamaProgressResolve = resolve;
+      _llamaProgressReject = reject;
+      _llamaLastPct = 0;
+    }),
+  ).then(undefined, () => undefined);
+}
+
+function _onLlamaProgress(pct: number, msg: string): void {
+  if (_llamaProgressReporter) {
+    const increment = Math.max(0, pct - _llamaLastPct);
+    _llamaLastPct = pct;
+    _llamaProgressReporter.report({ message: `${pct}%  ${msg}`, increment });
+  }
+
+  if (pct === 100) {
+    llamaInstallingState = false;
+    llamaInstalledState = true;
+    sidebarProvider?.update({ llamaInstalling: false, llamaInstalled: true });
+    setTimeout(() => {
+      _llamaProgressResolve?.();
+      _llamaProgressReporter = null;
+      _llamaProgressResolve = null;
+      _llamaProgressReject = null;
+    }, 1000);
+  } else if (pct < 0) {
+    llamaInstallingState = false;
+    sidebarProvider?.update({ llamaInstalling: false });
+    vscode.window.showErrorMessage(`llama.cpp installation failed: ${msg}`);
+    _llamaProgressReject?.(new Error(msg));
+    _llamaProgressReporter = null;
+    _llamaProgressResolve = null;
+    _llamaProgressReject = null;
+  }
+}
+
+function _setActiveLocalModel(name: string): void {
+  if (!projectRoot) {
+    vscode.window.showErrorMessage('Kōdo: no project folder is open.');
+    return;
+  }
+
+  const kodoDir = path.join(projectRoot, '.kodo');
+  const settingsPath = path.join(kodoDir, 'settings.json');
+
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    } catch { /* start fresh */ }
+  }
+
+  const models = (settings['models'] as Record<string, unknown> | undefined) ?? {};
+  models['local'] = name;
+  settings['models'] = models;
+
+  fs.mkdirSync(kodoDir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+
+  wsClient?.send(makeRequest('config.reload'));
+  activeLocalModelState = name;
+  sidebarProvider?.update({ activeLocalModel: name });
 }
 
 function _setMode(mode: 'cloud' | 'local'): void {

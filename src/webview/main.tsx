@@ -316,15 +316,21 @@ function App() {
             onInput={handleInput}
           />
           <div style={styles.inputFooter}>
-            <span style={styles.stageBadgeBottom}>{state.stage}{agentLabel}</span>
             <div style={{ flex: 1 }} />
             <div style={styles.footerButtons}>
               <button
                 style={styles.sendBtn}
                 onClick={sendPrompt}
                 disabled={!state.connected || isRunning || isBlocked}
+                title="Send prompt (Enter)"
               >
                 {isRunning ? '…' : '↑'}
+              </button>
+              <button
+                style={styles.attachBtn}
+                title="Attach files (coming soon)"
+              >
+                +
               </button>
               <button
                 style={styles.globalStopBtn}
@@ -332,7 +338,7 @@ function App() {
                 disabled={!state.connected || !isRunning}
                 title="Stop all running agent work"
               >
-                ◼
+                {'🛑'}
               </button>
             </div>
           </div>
@@ -512,15 +518,16 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     padding: '12px',
     boxSizing: 'border-box',
   },
-  stageBadgeBottom: {
-    fontSize: '11px',
-    color: 'var(--vscode-descriptionForeground)',
-    width: '80px',
-    minWidth: '80px',
+  attachBtn: {
+    background: '#c8a400',
+    color: '#000000',
+    border: 'none',
+    borderRadius: '2px',
+    width: '40px',
+    cursor: 'pointer',
+    fontSize: '16px',
+    fontWeight: 'bold',
     flexShrink: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
   },
   globalStopBtn: {
     background: 'transparent',
@@ -529,8 +536,7 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     borderRadius: '2px',
     width: '40px',
     cursor: 'pointer',
-    fontSize: '13px',
-    fontWeight: 'bold',
+    fontSize: '16px',
     flexShrink: 0,
   },
   resumeBanner: {
