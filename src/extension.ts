@@ -61,6 +61,11 @@ let effectiveLocalModelState = '';
 let llamaInstalledState = false;
 let llamaVersionState = '';
 let llamaInstallingState = false;
+let llamaRunningState = false;
+let llamaRunningModelState = '';
+let llamaStartingState = false;
+let _llamaStartProgressResolve: (() => void) | null = null;
+let installingModelsState: string[] = [];
 
 interface UsageSummary {
   cumulativeUsd: number;
@@ -131,6 +136,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaInstalled: llamaInstalledState,
       llamaVersion: llamaVersionState,
       llamaInstalling: llamaInstallingState,
+      llamaRunning: llamaRunningState,
+      llamaRunningModel: llamaRunningModelState,
+      llamaStarting: llamaStartingState,
+      installingModels: installingModelsState,
     },
     (msg) => {
       if (msg.type === 'open_panel') {
@@ -143,12 +152,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         sidebarProvider?.update({ autonomous: autonomousState });
       } else if (msg.type === 'set_active_model') {
         _setActiveLocalModel(msg.name);
-      } else if (msg.type === 'restart_llamacpp') {
-        vscode.window.showInformationMessage(
-          '🦙 The llamas are mid-nap. Full restart support is on the roadmap — sit tight!',
-        );
+      } else if (msg.type === 'start_llamacpp') {
+        _startLlamaCpp();
+      } else if (msg.type === 'stop_llamacpp') {
+        wsClient?.send(makeRequest('llama.stop'));
       } else if (msg.type === 'install_llamacpp') {
         _installLlamaCpp();
+      } else if (msg.type === 'install_model') {
+        _installModel(msg.name);
       }
     },
   );
@@ -392,12 +403,17 @@ function handleServerEnvelope(env: Envelope): void {
     }
     llamaInstalledState = Boolean(env.payload.llama_installed);
     llamaVersionState = typeof env.payload.llama_version === 'string' ? env.payload.llama_version : '';
+    llamaRunningState = Boolean(env.payload.llama_running);
+    llamaRunningModelState = llamaRunningState && typeof env.payload.llama_model === 'string'
+      ? env.payload.llama_model : '';
     sidebarProvider?.update({
       models: modelsState,
       installedModels: installedModelsState,
       effectiveLocalModel: effectiveLocalModelState,
       llamaInstalled: llamaInstalledState,
       llamaVersion: llamaVersionState,
+      llamaRunning: llamaRunningState,
+      llamaRunningModel: llamaRunningModelState,
     });
     return;
   }
@@ -485,6 +501,40 @@ function handleServerEnvelope(env: Envelope): void {
     const sid = String(env.payload.session_id ?? '');
     resumeSessionId = sid;
     panel?.webview.postMessage({ type: 'resume_offer', sessionId: sid });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'llama.state') {
+    llamaRunningState = Boolean(env.payload.running);
+    llamaRunningModelState = llamaRunningState && typeof env.payload.model === 'string'
+      ? env.payload.model : '';
+    llamaStartingState = false;
+
+    const errMsg = typeof env.payload.error === 'string' ? env.payload.error : '';
+    if (errMsg) {
+      vscode.window.showErrorMessage(`Kōdo: llama-server — ${errMsg}`);
+      _llamaStartProgressResolve?.();
+      _llamaStartProgressResolve = null;
+    } else if (llamaRunningState) {
+      const port = Number(env.payload.port ?? 8080);
+      _llamaStartProgressResolve?.();
+      _llamaStartProgressResolve = null;
+      vscode.window.showInformationMessage(`Kōdo: llama.cpp is running on localhost:${port}`);
+    }
+
+    sidebarProvider?.update({
+      llamaRunning: llamaRunningState,
+      llamaRunningModel: llamaRunningModelState,
+      llamaStarting: false,
+    });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'model.install.progress') {
+    const modelName = String(env.payload.name ?? '');
+    const pct = Number(env.payload.percent ?? 0);
+    const msg = String(env.payload.message ?? '');
+    _onModelInstallProgress(modelName, pct, msg);
     return;
   }
 
@@ -608,6 +658,42 @@ function _onLlamaProgress(pct: number, msg: string): void {
     _llamaProgressReporter = null;
     _llamaProgressResolve = null;
     _llamaProgressReject = null;
+  }
+}
+
+function _startLlamaCpp(): void {
+  if (llamaStartingState) { return; }
+  const isRestart = llamaRunningState;
+  const notifTitle = isRestart ? 'llama.cpp is restarting…' : 'llama.cpp is starting…';
+
+  llamaStartingState = true;
+  llamaRunningState = false;
+  sidebarProvider?.update({ llamaRunning: false, llamaStarting: true });
+  wsClient?.send(makeRequest('llama.start'));
+
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: notifTitle, cancellable: false },
+    () => new Promise<void>((resolve) => { _llamaStartProgressResolve = resolve; }),
+  ).then(undefined, () => undefined);
+}
+
+function _installModel(name: string): void {
+  if (installingModelsState.includes(name)) { return; }
+  installingModelsState = [...installingModelsState, name];
+  sidebarProvider?.update({ installingModels: installingModelsState });
+  wsClient?.send(makeRequest('model.install', { name }));
+}
+
+function _onModelInstallProgress(name: string, pct: number, msg: string): void {
+  if (pct === 100) {
+    installingModelsState = installingModelsState.filter(n => n !== name);
+    installedModelsState = _readInstalledModels();
+    sidebarProvider?.update({ installingModels: installingModelsState, installedModels: installedModelsState });
+    vscode.window.showInformationMessage(`Kōdo: ${name} installed successfully.`);
+  } else if (pct < 0) {
+    installingModelsState = installingModelsState.filter(n => n !== name);
+    sidebarProvider?.update({ installingModels: installingModelsState });
+    vscode.window.showErrorMessage(`Kōdo: model installation failed — ${msg}`);
   }
 }
 

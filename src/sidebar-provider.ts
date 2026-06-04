@@ -21,6 +21,10 @@ export interface SidebarState {
   llamaInstalled: boolean;
   llamaVersion: string;
   llamaInstalling: boolean;
+  llamaRunning: boolean;
+  llamaRunningModel: string;
+  llamaStarting: boolean;
+  installingModels: string[];
 }
 
 export type SidebarMessage =
@@ -30,6 +34,9 @@ export type SidebarMessage =
   | { type: 'set_active_model'; name: string }
   | { type: 'restart_llamacpp' }
   | { type: 'install_llamacpp' }
+  | { type: 'start_llamacpp' }
+  | { type: 'stop_llamacpp' }
+  | { type: 'install_model'; name: string }
   | { type: 'ready' };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -217,6 +224,16 @@ function buildHtml(): string {
     }
     #restart-btn { margin-bottom: 8px; }
     #restart-btn:disabled { opacity: 0.45; cursor: default; }
+    .card-running {
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+      margin-top: 4px;
+      animation: kodo-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes kodo-pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
   </style>
 </head>
 <body>
@@ -278,6 +295,10 @@ function buildHtml(): string {
       llamaInstalled: false,
       llamaVersion: '',
       llamaInstalling: false,
+      llamaRunning: false,
+      llamaRunningModel: '',
+      llamaStarting: false,
+      installingModels: [],
     };
 
     function statusDisplay(connected, stage) {
@@ -306,35 +327,48 @@ function buildHtml(): string {
 
       // llama.cpp action button + version — local only, above cards
       if (_state.mode === 'local') {
-        if (!_state.llamaInstalled || _state.llamaInstalling) {
-          const installBtn = document.createElement('button');
-          installBtn.id = 'restart-btn';
-          installBtn.textContent = _state.llamaInstalling ? 'Installing…' : 'Install llama.cpp';
-          installBtn.disabled = _state.llamaInstalling;
-          installBtn.addEventListener('click', () => {
-            vsc.postMessage({ type: 'install_llamacpp' });
-          });
-          section.appendChild(installBtn);
-        } else {
-          const restartBtn = document.createElement('button');
-          restartBtn.id = 'restart-btn';
-          restartBtn.textContent = '↺ Restart llama.cpp';
-          const needsRestart =
-            _state.activeLocalModel !== '' &&
-            _state.effectiveLocalModel !== '' &&
-            _state.activeLocalModel !== _state.effectiveLocalModel;
-          restartBtn.disabled = !needsRestart;
-          restartBtn.addEventListener('click', () => {
-            vsc.postMessage({ type: 'restart_llamacpp' });
-          });
-          section.appendChild(restartBtn);
+        const hasInstalledModels = _state.installedModels.length > 0;
+        let btnText = '';
+        let btnDisabled = false;
+        let btnType = '';
 
-          if (_state.llamaVersion) {
-            const ver = document.createElement('div');
-            ver.style.cssText = 'font-size:0.8em;color:var(--vscode-descriptionForeground);margin-bottom:6px;';
-            ver.textContent = 'llama.cpp ' + _state.llamaVersion;
-            section.appendChild(ver);
-          }
+        if (!_state.llamaInstalled || _state.llamaInstalling) {
+          btnText = _state.llamaInstalling ? 'Installing…' : 'Install llama.cpp';
+          btnDisabled = _state.llamaInstalling;
+          btnType = 'install_llamacpp';
+        } else if (_state.llamaStarting) {
+          btnText = 'Starting…';
+          btnDisabled = true;
+          btnType = '';
+        } else if (!_state.llamaRunning) {
+          btnText = 'Start llama.cpp';
+          btnDisabled = !hasInstalledModels;
+          btnType = 'start_llamacpp';
+        } else if (_state.activeLocalModel && _state.activeLocalModel !== _state.llamaRunningModel) {
+          btnText = '↺ Restart llama.cpp';
+          btnDisabled = false;
+          btnType = 'start_llamacpp';
+        } else {
+          btnText = '■ Stop llama.cpp';
+          btnDisabled = false;
+          btnType = 'stop_llamacpp';
+        }
+
+        const actionBtn = document.createElement('button');
+        actionBtn.id = 'restart-btn';
+        actionBtn.textContent = btnText;
+        actionBtn.disabled = btnDisabled;
+        actionBtn.addEventListener('click', () => {
+          vsc.postMessage({ type: btnType });
+        });
+        section.appendChild(actionBtn);
+
+        if (_state.llamaInstalled && _state.llamaVersion) {
+          const ver = document.createElement('div');
+          ver.style.cssText = 'font-size:0.8em;color:var(--vscode-descriptionForeground);margin-bottom:6px;';
+          ver.textContent = 'llama.cpp ' + _state.llamaVersion
+            + (_state.llamaRunning && _state.llamaRunningModel ? '  ·  running: ' + _state.llamaRunningModel : '');
+          section.appendChild(ver);
         }
       }
 
@@ -386,13 +420,26 @@ function buildHtml(): string {
         desc.textContent = model.description;
         card.appendChild(desc);
 
-        // Install button for uninstalled local models (placeholder)
+        // Install button for uninstalled local models
         if (isLocal && !isInstalled) {
+          const isInstalling = _state.installingModels.includes(model.name);
           const installBtn = document.createElement('button');
           installBtn.className = 'card-install-btn';
-          installBtn.textContent = 'Install';
-          installBtn.disabled = true;
+          installBtn.textContent = isInstalling ? 'Installing…' : 'Install';
+          installBtn.disabled = isInstalling;
+          if (!isInstalling) {
+            installBtn.addEventListener('click', () => {
+              vsc.postMessage({ type: 'install_model', name: model.name });
+            });
+          }
           card.appendChild(installBtn);
+
+          if (isInstalling) {
+            const running = document.createElement('div');
+            running.className = 'card-running';
+            running.textContent = 'Downloading… this may take a while';
+            card.appendChild(running);
+          }
         }
 
         section.appendChild(card);
@@ -430,6 +477,10 @@ function buildHtml(): string {
       if (data.llamaInstalled !== undefined) { _state.llamaInstalled = Boolean(data.llamaInstalled); }
       if (typeof data.llamaVersion === 'string') { _state.llamaVersion = data.llamaVersion; }
       if (data.llamaInstalling !== undefined) { _state.llamaInstalling = Boolean(data.llamaInstalling); }
+      if (data.llamaRunning !== undefined) { _state.llamaRunning = Boolean(data.llamaRunning); }
+      if (typeof data.llamaRunningModel === 'string') { _state.llamaRunningModel = data.llamaRunningModel; }
+      if (data.llamaStarting !== undefined) { _state.llamaStarting = Boolean(data.llamaStarting); }
+      if (Array.isArray(data.installingModels)) { _state.installingModels = data.installingModels; }
 
       renderCards();
     });
