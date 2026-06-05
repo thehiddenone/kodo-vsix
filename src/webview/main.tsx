@@ -48,6 +48,7 @@ interface State {
   stage: string;
   agent: string | null;
   tokens: string;
+  lastPrompt: string;
   lastPong: string | null;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
@@ -66,6 +67,8 @@ type Action =
   | { type: 'stage'; stage: string; agent: string | null }
   | { type: 'agent_started'; agent: string }
   | { type: 'agent_finished'; agent: string }
+  | { type: 'prompt_sent'; text: string }
+  | { type: 'restore_prompt'; text: string }
   | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null }
   | { type: 'file_change'; path: string; kind: string }
   | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
@@ -93,6 +96,10 @@ function reducer(state: State, action: Action): State {
         tokens: clearTokens ? '' : state.tokens,
       };
     }
+    case 'prompt_sent':
+      return { ...state, lastPrompt: action.text, tokens: '', streaming: false };
+    case 'restore_prompt':
+      return { ...state, lastPrompt: action.text };
     case 'agent_started':
       return { ...state, agent: action.agent };
     case 'agent_finished':
@@ -137,6 +144,7 @@ const initial: State = {
   stage: 'IDLE',
   agent: null,
   tokens: '',
+  lastPrompt: '',
   lastPong: null,
   cumulativeUsd: 0,
   lastCallTokens: null,
@@ -213,6 +221,9 @@ function App() {
         case 'resume_offer':
           dispatch({ type: 'resume_offer', sessionId: String(msg.sessionId ?? '') });
           break;
+        case 'restore_prompt':
+          dispatch({ type: 'restore_prompt', text: String(msg.text ?? '') });
+          break;
       }
     }
     window.addEventListener('message', onMessage);
@@ -228,7 +239,7 @@ function App() {
     vscode.postMessage({ type: 'prompt', text });
     el.value = '';
     el.style.height = '';
-    dispatch({ type: 'stage', stage: 'NARRATIVE', agent: null });
+    dispatch({ type: 'prompt_sent', text });
   }
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -277,12 +288,15 @@ function App() {
 
       {/* Token stream */}
       <div style={styles.stream}>
+        {state.lastPrompt && (
+          <div style={styles.userPrompt}>{state.lastPrompt}</div>
+        )}
         {state.tokens.length > 0
-          ? state.tokens
+          ? <div style={styles.agentTokens}>{state.tokens}</div>
           : state.connected
           ? isRunning
-            ? 'Waiting for agent response…'
-            : 'Ready. Type a prompt below.'
+            ? state.lastPrompt ? null : 'Waiting for agent response…'
+            : state.lastPrompt ? null : 'Ready. Type a prompt below.'
           : 'Not connected to server.'}
       </div>
 
@@ -602,6 +616,21 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     paddingTop: '8px',
     marginBottom: '8px',
     minHeight: '80px',
+  },
+  userPrompt: {
+    background: 'var(--vscode-input-background)',
+    border: '1px solid var(--vscode-input-border)',
+    borderRadius: '4px',
+    padding: '6px 10px',
+    marginBottom: '10px',
+    color: 'var(--vscode-input-foreground)',
+    fontSize: '13px',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
+  agentTokens: {
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   },
   // File events
   fileEvents: {

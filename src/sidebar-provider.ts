@@ -24,6 +24,7 @@ export interface SidebarState {
   llamaRunning: boolean;
   llamaRunningModel: string;
   llamaStarting: boolean;
+  llamaStopping: boolean;
   installingModels: string[];
 }
 
@@ -224,16 +225,6 @@ function buildHtml(): string {
     }
     #restart-btn { margin-bottom: 8px; }
     #restart-btn:disabled { opacity: 0.45; cursor: default; }
-    .card-running {
-      font-size: 0.8em;
-      color: var(--vscode-descriptionForeground);
-      margin-top: 4px;
-      animation: kodo-pulse 1.8s ease-in-out infinite;
-    }
-    @keyframes kodo-pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.3; }
-    }
   </style>
 </head>
 <body>
@@ -298,6 +289,7 @@ function buildHtml(): string {
       llamaRunning: false,
       llamaRunningModel: '',
       llamaStarting: false,
+      llamaStopping: false,
       installingModels: [],
     };
 
@@ -338,6 +330,10 @@ function buildHtml(): string {
           btnType = 'install_llamacpp';
         } else if (_state.llamaStarting) {
           btnText = 'Starting…';
+          btnDisabled = true;
+          btnType = '';
+        } else if (_state.llamaStopping) {
+          btnText = 'Stopping…';
           btnDisabled = true;
           btnType = '';
         } else if (!_state.llamaRunning) {
@@ -434,12 +430,6 @@ function buildHtml(): string {
           }
           card.appendChild(installBtn);
 
-          if (isInstalling) {
-            const running = document.createElement('div');
-            running.className = 'card-running';
-            running.textContent = 'Downloading… this may take a while';
-            card.appendChild(running);
-          }
         }
 
         section.appendChild(card);
@@ -480,6 +470,7 @@ function buildHtml(): string {
       if (data.llamaRunning !== undefined) { _state.llamaRunning = Boolean(data.llamaRunning); }
       if (typeof data.llamaRunningModel === 'string') { _state.llamaRunningModel = data.llamaRunningModel; }
       if (data.llamaStarting !== undefined) { _state.llamaStarting = Boolean(data.llamaStarting); }
+      if (data.llamaStopping !== undefined) { _state.llamaStopping = Boolean(data.llamaStopping); }
       if (Array.isArray(data.installingModels)) { _state.installingModels = data.installingModels; }
 
       renderCards();

@@ -48,6 +48,7 @@ let modeState: 'local' | 'cloud' = 'local';
 let connState = false;
 let stageState = 'IDLE';
 let tokensState = '';
+let lastPromptState = '';
 let agentState: string | null = null;
 let usageState: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
 let fileEventsState: FileEventData[] = [];
@@ -64,6 +65,7 @@ let llamaInstallingState = false;
 let llamaRunningState = false;
 let llamaRunningModelState = '';
 let llamaStartingState = false;
+let llamaStoppingState = false;
 let _llamaStartProgressResolve: (() => void) | null = null;
 let installingModelsState: string[] = [];
 
@@ -139,6 +141,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaRunning: llamaRunningState,
       llamaRunningModel: llamaRunningModelState,
       llamaStarting: llamaStartingState,
+      llamaStopping: llamaStoppingState,
       installingModels: installingModelsState,
     },
     (msg) => {
@@ -155,6 +158,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (msg.type === 'start_llamacpp') {
         _startLlamaCpp();
       } else if (msg.type === 'stop_llamacpp') {
+        llamaStoppingState = true;
+        sidebarProvider?.update({ llamaStopping: true });
         wsClient?.send(makeRequest('llama.stop'));
       } else if (msg.type === 'install_llamacpp') {
         _installLlamaCpp();
@@ -284,6 +289,7 @@ function openPanel(context: vscode.ExtensionContext): void {
     vscode.ViewColumn.One,
     {
       enableScripts: true,
+      retainContextWhenHidden: true,
       localResourceRoots: [
         vscode.Uri.file(path.join(context.extensionPath, 'dist')),
       ],
@@ -302,6 +308,9 @@ function openPanel(context: vscode.ExtensionContext): void {
       // Rehydrate from persistent state
       panel?.webview.postMessage({ type: 'status', connected: connState });
       panel?.webview.postMessage({ type: 'stage', stage: stageState, agent: agentState });
+      if (lastPromptState.length > 0) {
+        panel?.webview.postMessage({ type: 'restore_prompt', text: lastPromptState });
+      }
       if (tokensState.length > 0) {
         panel?.webview.postMessage({ type: 'token', text: tokensState });
       }
@@ -322,6 +331,7 @@ function openPanel(context: vscode.ExtensionContext): void {
       const text = String(msg.text ?? '').trim();
       if (text) {
         // Clear accumulated state for new workflow run
+        lastPromptState = text;
         tokensState = '';
         fileEventsState = [];
         pendingGateState = null;
@@ -505,10 +515,24 @@ function handleServerEnvelope(env: Envelope): void {
   }
 
   if (env.kind === 'event' && evtType === 'llama.state') {
+    if (Boolean(env.payload.starting)) {
+      llamaStartingState = true;
+      llamaRunningState = false;
+      sidebarProvider?.update({ llamaStarting: true, llamaRunning: false });
+      if (_llamaStartProgressResolve === null) {
+        vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'llama.cpp is starting…', cancellable: false },
+          () => new Promise<void>((resolve) => { _llamaStartProgressResolve = resolve; }),
+        ).then(undefined, () => undefined);
+      }
+      return;
+    }
+
     llamaRunningState = Boolean(env.payload.running);
     llamaRunningModelState = llamaRunningState && typeof env.payload.model === 'string'
       ? env.payload.model : '';
     llamaStartingState = false;
+    llamaStoppingState = false;
 
     const errMsg = typeof env.payload.error === 'string' ? env.payload.error : '';
     if (errMsg) {
@@ -526,6 +550,7 @@ function handleServerEnvelope(env: Envelope): void {
       llamaRunning: llamaRunningState,
       llamaRunningModel: llamaRunningModelState,
       llamaStarting: false,
+      llamaStopping: false,
     });
     return;
   }
@@ -677,11 +702,18 @@ function _startLlamaCpp(): void {
   ).then(undefined, () => undefined);
 }
 
+const _modelProgressResolvers = new Map<string, () => void>();
+
 function _installModel(name: string): void {
   if (installingModelsState.includes(name)) { return; }
   installingModelsState = [...installingModelsState, name];
   sidebarProvider?.update({ installingModels: installingModelsState });
   wsClient?.send(makeRequest('model.install', { name }));
+
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Downloading ${name}…`, cancellable: false },
+    () => new Promise<void>((resolve) => { _modelProgressResolvers.set(name, resolve); }),
+  ).then(undefined, () => undefined);
 }
 
 function _onModelInstallProgress(name: string, pct: number, msg: string): void {
@@ -689,10 +721,16 @@ function _onModelInstallProgress(name: string, pct: number, msg: string): void {
     installingModelsState = installingModelsState.filter(n => n !== name);
     installedModelsState = _readInstalledModels();
     sidebarProvider?.update({ installingModels: installingModelsState, installedModels: installedModelsState });
-    vscode.window.showInformationMessage(`Kōdo: ${name} installed successfully.`);
+    setTimeout(() => {
+      _modelProgressResolvers.get(name)?.();
+      _modelProgressResolvers.delete(name);
+      vscode.window.showInformationMessage(`Kōdo: ${name} downloaded and ready.`);
+    }, 1000);
   } else if (pct < 0) {
     installingModelsState = installingModelsState.filter(n => n !== name);
     sidebarProvider?.update({ installingModels: installingModelsState });
+    _modelProgressResolvers.get(name)?.();
+    _modelProgressResolvers.delete(name);
     vscode.window.showErrorMessage(`Kōdo: model installation failed — ${msg}`);
   }
 }
