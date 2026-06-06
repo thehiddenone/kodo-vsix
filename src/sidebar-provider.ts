@@ -11,6 +11,7 @@ export interface ModelInfo {
 
 export interface SidebarState {
   connected: boolean;
+  hasWorkspace: boolean;
   stage: string;
   autonomous: boolean;
   mode: 'local' | 'cloud';
@@ -225,32 +226,42 @@ function buildHtml(): string {
     }
     #restart-btn { margin-bottom: 8px; }
     #restart-btn:disabled { opacity: 0.45; cursor: default; }
+    #inactive-msg {
+      display: none;
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.9em;
+      padding: 16px 4px;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
-  <div class="top-row">
-    <div class="status">
-      <span id="conn-dot" class="conn-dot off"></span>
-      <span id="conn-lbl">Disconnected</span>
+  <div id="inactive-msg">Open a workspace to use Kōdo.</div>
+  <div id="main-controls">
+    <div class="top-row">
+      <div class="status">
+        <span id="conn-dot" class="conn-dot off"></span>
+        <span id="conn-lbl">Disconnected</span>
+      </div>
+      <button id="auto-btn">⚡ Manual</button>
     </div>
-    <button id="auto-btn">⚡ Manual</button>
-  </div>
-  <button id="open-btn">Open Kōdo Panel</button>
+    <button id="open-btn">Open Kōdo Panel</button>
 
-  <hr>
-  <div class="radio-group">
-    <label>
-      <input type="radio" name="llm-mode" value="local" id="mode-local">
-      Use local llama.cpp
-    </label>
-    <label>
-      <input type="radio" name="llm-mode" value="cloud" id="mode-cloud">
-      Use cloud AI service
-    </label>
-  </div>
-  <hr>
+    <hr>
+    <div class="radio-group">
+      <label>
+        <input type="radio" name="llm-mode" value="local" id="mode-local">
+        Use local llama.cpp
+      </label>
+      <label>
+        <input type="radio" name="llm-mode" value="cloud" id="mode-cloud">
+        Use cloud AI service
+      </label>
+    </div>
+    <hr>
 
-  <div id="cards-section"></div>
+    <div id="cards-section"></div>
+  </div>
 
   <script nonce="${nonce}">
     const vsc = acquireVsCodeApi();
@@ -441,6 +452,13 @@ function buildHtml(): string {
     // ----------------------------------------------------------------
     window.addEventListener('message', ({ data }) => {
       if (data.type !== 'update') { return; }
+
+      // Workspace gate
+      if (data.hasWorkspace !== undefined) {
+        const active = Boolean(data.hasWorkspace);
+        document.getElementById('inactive-msg').style.display = active ? 'none' : 'block';
+        document.getElementById('main-controls').style.display = active ? '' : 'none';
+      }
 
       // Unified status
       _state.connected = Boolean(data.connected);

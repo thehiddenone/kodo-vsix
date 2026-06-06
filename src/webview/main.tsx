@@ -45,6 +45,7 @@ interface GateData {
 
 interface State {
   connected: boolean;
+  hasWorkspace: boolean;
   stage: string;
   agent: string | null;
   tokens: string;
@@ -60,6 +61,7 @@ interface State {
 }
 
 type Action =
+  | { type: 'workspace_status'; hasWorkspace: boolean }
   | { type: 'status'; connected: boolean }
   | { type: 'token'; text: string }
   | { type: 'stream_end' }
@@ -79,6 +81,8 @@ type Action =
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
+    case 'workspace_status':
+      return { ...state, hasWorkspace: action.hasWorkspace };
     case 'status':
       return { ...state, connected: action.connected };
     case 'token':
@@ -141,6 +145,7 @@ function reducer(state: State, action: Action): State {
 
 const initial: State = {
   connected: false,
+  hasWorkspace: false,
   stage: 'IDLE',
   agent: null,
   tokens: '',
@@ -167,6 +172,9 @@ function App() {
     function onMessage(event: MessageEvent) {
       const msg = event.data as Record<string, unknown>;
       switch (msg.type) {
+        case 'workspace_status':
+          dispatch({ type: 'workspace_status', hasWorkspace: Boolean(msg.hasWorkspace) });
+          break;
         case 'status':
           dispatch({ type: 'status', connected: Boolean(msg.connected) });
           break;
@@ -247,6 +255,14 @@ function App() {
       e.preventDefault();
       sendPrompt();
     }
+  }
+
+  if (!state.hasWorkspace) {
+    return (
+      <div style={styles.root}>
+        <div style={styles.inactiveMsg}>Open a workspace to use Kōdo.</div>
+      </div>
+    );
   }
 
   const isRunning = state.stage !== 'IDLE' && state.stage !== 'STOPPED' && state.stage !== 'ERROR';
@@ -531,6 +547,15 @@ const styles: Record<string, h.JSX.CSSProperties> = {
     height: '100vh',
     padding: '12px',
     boxSizing: 'border-box',
+  },
+  inactiveMsg: {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'var(--vscode-descriptionForeground)',
+    textAlign: 'center' as const,
+    padding: '24px',
   },
   attachBtn: {
     background: '#c8a400',

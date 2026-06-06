@@ -40,6 +40,7 @@ let wsClient: WsClient | null = null;
 let panel: vscode.WebviewPanel | null = null;
 let sidebarProvider: SidebarProvider | null = null;
 let projectRoot = '';
+let hasWorkspace = false;
 let modeState: 'local' | 'cloud' = 'local';
 
 // ---------------------------------------------------------------------------
@@ -95,31 +96,46 @@ interface GateData {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionContext = context;
-  projectRoot =
-    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
-    context.extensionPath;
+  projectRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  hasWorkspace = projectRoot.length > 0;
 
-  const port = await findFreePort();
-  const wsUrl = `ws://127.0.0.1:${port}/ws`;
+  if (hasWorkspace) {
+    const port = await findFreePort();
+    const wsUrl = `ws://127.0.0.1:${port}/ws`;
 
-  launcher = new ServerLauncher();
-  launcher.launch(projectRoot, port);
+    launcher = new ServerLauncher();
 
-  wsClient = new WsClient(
-    wsUrl,
-    (env: Envelope) => handleServerEnvelope(env),
-    (connected: boolean) => {
-      connState = connected;
-      panel?.webview.postMessage({ type: 'status', connected });
-      sidebarProvider?.update({ connected });
-      if (connected) {
-        sendHello();
-      }
-    },
+    wsClient = new WsClient(
+      wsUrl,
+      (env: Envelope) => handleServerEnvelope(env),
+      (connected: boolean) => {
+        connState = connected;
+        panel?.webview.postMessage({ type: 'status', connected });
+        sidebarProvider?.update({ connected });
+        if (connected) {
+          sendHello();
+        }
+      },
+    );
+
+    // Launch runs uv/venv/install setup before spawning the subprocess.
+    // Only connect the WebSocket once the subprocess is actually running.
+    launcher.launch(projectRoot, port).then(() => {
+      setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
+    }).catch(() => {
+      // ensureKodoEnvironment already showed an error notification; nothing more to do.
+    });
+  }
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      const newRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+      hasWorkspace = newRoot.length > 0;
+      if (newRoot) { projectRoot = newRoot; }
+      sidebarProvider?.update({ hasWorkspace });
+      panel?.webview.postMessage({ type: 'workspace_status', hasWorkspace });
+    }),
   );
-
-  // Give the server a moment to bind before connecting
-  setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
 
   modeState = _readMode();
   activeLocalModelState = _readActiveLocalModel();
@@ -128,6 +144,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   sidebarProvider = new SidebarProvider(
     {
       connected: connState,
+      hasWorkspace,
       stage: stageState,
       autonomous: autonomousState,
       mode: modeState,
@@ -306,6 +323,7 @@ function openPanel(context: vscode.ExtensionContext): void {
   panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => {
     if (msg.type === 'ready') {
       // Rehydrate from persistent state
+      panel?.webview.postMessage({ type: 'workspace_status', hasWorkspace });
       panel?.webview.postMessage({ type: 'status', connected: connState });
       panel?.webview.postMessage({ type: 'stage', stage: stageState, agent: agentState });
       if (lastPromptState.length > 0) {
