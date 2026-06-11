@@ -407,6 +407,13 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  // Thinking token streaming
+  if (env.kind === 'thinking_chunk') {
+    const text = String(env.payload.text ?? '');
+    panel?.webview.postMessage({ type: 'thinking_token', text });
+    return;
+  }
+
   // Stream end — signals the WebView that streaming is done
   if (env.kind === 'stream_end') {
     panel?.webview.postMessage({ type: 'stream_end' });
@@ -497,8 +504,23 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  if (env.kind === 'event' && evtType === 'llm.turn_start') {
+    panel?.webview.postMessage({ type: 'llm_turn_start' });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'agent.tool_call') {
+    panel?.webview.postMessage({
+      type: 'tool_call',
+      toolName: String(env.payload.tool_name ?? ''),
+      description: String(env.payload.description ?? ''),
+    });
+    return;
+  }
+
   if (env.kind === 'event' && evtType === 'usage.update') {
     const cumulativeUsd = Number(env.payload.cumulative_usd ?? 0);
+    const durationSeconds = Number(env.payload.duration_seconds ?? 0);
     const raw = env.payload.last_call_tokens;
     const lastCallTokens: LastCallTokens | null =
       raw && typeof raw === 'object'
@@ -510,7 +532,7 @@ function handleServerEnvelope(env: Envelope): void {
           }
         : null;
     usageState = { cumulativeUsd, lastCallTokens };
-    panel?.webview.postMessage({ type: 'usage', cumulativeUsd, lastCallTokens });
+    panel?.webview.postMessage({ type: 'usage', cumulativeUsd, lastCallTokens, durationSeconds });
     return;
   }
 

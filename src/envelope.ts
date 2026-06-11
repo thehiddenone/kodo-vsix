@@ -5,6 +5,7 @@ export type MessageKind =
   | 'response'
   | 'event'
   | 'stream_chunk'
+  | 'thinking_chunk'
   | 'stream_end';
 
 export interface Envelope {

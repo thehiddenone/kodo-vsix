@@ -8,7 +8,7 @@
  */
 
 import { h, render } from 'preact';
-import { useEffect, useReducer, useRef } from 'preact/hooks';
+import { useEffect, useReducer, useRef, useState } from 'preact/hooks';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: Record<string, unknown>): void;
@@ -39,6 +39,22 @@ interface GateData {
   artifactPath: string | null;
 }
 
+/**
+ * A session entry is a JSON object in the session array.
+ *
+ * exclude_from_context: false → rendered AND included when building LLM context.
+ * exclude_from_context: true  → rendered only; excluded from LLM context.
+ *
+ * Transient UI state (AwaitingIndicator, live streaming text) is never stored
+ * as a session entry.
+ */
+type SessionEntry =
+  | { type: 'user_message'; content: string; exclude_from_context: false }
+  | { type: 'assistant_response'; content: string; exclude_from_context: false }
+  | { type: 'tool_call'; toolName: string; description: string; exclude_from_context: false }
+  | { type: 'thinking_block'; content: string; exclude_from_context: true }
+  | { type: 'status_response'; durationMs: number; inputTokens: number; outputTokens: number; contextTokens: number; exclude_from_context: true };
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -48,22 +64,33 @@ interface State {
   hasWorkspace: boolean;
   stage: string;
   agent: string | null;
-  tokens: string;
-  lastPrompt: string;
+  /** Committed session entries. Rendered in order; exclude_from_context entries excluded from LLM context. */
+  session: SessionEntry[];
+  /** Live text accumulating from the current LLM streaming call. Committed to session on usage/stream_end. */
+  streamingTokens: string;
+  /** Live thinking text accumulating from the current LLM call. Committed as thinking_block on usage/stream_end. */
+  streamingThinking: string;
+  /** True while ThinkingDelta events are arriving (cleared on first token or commit). */
+  thinkingActive: boolean;
+  streaming: boolean;
   lastPong: string | null;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
-  streaming: boolean;
   fileEvents: FileEventData[];
   pendingGate: GateData | null;
   autonomous: boolean;
   resumeSessionId: string | null;
+  /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
+  awaitingLlm: boolean;
 }
 
 type Action =
   | { type: 'workspace_status'; hasWorkspace: boolean }
   | { type: 'status'; connected: boolean }
+  | { type: 'llm_turn_start' }
+  | { type: 'tool_call'; toolName: string; description: string }
   | { type: 'token'; text: string }
+  | { type: 'thinking_token'; text: string }
   | { type: 'stream_end' }
   | { type: 'pong' }
   | { type: 'stage'; stage: string; agent: string | null }
@@ -71,7 +98,7 @@ type Action =
   | { type: 'agent_finished'; agent: string }
   | { type: 'prompt_sent'; text: string }
   | { type: 'restore_prompt'; text: string }
-  | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null }
+  | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null; durationSeconds: number }
   | { type: 'file_change'; path: string; kind: string }
   | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
   | { type: 'approval_cleared' }
@@ -79,41 +106,95 @@ type Action =
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' };
 
+function commitStreaming(state: State): SessionEntry[] {
+  let session = state.session;
+  if (state.streamingThinking) {
+    session = [...session, { type: 'thinking_block', content: state.streamingThinking, exclude_from_context: true }];
+  }
+  if (state.streamingTokens) {
+    session = [...session, { type: 'assistant_response', content: state.streamingTokens, exclude_from_context: false }];
+  }
+  return session;
+}
+
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'workspace_status':
       return { ...state, hasWorkspace: action.hasWorkspace };
     case 'status':
       return { ...state, connected: action.connected };
+    case 'llm_turn_start':
+      return { ...state, awaitingLlm: true };
+    case 'tool_call':
+      return {
+        ...state,
+        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, exclude_from_context: false }],
+      };
+    case 'thinking_token':
+      return { ...state, streamingThinking: state.streamingThinking + action.text, thinkingActive: true, awaitingLlm: false };
     case 'token':
-      return { ...state, tokens: state.tokens + action.text, streaming: true };
+      return { ...state, streamingTokens: state.streamingTokens + action.text, streaming: true, thinkingActive: false, awaitingLlm: false };
     case 'stream_end':
-      return { ...state, streaming: false };
+      return {
+        ...state,
+        session: commitStreaming(state),
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        streaming: false,
+      };
     case 'pong':
       return { ...state, lastPong: new Date().toLocaleTimeString() };
     case 'stage': {
-      const clearTokens = action.stage !== 'IDLE' && !state.streaming;
+      const clearStreaming = action.stage !== 'IDLE' && !state.streaming;
       return {
         ...state,
         stage: action.stage,
         agent: action.agent,
-        tokens: clearTokens ? '' : state.tokens,
+        streamingTokens: clearStreaming ? '' : state.streamingTokens,
       };
     }
     case 'prompt_sent':
-      return { ...state, lastPrompt: action.text, tokens: '', streaming: false };
+      return {
+        ...state,
+        session: [...state.session, { type: 'user_message', content: action.text, exclude_from_context: false }],
+        streamingTokens: '',
+        streaming: false,
+        awaitingLlm: false,
+      };
     case 'restore_prompt':
-      return { ...state, lastPrompt: action.text };
+      if (state.session.length > 0) return state;
+      return {
+        ...state,
+        session: [{ type: 'user_message', content: action.text, exclude_from_context: false }],
+      };
     case 'agent_started':
       return { ...state, agent: action.agent };
     case 'agent_finished':
       return { ...state, agent: null };
-    case 'usage':
+    case 'usage': {
+      const t = action.lastCallTokens;
+      const baseSession = commitStreaming(state);
+      const statusEntry: SessionEntry = {
+        type: 'status_response',
+        durationMs: action.durationSeconds * 1000,
+        inputTokens: t?.input ?? 0,
+        outputTokens: t?.output ?? 0,
+        contextTokens: (t?.input ?? 0) + (t?.cache_read ?? 0) + (t?.cache_write ?? 0),
+        exclude_from_context: true,
+      };
       return {
         ...state,
         cumulativeUsd: action.cumulativeUsd,
         lastCallTokens: action.lastCallTokens,
+        awaitingLlm: false,
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        streaming: false,
+        session: [...baseSession, statusEntry],
       };
+    }
     case 'file_change':
       return {
         ...state,
@@ -148,16 +229,19 @@ const initial: State = {
   hasWorkspace: false,
   stage: 'IDLE',
   agent: null,
-  tokens: '',
-  lastPrompt: '',
+  session: [],
+  streamingTokens: '',
+  streamingThinking: '',
+  thinkingActive: false,
+  streaming: false,
   lastPong: null,
   cumulativeUsd: 0,
   lastCallTokens: null,
-  streaming: false,
   fileEvents: [],
   pendingGate: null,
   autonomous: false,
   resumeSessionId: null,
+  awaitingLlm: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -181,6 +265,9 @@ function App() {
         case 'token':
           dispatch({ type: 'token', text: String(msg.text ?? '') });
           break;
+        case 'thinking_token':
+          dispatch({ type: 'thinking_token', text: String(msg.text ?? '') });
+          break;
         case 'stream_end':
           dispatch({ type: 'stream_end' });
           break;
@@ -200,11 +287,18 @@ function App() {
         case 'agent_finished':
           dispatch({ type: 'agent_finished', agent: String(msg.agent ?? '') });
           break;
+        case 'llm_turn_start':
+          dispatch({ type: 'llm_turn_start' });
+          break;
+        case 'tool_call':
+          dispatch({ type: 'tool_call', toolName: String(msg.toolName ?? ''), description: String(msg.description ?? '') });
+          break;
         case 'usage':
           dispatch({
             type: 'usage',
             cumulativeUsd: Number(msg.cumulativeUsd ?? 0),
             lastCallTokens: (msg.lastCallTokens as LastCallTokens | null) ?? null,
+            durationSeconds: Number(msg.durationSeconds ?? 0),
           });
           break;
         case 'file_change':
@@ -268,8 +362,6 @@ function App() {
   const isRunning = state.stage !== 'IDLE' && state.stage !== 'STOPPED' && state.stage !== 'ERROR';
   const isBlocked = state.pendingGate !== null;
 
-  const agentLabel = state.agent ? ` › ${state.agent}` : '';
-
   function handleStop() {
     vscode.postMessage({ type: 'stop' });
   }
@@ -284,6 +376,8 @@ function App() {
     vscode.postMessage({ type: 'resume', sessionId: state.resumeSessionId ?? '' });
     dispatch({ type: 'resume_dismissed' });
   }
+
+  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm;
 
   return (
     <div style={styles.root}>
@@ -302,18 +396,21 @@ function App() {
         lastCallTokens={state.lastCallTokens}
       />
 
-      {/* Token stream */}
+      {/* Session feed */}
       <div style={styles.stream}>
-        {state.lastPrompt && (
-          <div style={styles.userPrompt}>{state.lastPrompt}</div>
+        {state.session.map((entry, i) => (
+          <SessionEntryView key={i} entry={entry} />
+        ))}
+        {state.streamingThinking && (
+          <ThinkingBlock content={state.streamingThinking} isActive={state.thinkingActive} />
         )}
-        {state.tokens.length > 0
-          ? <div style={styles.agentTokens}>{state.tokens}</div>
-          : state.connected
-          ? isRunning
-            ? state.lastPrompt ? null : 'Waiting for agent response…'
-            : state.lastPrompt ? null : 'Ready. Type a prompt below.'
-          : 'Not connected to server.'}
+        {state.streamingTokens && (
+          <div style={styles.agentTokens}>{state.streamingTokens}</div>
+        )}
+        {state.awaitingLlm && <AwaitingIndicator />}
+        {isEmpty && (
+          state.connected ? 'Ready. Type a prompt below.' : 'Not connected to server.'
+        )}
       </div>
 
       {/* File events */}
@@ -376,6 +473,88 @@ function App() {
       )}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// BouncingDots / AwaitingIndicator components
+// ---------------------------------------------------------------------------
+
+function BouncingDots() {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setStep(s => (s + 1) % 22), 150);
+    return () => clearInterval(id);
+  }, []);
+  const dots = step <= 11 ? step + 1 : 23 - step;
+  return <span>{'.'.repeat(dots)}</span>;
+}
+
+function AwaitingIndicator() {
+  return (
+    <div style={styles.awaitingLine}>
+      {'Awaiting response '}<BouncingDots />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ThinkingBlock component
+// ---------------------------------------------------------------------------
+
+interface ThinkingBlockProps {
+  content: string;
+  isActive: boolean;
+}
+
+function ThinkingBlock({ content, isActive }: ThinkingBlockProps) {
+  return (
+    <details style={styles.thinkingBlock}>
+      <summary style={styles.thinkingSummary}>
+        {isActive ? <span>{'Thinking '}<BouncingDots /></span> : 'Thinking'}
+      </summary>
+      <div style={styles.thinkingContent}>{content}</div>
+    </details>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SessionEntryView component
+// ---------------------------------------------------------------------------
+
+interface SessionEntryViewProps {
+  entry: SessionEntry;
+}
+
+function SessionEntryView({ entry }: SessionEntryViewProps) {
+  switch (entry.type) {
+    case 'user_message':
+      return <div style={styles.userPrompt}>{entry.content}</div>;
+    case 'assistant_response':
+      return <div style={styles.agentTokens}>{entry.content}</div>;
+    case 'status_response': {
+      const mins = Math.floor(entry.durationMs / 60000);
+      const secs = Math.round((entry.durationMs % 60000) / 1000);
+      const timeStr = mins > 0 ? `${mins} min ${secs} seconds` : `${secs} seconds`;
+      return (
+        <div style={styles.statusResponse}>
+          {'Kodo responded in '}
+          {timeStr}
+          {`, ${entry.inputTokens} tokens sent, ${entry.outputTokens} tokens received, context window size ${entry.contextTokens}.`}
+        </div>
+      );
+    }
+    case 'thinking_block':
+      return <ThinkingBlock content={entry.content} isActive={false} />;
+    case 'tool_call':
+      return (
+        <div style={styles.toolCall}>
+          <span style={styles.toolCallName}>{entry.toolName}</span>
+          {entry.description && (
+            <span style={styles.toolCallDesc}>{' — '}{entry.description}</span>
+          )}
+        </div>
+      );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -536,7 +715,7 @@ function ApprovalGate({ gate, onRespond }: ApprovalGateProps) {
 // Styles
 // ---------------------------------------------------------------------------
 
-const styles: Record<string, h.JSX.CSSProperties> = {
+const styles = {
   root: {
     fontFamily: 'var(--vscode-editor-font-family, monospace)',
     fontSize: 'var(--vscode-editor-font-size, 13px)',
@@ -656,6 +835,65 @@ const styles: Record<string, h.JSX.CSSProperties> = {
   agentTokens: {
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
+  },
+  awaitingLine: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontStyle: 'italic',
+    fontSize: '12px',
+    marginTop: '6px',
+    marginBottom: '4px',
+    letterSpacing: '0.02em',
+  },
+  statusResponse: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+    marginTop: '4px',
+    marginBottom: '2px',
+    fontStyle: 'italic',
+  },
+  thinkingBlock: {
+    marginTop: '6px',
+    marginBottom: '4px',
+    fontSize: '12px',
+  },
+  thinkingSummary: {
+    cursor: 'pointer',
+    color: 'var(--vscode-descriptionForeground)',
+    fontStyle: 'italic',
+    userSelect: 'none' as const,
+    listStyle: 'none',
+  },
+  thinkingContent: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    padding: '4px 0 4px 12px',
+    borderLeft: '2px solid var(--vscode-panel-border)',
+    marginTop: '4px',
+  },
+  toolCall: {
+    fontSize: '12px',
+    marginTop: '4px',
+    marginBottom: '2px',
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '4px',
+    alignItems: 'baseline',
+  },
+  toolCallName: {
+    background: 'var(--vscode-badge-background)',
+    color: 'var(--vscode-badge-foreground)',
+    borderRadius: '3px',
+    padding: '1px 5px',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    fontWeight: 'bold',
+    flexShrink: 0,
+  },
+  toolCallDesc: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
   },
   // File events
   fileEvents: {
