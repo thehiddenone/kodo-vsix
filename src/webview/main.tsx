@@ -39,6 +39,18 @@ interface GateData {
   artifactPath: string | null;
 }
 
+interface QuestionChoice {
+  key: string;
+  label: string;
+}
+
+interface QuestionData {
+  requestId: string;
+  question: string;
+  mode: string;
+  choices: QuestionChoice[] | null;
+}
+
 /**
  * A session entry is a JSON object in the session array.
  *
@@ -78,6 +90,7 @@ interface State {
   lastCallTokens: LastCallTokens | null;
   fileEvents: FileEventData[];
   pendingGate: GateData | null;
+  pendingQuestion: QuestionData | null;
   autonomous: boolean;
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
@@ -102,9 +115,12 @@ type Action =
   | { type: 'file_change'; path: string; kind: string }
   | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
   | { type: 'approval_cleared' }
+  | { type: 'question_request'; requestId: string; question: string; mode: string; choices: QuestionChoice[] | null }
+  | { type: 'question_cleared' }
   | { type: 'autonomous_changed'; autonomous: boolean }
   | { type: 'resume_offer'; sessionId: string }
-  | { type: 'resume_dismissed' };
+  | { type: 'resume_dismissed' }
+  | { type: 'session_history'; entries: Record<string, unknown>[] };
 
 function commitStreaming(state: State): SessionEntry[] {
   let session = state.session;
@@ -174,6 +190,9 @@ function reducer(state: State, action: Action): State {
       return { ...state, agent: null };
     case 'usage': {
       const t = action.lastCallTokens;
+      if (t === null) {
+        return { ...state, cumulativeUsd: action.cumulativeUsd, lastCallTokens: null };
+      }
       const baseSession = commitStreaming(state);
       const statusEntry: SessionEntry = {
         type: 'status_response',
@@ -213,12 +232,43 @@ function reducer(state: State, action: Action): State {
       };
     case 'approval_cleared':
       return { ...state, pendingGate: null };
+    case 'question_request':
+      return {
+        ...state,
+        pendingQuestion: {
+          requestId: action.requestId,
+          question: action.question,
+          mode: action.mode,
+          choices: action.choices,
+        },
+        streaming: false,
+      };
+    case 'question_cleared':
+      return { ...state, pendingQuestion: null };
     case 'autonomous_changed':
       return { ...state, autonomous: action.autonomous };
     case 'resume_offer':
       return { ...state, resumeSessionId: action.sessionId };
     case 'resume_dismissed':
       return { ...state, resumeSessionId: null };
+    case 'session_history': {
+      if (state.session.length > 0) return state;
+      const entries: SessionEntry[] = [];
+      for (const e of action.entries) {
+        const type = String(e.type ?? '');
+        if (type === 'user_message' || type === 'assistant_response') {
+          entries.push({ type, content: String(e.content ?? ''), exclude_from_context: false });
+        } else if (type === 'tool_call') {
+          entries.push({
+            type: 'tool_call',
+            toolName: String(e.toolName ?? ''),
+            description: String(e.description ?? ''),
+            exclude_from_context: false,
+          });
+        }
+      }
+      return { ...state, session: entries };
+    }
     default:
       return state;
   }
@@ -239,6 +289,7 @@ const initial: State = {
   lastCallTokens: null,
   fileEvents: [],
   pendingGate: null,
+  pendingQuestion: null,
   autonomous: false,
   resumeSessionId: null,
   awaitingLlm: false,
@@ -251,6 +302,14 @@ const initial: State = {
 function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const streamRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll the session feed to the bottom whenever a new entry is
+  // appended (e.g. the user's just-sent message) so it stays visible.
+  useEffect(() => {
+    const el = streamRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [state.session.length]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -290,6 +349,9 @@ function App() {
         case 'llm_turn_start':
           dispatch({ type: 'llm_turn_start' });
           break;
+        case 'session_history':
+          dispatch({ type: 'session_history', entries: (msg.entries as Record<string, unknown>[]) ?? [] });
+          break;
         case 'tool_call':
           dispatch({ type: 'tool_call', toolName: String(msg.toolName ?? ''), description: String(msg.description ?? '') });
           break;
@@ -317,6 +379,23 @@ function App() {
             artifactPath: msg.artifactPath ? String(msg.artifactPath) : null,
           });
           break;
+        case 'question_request': {
+          const rawChoices = msg.choices;
+          const choices: QuestionChoice[] | null = Array.isArray(rawChoices)
+            ? rawChoices.map((c) => ({
+                key: String((c as Record<string, unknown>).key ?? ''),
+                label: String((c as Record<string, unknown>).label ?? ''),
+              }))
+            : null;
+          dispatch({
+            type: 'question_request',
+            requestId: String(msg.requestId ?? ''),
+            question: String(msg.question ?? ''),
+            mode: String(msg.mode ?? 'free_text'),
+            choices,
+          });
+          break;
+        }
         case 'autonomous_changed':
           dispatch({ type: 'autonomous_changed', autonomous: Boolean(msg.autonomous) });
           break;
@@ -360,7 +439,7 @@ function App() {
   }
 
   const isRunning = state.stage !== 'IDLE' && state.stage !== 'STOPPED' && state.stage !== 'ERROR';
-  const isBlocked = state.pendingGate !== null;
+  const isBlocked = state.pendingGate !== null || state.pendingQuestion !== null;
 
   function handleStop() {
     vscode.postMessage({ type: 'stop' });
@@ -397,7 +476,7 @@ function App() {
       />
 
       {/* Session feed */}
-      <div style={styles.stream}>
+      <div ref={streamRef} style={styles.stream}>
         {state.session.map((entry, i) => (
           <SessionEntryView key={i} entry={entry} />
         ))}
@@ -418,7 +497,7 @@ function App() {
         <FileEventList events={state.fileEvents} />
       )}
 
-      {/* Approval gate (replaces prompt input when pending) */}
+      {/* Approval gate / question prompt (replaces prompt input when pending) */}
       {state.pendingGate !== null ? (
         <ApprovalGate
           gate={state.pendingGate}
@@ -430,6 +509,20 @@ function App() {
               feedback,
             });
             dispatch({ type: 'approval_cleared' });
+          }}
+        />
+      ) : state.pendingQuestion !== null ? (
+        <QuestionGate
+          question={state.pendingQuestion}
+          onRespond={(answerText, choiceKey) => {
+            vscode.postMessage({
+              type: 'question_respond',
+              requestId: state.pendingQuestion!.requestId,
+              mode: state.pendingQuestion!.mode,
+              answerText,
+              choiceKey,
+            });
+            dispatch({ type: 'question_cleared' });
           }}
         />
       ) : (
@@ -707,6 +800,64 @@ function ApprovalGate({ gate, onRespond }: ApprovalGateProps) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QuestionGate component
+// ---------------------------------------------------------------------------
+
+interface QuestionGateProps {
+  question: QuestionData;
+  onRespond: (answerText: string, choiceKey: string) => void;
+}
+
+function QuestionGate({ question, onRespond }: QuestionGateProps) {
+  const answerRef = useRef<HTMLTextAreaElement>(null);
+
+  function handleAnswer() {
+    const text = answerRef.current?.value.trim() ?? '';
+    if (!text) return;
+    onRespond(text, '');
+    if (answerRef.current) answerRef.current.value = '';
+  }
+
+  function handleAnswerKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleAnswer();
+    }
+  }
+
+  return (
+    <div style={styles.gateCard}>
+      <div style={styles.gateHeader}>
+        <span style={styles.gateType}>QUESTION</span>
+      </div>
+      {question.question && <div style={styles.gateSummary}>{question.question}</div>}
+      {question.mode === 'choice' && question.choices ? (
+        <div style={styles.gateTopRow}>
+          {question.choices.map((c) => (
+            <button key={c.key} style={styles.agreeBtn} onClick={() => onRespond('', c.key)}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div style={styles.feedbackRow}>
+          <textarea
+            ref={answerRef}
+            style={styles.feedbackInput}
+            placeholder="Your answer (Enter to send)…"
+            rows={2}
+            onKeyDown={handleAnswerKey}
+          />
+          <button style={styles.feedbackBtn} onClick={handleAnswer}>
+            ↵ Send
+          </button>
+        </div>
+      )}
     </div>
   );
 }

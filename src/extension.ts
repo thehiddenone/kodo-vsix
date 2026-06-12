@@ -54,6 +54,8 @@ let agentState: string | null = null;
 let usageState: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
 let fileEventsState: FileEventData[] = [];
 let pendingGateState: GateData | null = null;
+let pendingQuestionState: QuestionData | null = null;
+let sessionHistoryState: Record<string, unknown>[] | null = null;
 let autonomousState = false;
 let resumeSessionId: string | null = null;
 let modelsState: ModelInfo[] = [];
@@ -92,6 +94,18 @@ interface GateData {
   gateType: string;
   summary: string;
   artifactPath: string | null;
+}
+
+interface QuestionChoice {
+  key: string;
+  label: string;
+}
+
+interface QuestionData {
+  requestId: string;
+  question: string;
+  mode: string;
+  choices: QuestionChoice[] | null;
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -326,18 +340,26 @@ function openPanel(context: vscode.ExtensionContext): void {
       panel?.webview.postMessage({ type: 'workspace_status', hasWorkspace });
       panel?.webview.postMessage({ type: 'status', connected: connState });
       panel?.webview.postMessage({ type: 'stage', stage: stageState, agent: agentState });
+      if (sessionHistoryState !== null) {
+        panel?.webview.postMessage({ type: 'session_history', entries: sessionHistoryState });
+      }
       if (lastPromptState.length > 0) {
         panel?.webview.postMessage({ type: 'restore_prompt', text: lastPromptState });
       }
       if (tokensState.length > 0) {
         panel?.webview.postMessage({ type: 'token', text: tokensState });
       }
-      panel?.webview.postMessage({ type: 'usage', ...usageState });
+      if (usageState.lastCallTokens !== null) {
+        panel?.webview.postMessage({ type: 'usage', ...usageState });
+      }
       for (const fe of fileEventsState) {
         panel?.webview.postMessage({ type: 'file_change', ...fe });
       }
       if (pendingGateState !== null) {
         panel?.webview.postMessage({ type: 'approval_request', ...pendingGateState });
+      }
+      if (pendingQuestionState !== null) {
+        panel?.webview.postMessage({ type: 'question_request', ...pendingQuestionState });
       }
       panel?.webview.postMessage({ type: 'autonomous_changed', autonomous: autonomousState });
       if (resumeSessionId !== null) {
@@ -353,14 +375,28 @@ function openPanel(context: vscode.ExtensionContext): void {
         tokensState = '';
         fileEventsState = [];
         pendingGateState = null;
+        pendingQuestionState = null;
         wsClient?.send(makeRequest('prompt.submit', { text }));
       }
     } else if (msg.type === 'approval_respond') {
       const gateId = String(msg.gateId ?? '');
       const action = String(msg.action ?? 'agree');
       const feedback = String(msg.feedback ?? '');
-      wsClient?.send(makeRequest('approval.respond', { gate_id: gateId, action, feedback }));
+      wsClient?.send(
+        makeResponse(gateId, { type: 'prompt.approval.response', action, feedback_text: feedback || null }),
+      );
       pendingGateState = null;
+    } else if (msg.type === 'question_respond') {
+      const requestId = String(msg.requestId ?? '');
+      const mode = String(msg.mode ?? 'free_text');
+      const payload: Record<string, unknown> = { type: 'prompt.question.response' };
+      if (mode === 'choice') {
+        payload.choice_key = String(msg.choiceKey ?? '');
+      } else {
+        payload.answer_text = String(msg.answerText ?? '');
+      }
+      wsClient?.send(makeResponse(requestId, payload));
+      pendingQuestionState = null;
     } else if (msg.type === 'stop') {
       wsClient?.send(makeRequest('stop', {}));
     } else if (msg.type === 'mode_set') {
@@ -375,6 +411,7 @@ function openPanel(context: vscode.ExtensionContext): void {
       tokensState = '';
       fileEventsState = [];
       pendingGateState = null;
+      pendingQuestionState = null;
     } else if (msg.type === 'open_file') {
       const filePath = String(msg.path ?? '');
       if (filePath && projectRoot) {
@@ -469,6 +506,15 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  if (env.kind === 'event' && evtType === 'session.history') {
+    const entries = env.payload.entries;
+    if (Array.isArray(entries)) {
+      sessionHistoryState = entries as Record<string, unknown>[];
+      panel?.webview.postMessage({ type: 'session_history', entries: sessionHistoryState });
+    }
+    return;
+  }
+
   if (env.kind === 'event' && evtType === 'agent.started') {
     const agent = String(env.payload.agent ?? '');
     agentState = agent;
@@ -492,15 +538,38 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
-  if (env.kind === 'event' && evtType === 'approval.request') {
+  // Server-initiated approval gate (WS_PROTOCOL.md §6.2 prompt.approval).
+  // Reply is a kind=response with correlation_id = env.id.
+  if (env.kind === 'request' && evtType === 'prompt.approval') {
     const gate: GateData = {
-      gateId: String(env.payload.gate_id ?? ''),
+      gateId: env.id,
       gateType: String(env.payload.gate_type ?? ''),
       summary: String(env.payload.summary ?? ''),
       artifactPath: env.payload.artifact_path ? String(env.payload.artifact_path) : null,
     };
     pendingGateState = gate;
     panel?.webview.postMessage({ type: 'approval_request', ...gate });
+    return;
+  }
+
+  // Server-initiated user question (WS_PROTOCOL.md §6.1 prompt.question).
+  // Reply is a kind=response with correlation_id = env.id.
+  if (env.kind === 'request' && evtType === 'prompt.question') {
+    const rawChoices = env.payload.choices;
+    const choices: QuestionChoice[] | null = Array.isArray(rawChoices)
+      ? rawChoices.map((c) => ({
+          key: String((c as Record<string, unknown>).key ?? ''),
+          label: String((c as Record<string, unknown>).label ?? ''),
+        }))
+      : null;
+    const question: QuestionData = {
+      requestId: env.id,
+      question: String(env.payload.question ?? ''),
+      mode: String(env.payload.mode ?? 'free_text'),
+      choices,
+    };
+    pendingQuestionState = question;
+    panel?.webview.postMessage({ type: 'question_request', ...question });
     return;
   }
 
