@@ -28,6 +28,9 @@ import { WsClient } from './ws-client';
 
 const SERVER_STARTUP_DELAY_MS = 1_500;
 const TOKEN_BUFFER_MAX = 64 * 1024; // soft cap on cached stream text
+// Mirrors _DEFAULT_USER_SETTINGS["models"]["local"] in kodo/server/_config.py —
+// the model the server uses when .kodo/settings.json sets no explicit local model.
+const _DEFAULT_LOCAL_MODEL = 'llamacpp-qwen36-27b';
 
 let extensionContext: vscode.ExtensionContext | null = null;
 // Serial queue for api_key.request handling — ensures at most one "enter key"
@@ -725,13 +728,13 @@ function _readMode(): 'local' | 'cloud' {
 }
 
 function _readActiveLocalModel(): string {
-  if (!projectRoot) { return ''; }
+  if (!projectRoot) { return _DEFAULT_LOCAL_MODEL; }
   try {
     const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
     const models = s['models'] as Record<string, unknown> | undefined;
-    return typeof models?.['local'] === 'string' ? models['local'] : '';
+    return typeof models?.['local'] === 'string' ? models['local'] : _DEFAULT_LOCAL_MODEL;
   } catch {
-    return '';
+    return _DEFAULT_LOCAL_MODEL;
   }
 }
 
