@@ -163,18 +163,6 @@ function buildHtml(): string {
     .toggle-btn:hover {
       background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
     }
-    .mode-notice {
-      display: none;
-      margin: -4px 0 10px;
-      padding: 6px 8px;
-      border-radius: 3px;
-      font-size: 0.85em;
-      line-height: 1.4;
-      color: var(--vscode-descriptionForeground);
-      background: var(--vscode-editor-inactiveSelectionBackground, transparent);
-      border-left: 2px solid var(--vscode-focusBorder, var(--vscode-button-background));
-    }
-    .mode-notice.show { display: block; }
     #open-btn { margin-bottom: 14px; }
     .radio-group { display: flex; flex-direction: column; gap: 6px; }
     label {
@@ -270,7 +258,6 @@ function buildHtml(): string {
       <button id="auto-btn" class="toggle-btn">💬 Interactive</button>
       <button id="workflow-btn" class="toggle-btn">🧩 Guided Project Workflow</button>
     </div>
-    <div id="mode-notice" class="mode-notice"></div>
     <button id="open-btn">Open Kōdo Panel</button>
 
     <hr>
@@ -303,20 +290,55 @@ function buildHtml(): string {
       guided: 'Guided Project Workflow — Kōdo walks you through its build phases (design, tests, implementation) to grow a complete solution.',
     };
 
-    let _modeNoticeTimer = null;
-    function showModeNotice(nextAutonomous) {
-      const el = document.getElementById('mode-notice');
-      const label = nextAutonomous ? '⚡ Autonomous' : '💬 Interactive';
-      el.textContent = label + ' mode will apply to your next prompt.';
-      el.classList.add('show');
-      if (_modeNoticeTimer) { clearTimeout(_modeNoticeTimer); }
-      _modeNoticeTimer = setTimeout(() => el.classList.remove('show'), 6000);
+    // ----------------------------------------------------------------
+    // Tooltip
+    // ----------------------------------------------------------------
+    let _tooltipTarget = null;
+    const _tooltipEl = document.createElement('div');
+    _tooltipEl.style.cssText = [
+      'position:fixed',
+      'background:var(--vscode-editorHoverWidget-background,#252526)',
+      'color:var(--vscode-editorHoverWidget-foreground,#cccccc)',
+      'border:1px solid var(--vscode-editorHoverWidget-border,#454545)',
+      'border-radius:3px',
+      'padding:5px 8px',
+      'font-size:0.82em',
+      'pointer-events:none',
+      'display:none',
+      'z-index:1000',
+      'max-width:220px',
+      'white-space:normal',
+      'word-wrap:break-word',
+      'line-height:1.35',
+      'box-shadow:0 2px 8px rgba(0,0,0,0.3)',
+    ].join(';');
+    document.body.appendChild(_tooltipEl);
+
+    function _showTooltip(el, text) {
+      _tooltipTarget = el;
+      const rect = el.getBoundingClientRect();
+      _tooltipEl.textContent = text;
+      _tooltipEl.style.display = 'block';
+      _tooltipEl.style.left = '0';
+      _tooltipEl.style.top = (rect.bottom + 5) + 'px';
+      const tw = _tooltipEl.offsetWidth;
+      let left = rect.left + (rect.width - tw) / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+      _tooltipEl.style.left = left + 'px';
     }
+    function _hideTooltip() { _tooltipTarget = null; _tooltipEl.style.display = 'none'; }
+
+    document.getElementById('auto-btn').addEventListener('mouseenter', function() {
+      _showTooltip(this, _state.autonomous ? TOOLTIPS.autonomous : TOOLTIPS.interactive);
+    });
+    document.getElementById('auto-btn').addEventListener('mouseleave', _hideTooltip);
+    document.getElementById('workflow-btn').addEventListener('mouseenter', function() {
+      _showTooltip(this, _state.workflowMode === 'problem_solving' ? TOOLTIPS.problem_solving : TOOLTIPS.guided);
+    });
+    document.getElementById('workflow-btn').addEventListener('mouseleave', _hideTooltip);
 
     document.getElementById('auto-btn').addEventListener('click', () => {
-      // The new mode only takes effect when the next prompt is sent, so tell
-      // the user rather than implying the running prompt switched.
-      showModeNotice(!_state.autonomous);
+      _hideTooltip();
       vsc.postMessage({ type: 'toggle_autonomous' });
     });
 
@@ -524,12 +546,14 @@ function buildHtml(): string {
       const autoBtn = document.getElementById('auto-btn');
       autoBtn.textContent = _state.autonomous ? '⚡ Autonomous' : '💬 Interactive';
       autoBtn.title = _state.autonomous ? TOOLTIPS.autonomous : TOOLTIPS.interactive;
+      if (_tooltipTarget === autoBtn) { _showTooltip(autoBtn, autoBtn.title); }
 
       if (data.workflowMode !== undefined) { _state.workflowMode = data.workflowMode; }
       const workflowBtn = document.getElementById('workflow-btn');
       const isProblemSolving = _state.workflowMode === 'problem_solving';
       workflowBtn.textContent = isProblemSolving ? '💡 Problem Solving' : '🧩 Guided Project Workflow';
       workflowBtn.title = isProblemSolving ? TOOLTIPS.problem_solving : TOOLTIPS.guided;
+      if (_tooltipTarget === workflowBtn) { _showTooltip(workflowBtn, workflowBtn.title); }
 
       // Mode radio
       const radio = document.querySelector('input[value="' + data.mode + '"]');

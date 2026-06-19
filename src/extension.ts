@@ -195,11 +195,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _writeSettings({ autonomous: autonomousState });
         wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
         sidebarProvider?.update({ autonomous: autonomousState });
+        const autonomousLabel = autonomousState ? 'Autonomous' : 'Interactive';
+        vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Kōdo: ${autonomousLabel} mode will apply to the next prompt`, cancellable: false },
+          () => new Promise<void>(resolve => setTimeout(resolve, 5000)),
+        ).then(undefined, () => undefined);
       } else if (msg.type === 'toggle_workflow_mode') {
         workflowModeState = workflowModeState === 'problem_solving' ? 'guided' : 'problem_solving';
         _writeSettings({ workflowMode: workflowModeState });
         wsClient?.send(makeRequest('workflow.set', { mode: workflowModeState }));
         sidebarProvider?.update({ workflowMode: workflowModeState });
+        const workflowLabel = workflowModeState === 'problem_solving' ? 'Problem Solving' : 'Guided Project Workflow';
+        vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Kōdo: ${workflowLabel} will apply to the next prompt`, cancellable: false },
+          () => new Promise<void>(resolve => setTimeout(resolve, 5000)),
+        ).then(undefined, () => undefined);
       } else if (msg.type === 'set_active_model') {
         _setActiveLocalModel(msg.name);
       } else if (msg.type === 'start_llamacpp') {
