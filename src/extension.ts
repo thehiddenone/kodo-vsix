@@ -60,6 +60,7 @@ let pendingGateState: GateData | null = null;
 let pendingQuestionState: QuestionData | null = null;
 let sessionHistoryState: Record<string, unknown>[] | null = null;
 let autonomousState = false;
+let workflowModeState: 'guided' | 'problem_solving' = 'guided';
 let resumeSessionId: string | null = null;
 let modelsState: ModelInfo[] = [];
 let installedModelsState: string[] = [];
@@ -131,6 +132,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         sidebarProvider?.update({ connected });
         if (connected) {
           sendHello();
+          // Sync the server's session to the project's persisted preferences.
+          wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
+          wsClient?.send(makeRequest('workflow.set', { mode: workflowModeState }));
         }
       },
     );
@@ -155,6 +159,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   modeState = _readMode();
+  autonomousState = _readAutonomous();
+  workflowModeState = _readWorkflowMode();
   activeLocalModelState = _readActiveLocalModel();
   installedModelsState = _readInstalledModels();
 
@@ -164,6 +170,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       hasWorkspace,
       stage: stageState,
       autonomous: autonomousState,
+      workflowMode: workflowModeState,
       mode: modeState,
       models: modelsState,
       installedModels: installedModelsState,
@@ -185,8 +192,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _setMode(msg.mode);
       } else if (msg.type === 'toggle_autonomous') {
         autonomousState = !autonomousState;
+        _writeSettings({ autonomous: autonomousState });
         wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
         sidebarProvider?.update({ autonomous: autonomousState });
+      } else if (msg.type === 'toggle_workflow_mode') {
+        workflowModeState = workflowModeState === 'problem_solving' ? 'guided' : 'problem_solving';
+        _writeSettings({ workflowMode: workflowModeState });
+        wsClient?.send(makeRequest('workflow.set', { mode: workflowModeState }));
+        sidebarProvider?.update({ workflowMode: workflowModeState });
       } else if (msg.type === 'set_active_model') {
         _setActiveLocalModel(msg.name);
       } else if (msg.type === 'start_llamacpp') {
@@ -288,6 +301,18 @@ async function createProject(): Promise<void> {
     ].join('\n');
 
     fs.writeFileSync(kodoMd, template, 'utf8');
+
+    // New Kōdo projects start in Interactive + Guided Project Workflow.
+    const settingsPath = path.join(root, '.kodo', 'settings.json');
+    let settings: Record<string, unknown> = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+      } catch { /* start fresh */ }
+    }
+    settings['autonomous'] = false;
+    settings['workflowMode'] = 'guided';
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
 
     const folderUri = vscode.Uri.file(root);
     const alreadyInWorkspace = vscode.workspace.workspaceFolders?.some(
@@ -405,6 +430,7 @@ function openPanel(context: vscode.ExtensionContext): void {
     } else if (msg.type === 'mode_set') {
       const autonomous = Boolean(msg.autonomous);
       autonomousState = autonomous;
+      _writeSettings({ autonomous });
       wsClient?.send(makeRequest('mode.set', { autonomous }));
     } else if (msg.type === 'resume') {
       const sessionId = String(msg.sessionId ?? '');
@@ -576,6 +602,24 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  if (env.kind === 'event' && evtType === 'autonomous.changed') {
+    const autonomous = Boolean(env.payload.autonomous ?? false);
+    autonomousState = autonomous;
+    _writeSettings({ autonomous });
+    panel?.webview.postMessage({ type: 'autonomous_changed', autonomous });
+    sidebarProvider?.update({ autonomous });
+    if (!autonomous) {
+      vscode.window.showInformationMessage('Kōdo: Autonomous mode has been turned off.');
+    }
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'post.update') {
+    const message = String(env.payload.message ?? '');
+    panel?.webview.postMessage({ type: 'post_update', message });
+    return;
+  }
+
   if (env.kind === 'event' && evtType === 'llm.turn_start') {
     panel?.webview.postMessage({ type: 'llm_turn_start' });
     return;
@@ -725,6 +769,44 @@ function _readMode(): 'local' | 'cloud' {
   } catch {
     return 'local';
   }
+}
+
+function _readAutonomous(): boolean {
+  if (!projectRoot) { return false; }
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
+    return s['autonomous'] === true;
+  } catch {
+    return false;
+  }
+}
+
+function _readWorkflowMode(): 'guided' | 'problem_solving' {
+  if (!projectRoot) { return 'guided'; }
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
+    return s['workflowMode'] === 'problem_solving' ? 'problem_solving' : 'guided';
+  } catch {
+    return 'guided';
+  }
+}
+
+/** Merge a patch into the project's .kodo/settings.json, preserving other keys. */
+function _writeSettings(patch: Record<string, unknown>): void {
+  if (!projectRoot) { return; }
+  const kodoDir = path.join(projectRoot, '.kodo');
+  const settingsPath = path.join(kodoDir, 'settings.json');
+
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    } catch { /* start fresh */ }
+  }
+
+  Object.assign(settings, patch);
+  fs.mkdirSync(kodoDir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
 }
 
 function _readActiveLocalModel(): string {
@@ -935,8 +1017,8 @@ async function _handleApiKeyRequest(vendor: string, requestId: string): Promise<
 
   if (!entered?.trim()) {
     vscode.window.showErrorMessage(
-      `Kōdo: prompt not sent. A ${vendor} API key is needed to run AI — without it Kōdo cannot do anything. ` +
-        'If you prefer not to use a cloud API, you can point Kōdo at a local AI running on your machine (llama.cpp).',
+      `Kōdo: prompt not sent. A ${vendor} API key is required to use cloud-based LLM. ` +
+        'Alternatively, you can configure Kōdo to use a local model running on your machine (e.g., llama.cpp).',
     );
     wsClient?.send(makeResponse(requestId, { error: 'cancelled' }));
     return;

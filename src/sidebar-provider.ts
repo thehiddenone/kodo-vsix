@@ -14,6 +14,7 @@ export interface SidebarState {
   hasWorkspace: boolean;
   stage: string;
   autonomous: boolean;
+  workflowMode: 'guided' | 'problem_solving';
   mode: 'local' | 'cloud';
   models: ModelInfo[];
   installedModels: string[];
@@ -33,6 +34,7 @@ export type SidebarMessage =
   | { type: 'open_panel' }
   | { type: 'set_mode'; mode: 'local' | 'cloud' }
   | { type: 'toggle_autonomous' }
+  | { type: 'toggle_workflow_mode' }
   | { type: 'set_active_model'; name: string }
   | { type: 'restart_llamacpp' }
   | { type: 'install_llamacpp' }
@@ -99,11 +101,10 @@ function buildHtml(): string {
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
     }
-    .top-row {
+    .status-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .status {
       flex: 1;
@@ -111,6 +112,11 @@ function buildHtml(): string {
       align-items: center;
       gap: 5px;
       opacity: 0.75;
+    }
+    .toggle-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
     }
     .conn-dot {
       width: 7px;
@@ -143,16 +149,32 @@ function buildHtml(): string {
       cursor: default;
       background: var(--vscode-button-background);
     }
-    #auto-btn {
+    .toggle-btn {
       flex: 1;
       width: auto;
       margin-bottom: 0;
+      font-size: 0.92em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
       color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
     }
-    #auto-btn:hover {
+    .toggle-btn:hover {
       background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
     }
+    .mode-notice {
+      display: none;
+      margin: -4px 0 10px;
+      padding: 6px 8px;
+      border-radius: 3px;
+      font-size: 0.85em;
+      line-height: 1.4;
+      color: var(--vscode-descriptionForeground);
+      background: var(--vscode-editor-inactiveSelectionBackground, transparent);
+      border-left: 2px solid var(--vscode-focusBorder, var(--vscode-button-background));
+    }
+    .mode-notice.show { display: block; }
     #open-btn { margin-bottom: 14px; }
     .radio-group { display: flex; flex-direction: column; gap: 6px; }
     label {
@@ -238,13 +260,17 @@ function buildHtml(): string {
 <body>
   <div id="inactive-msg">Open a workspace to use Kōdo.</div>
   <div id="main-controls">
-    <div class="top-row">
+    <div class="status-row">
       <div class="status">
         <span id="conn-dot" class="conn-dot off"></span>
-        <span id="conn-lbl">Disconnected</span>
+        <span id="conn-lbl">Status: Disconnected</span>
       </div>
-      <button id="auto-btn">⚡ Manual</button>
     </div>
+    <div class="toggle-row">
+      <button id="auto-btn" class="toggle-btn">💬 Interactive</button>
+      <button id="workflow-btn" class="toggle-btn">🧩 Guided Project Workflow</button>
+    </div>
+    <div id="mode-notice" class="mode-notice"></div>
     <button id="open-btn">Open Kōdo Panel</button>
 
     <hr>
@@ -269,8 +295,33 @@ function buildHtml(): string {
     // Notify extension that webview is ready to receive state.
     vsc.postMessage({ type: 'ready' });
 
+    // Tooltip copy for the two mode toggles.
+    const TOOLTIPS = {
+      interactive: 'Interactive mode — agents work alongside you, asking questions and checking in before key decisions.',
+      autonomous: 'Autonomous mode — agents work on their own, making reasonable assumptions instead of pausing to ask you.',
+      problem_solving: 'Problem Solving — a single generalist agent tackles your request end to end, however it sees fit.',
+      guided: 'Guided Project Workflow — Kōdo walks you through its build phases (design, tests, implementation) to grow a complete solution.',
+    };
+
+    let _modeNoticeTimer = null;
+    function showModeNotice(nextAutonomous) {
+      const el = document.getElementById('mode-notice');
+      const label = nextAutonomous ? '⚡ Autonomous' : '💬 Interactive';
+      el.textContent = label + ' mode will apply to your next prompt.';
+      el.classList.add('show');
+      if (_modeNoticeTimer) { clearTimeout(_modeNoticeTimer); }
+      _modeNoticeTimer = setTimeout(() => el.classList.remove('show'), 6000);
+    }
+
     document.getElementById('auto-btn').addEventListener('click', () => {
+      // The new mode only takes effect when the next prompt is sent, so tell
+      // the user rather than implying the running prompt switched.
+      showModeNotice(!_state.autonomous);
       vsc.postMessage({ type: 'toggle_autonomous' });
+    });
+
+    document.getElementById('workflow-btn').addEventListener('click', () => {
+      vsc.postMessage({ type: 'toggle_workflow_mode' });
     });
 
     document.getElementById('open-btn').addEventListener('click', () => {
@@ -289,6 +340,8 @@ function buildHtml(): string {
     let _state = {
       connected: false,
       stage: 'intake',
+      autonomous: false,
+      workflowMode: 'guided',
       mode: 'local',
       models: [],
       installedModels: [],
@@ -305,14 +358,14 @@ function buildHtml(): string {
     };
 
     function statusDisplay(connected, stage) {
-      if (!connected) { return { cls: 'off', label: 'Disconnected' }; }
+      if (!connected) { return { cls: 'off', label: 'Status: Disconnected' }; }
       switch (stage) {
-        case 'running':       return { cls: 'working', label: 'Working…' };
-        case 'awaiting_user': return { cls: 'waiting', label: 'Waiting for you' };
-        case 'error':         return { cls: 'error',   label: 'Error' };
-        case 'stopped':       return { cls: 'off',     label: 'Stopped' };
-        case 'done':          return { cls: 'on',      label: 'Done' };
-        default:              return { cls: 'on',      label: 'Ready' };
+        case 'running':       return { cls: 'working', label: 'Status: Working…' };
+        case 'awaiting_user': return { cls: 'waiting', label: 'Status: Waiting for you' };
+        case 'error':         return { cls: 'error',   label: 'Status: Error' };
+        case 'stopped':       return { cls: 'off',     label: 'Status: Stopped' };
+        case 'done':          return { cls: 'on',      label: 'Status: Done' };
+        default:              return { cls: 'on',      label: 'Status: Ready' };
       }
     }
 
@@ -467,8 +520,16 @@ function buildHtml(): string {
       document.getElementById('conn-dot').className = 'conn-dot ' + cls;
       document.getElementById('conn-lbl').textContent = label;
 
-      document.getElementById('auto-btn').textContent =
-        data.autonomous ? '⚡ Autonomous' : '⚡ Manual';
+      _state.autonomous = Boolean(data.autonomous);
+      const autoBtn = document.getElementById('auto-btn');
+      autoBtn.textContent = _state.autonomous ? '⚡ Autonomous' : '💬 Interactive';
+      autoBtn.title = _state.autonomous ? TOOLTIPS.autonomous : TOOLTIPS.interactive;
+
+      if (data.workflowMode !== undefined) { _state.workflowMode = data.workflowMode; }
+      const workflowBtn = document.getElementById('workflow-btn');
+      const isProblemSolving = _state.workflowMode === 'problem_solving';
+      workflowBtn.textContent = isProblemSolving ? '💡 Problem Solving' : '🧩 Guided Project Workflow';
+      workflowBtn.title = isProblemSolving ? TOOLTIPS.problem_solving : TOOLTIPS.guided;
 
       // Mode radio
       const radio = document.querySelector('input[value="' + data.mode + '"]');

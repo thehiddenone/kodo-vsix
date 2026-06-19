@@ -1,6 +1,6 @@
 # Kodo VSIX — Claude Code Guidelines
 
-## Running scripts
+## Running scripts on Windows
 
 Node.js is managed by **mise**. All `npm` commands must be run via mise from `e:\source\kodo-vsix`:
 
@@ -15,7 +15,7 @@ mise exec node -- npm run watch         # watch mode (esbuild + tsc)
 
 **Always use PowerShell** for these commands — `mise` is not on the Bash tool's PATH.
 
-## Check command
+## Check command on Windows
 
 Before marking work complete, run:
 

@@ -65,7 +65,8 @@ type SessionEntry =
   | { type: 'assistant_response'; content: string; exclude_from_context: false }
   | { type: 'tool_call'; toolName: string; description: string; exclude_from_context: false }
   | { type: 'thinking_block'; content: string; exclude_from_context: true }
-  | { type: 'status_response'; durationMs: number; inputTokens: number; outputTokens: number; contextTokens: number; exclude_from_context: true };
+  | { type: 'status_response'; durationMs: number; inputTokens: number; outputTokens: number; contextTokens: number; exclude_from_context: true }
+  | { type: 'post_update'; content: string; exclude_from_context: true };
 
 // ---------------------------------------------------------------------------
 // State
@@ -120,6 +121,7 @@ type Action =
   | { type: 'autonomous_changed'; autonomous: boolean }
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
+  | { type: 'post_update'; message: string }
   | { type: 'session_history'; entries: Record<string, unknown>[] };
 
 function commitStreaming(state: State): SessionEntry[] {
@@ -251,6 +253,11 @@ function reducer(state: State, action: Action): State {
       return { ...state, resumeSessionId: action.sessionId };
     case 'resume_dismissed':
       return { ...state, resumeSessionId: null };
+    case 'post_update':
+      return {
+        ...state,
+        session: [...state.session, { type: 'post_update', content: action.message, exclude_from_context: true }],
+      };
     case 'session_history': {
       if (state.session.length > 0) return state;
       const entries: SessionEntry[] = [];
@@ -398,6 +405,9 @@ function App() {
         }
         case 'autonomous_changed':
           dispatch({ type: 'autonomous_changed', autonomous: Boolean(msg.autonomous) });
+          break;
+        case 'post_update':
+          dispatch({ type: 'post_update', message: String(msg.message ?? '') });
           break;
         case 'resume_offer':
           dispatch({ type: 'resume_offer', sessionId: String(msg.sessionId ?? '') });
@@ -647,6 +657,8 @@ function SessionEntryView({ entry }: SessionEntryViewProps) {
           )}
         </div>
       );
+    case 'post_update':
+      return <div style={styles.postUpdate}>{entry.content}</div>;
   }
 }
 
@@ -1045,6 +1057,16 @@ const styles = {
   toolCallDesc: {
     color: 'var(--vscode-descriptionForeground)',
     fontSize: '11px',
+  },
+  postUpdate: {
+    background: 'var(--vscode-editorWidget-background, var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,0.12)))',
+    borderRadius: '6px',
+    padding: '6px 10px',
+    marginTop: '6px',
+    marginBottom: '4px',
+    fontSize: '12px',
+    color: 'var(--vscode-descriptionForeground)',
+    fontStyle: 'italic',
   },
   // File events
   fileEvents: {
