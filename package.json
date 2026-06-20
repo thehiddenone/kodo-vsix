@@ -1,5 +1,6 @@
 {
   "name": "kodo",
+  "publisher": "StanislavMorozov",
   "displayName": "Kōdo",
   "description": "Agentic build system: requirements → working code.",
   "version": "0.1.0",

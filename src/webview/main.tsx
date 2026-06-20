@@ -66,7 +66,10 @@ type SessionEntry =
   | { type: 'tool_call'; toolName: string; description: string; exclude_from_context: false }
   | { type: 'thinking_block'; content: string; exclude_from_context: true }
   | { type: 'status_response'; durationMs: number; inputTokens: number; outputTokens: number; contextTokens: number; exclude_from_context: true }
-  | { type: 'post_update'; content: string; exclude_from_context: true };
+  | { type: 'post_update'; content: string; exclude_from_context: true }
+  // Sub-agent takeover dividers. 'start' marks a sub-agent taking over from the
+  // main agent; 'end' marks the main agent resuming. Display-only.
+  | { type: 'subsession_divider'; phase: 'start' | 'end'; displayName: string; parentDisplayName: string; exclude_from_context: true };
 
 // ---------------------------------------------------------------------------
 // State
@@ -75,6 +78,10 @@ type SessionEntry =
 interface State {
   connected: boolean;
   hasWorkspace: boolean;
+  /** Human-readable session name shown in the header; empty until named. */
+  sessionName: string;
+  /** True while the silent session-titler call is running (shows a naming indicator). */
+  namingSession: boolean;
   stage: string;
   agent: string | null;
   /** Committed session entries. Rendered in order; exclude_from_context entries excluded from LLM context. */
@@ -110,6 +117,8 @@ type Action =
   | { type: 'stage'; stage: string; agent: string | null }
   | { type: 'agent_started'; agent: string }
   | { type: 'agent_finished'; agent: string }
+  | { type: 'subsession_started'; displayName: string }
+  | { type: 'subsession_ended'; displayName: string; parentDisplayName: string }
   | { type: 'prompt_sent'; text: string }
   | { type: 'restore_prompt'; text: string }
   | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null; durationSeconds: number }
@@ -122,6 +131,8 @@ type Action =
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
   | { type: 'post_update'; message: string }
+  | { type: 'session_name'; name: string }
+  | { type: 'session_naming'; active: boolean }
   | { type: 'session_history'; entries: Record<string, unknown>[] };
 
 function commitStreaming(state: State): SessionEntry[] {
@@ -141,6 +152,10 @@ function reducer(state: State, action: Action): State {
       return { ...state, hasWorkspace: action.hasWorkspace };
     case 'status':
       return { ...state, connected: action.connected };
+    case 'session_name':
+      return { ...state, sessionName: action.name, namingSession: false };
+    case 'session_naming':
+      return { ...state, namingSession: action.active };
     case 'llm_turn_start':
       return { ...state, awaitingLlm: true };
     case 'tool_call':
@@ -190,6 +205,34 @@ function reducer(state: State, action: Action): State {
       return { ...state, agent: action.agent };
     case 'agent_finished':
       return { ...state, agent: null };
+    case 'subsession_started': {
+      // A sub-agent takes over: commit any in-flight main streaming first, then
+      // drop a "took over from" divider into the feed.
+      const baseSession = commitStreaming(state);
+      return {
+        ...state,
+        session: [
+          ...baseSession,
+          { type: 'subsession_divider', phase: 'start', displayName: action.displayName, parentDisplayName: '', exclude_from_context: true },
+        ],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+      };
+    }
+    case 'subsession_ended': {
+      const baseSession = commitStreaming(state);
+      return {
+        ...state,
+        session: [
+          ...baseSession,
+          { type: 'subsession_divider', phase: 'end', displayName: action.displayName, parentDisplayName: action.parentDisplayName, exclude_from_context: true },
+        ],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+      };
+    }
     case 'usage': {
       const t = action.lastCallTokens;
       if (t === null) {
@@ -272,6 +315,14 @@ function reducer(state: State, action: Action): State {
             description: String(e.description ?? ''),
             exclude_from_context: false,
           });
+        } else if (type === 'subsession_start' || type === 'subsession_end') {
+          entries.push({
+            type: 'subsession_divider',
+            phase: type === 'subsession_start' ? 'start' : 'end',
+            displayName: String(e.displayName ?? ''),
+            parentDisplayName: String(e.parentDisplayName ?? ''),
+            exclude_from_context: true,
+          });
         }
       }
       return { ...state, session: entries };
@@ -284,6 +335,8 @@ function reducer(state: State, action: Action): State {
 const initial: State = {
   connected: false,
   hasWorkspace: false,
+  sessionName: '',
+  namingSession: false,
   stage: 'IDLE',
   agent: null,
   session: [],
@@ -328,6 +381,12 @@ function App() {
         case 'status':
           dispatch({ type: 'status', connected: Boolean(msg.connected) });
           break;
+        case 'session_name':
+          dispatch({ type: 'session_name', name: String(msg.name ?? '') });
+          break;
+        case 'session_naming':
+          dispatch({ type: 'session_naming', active: Boolean(msg.active) });
+          break;
         case 'token':
           dispatch({ type: 'token', text: String(msg.text ?? '') });
           break;
@@ -352,6 +411,16 @@ function App() {
           break;
         case 'agent_finished':
           dispatch({ type: 'agent_finished', agent: String(msg.agent ?? '') });
+          break;
+        case 'subsession_started':
+          dispatch({ type: 'subsession_started', displayName: String(msg.displayName ?? '') });
+          break;
+        case 'subsession_ended':
+          dispatch({
+            type: 'subsession_ended',
+            displayName: String(msg.displayName ?? ''),
+            parentDisplayName: String(msg.parentDisplayName ?? ''),
+          });
           break;
         case 'llm_turn_start':
           dispatch({ type: 'llm_turn_start' });
@@ -466,7 +535,7 @@ function App() {
     dispatch({ type: 'resume_dismissed' });
   }
 
-  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm;
+  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.namingSession;
 
   return (
     <div style={styles.root}>
@@ -481,6 +550,7 @@ function App() {
 
       {/* Usage panel */}
       <UsagePanel
+        sessionName={state.sessionName}
         cumulativeUsd={state.cumulativeUsd}
         lastCallTokens={state.lastCallTokens}
       />
@@ -496,9 +566,10 @@ function App() {
         {state.streamingTokens && (
           <div style={styles.agentTokens}>{state.streamingTokens}</div>
         )}
+        {state.namingSession && <NamingIndicator />}
         {state.awaitingLlm && <AwaitingIndicator />}
         {isEmpty && (
-          state.connected ? 'Ready. Type a prompt below.' : 'Not connected to server.'
+          state.connected ? "Hello there. I'm Kodo. Ready to build something awesome." : 'Not connected to server.'
         )}
       </div>
 
@@ -600,6 +671,14 @@ function AwaitingIndicator() {
   );
 }
 
+function NamingIndicator() {
+  return (
+    <div style={styles.awaitingLine}>
+      {'Naming session '}<BouncingDots />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ThinkingBlock component
 // ---------------------------------------------------------------------------
@@ -659,6 +738,19 @@ function SessionEntryView({ entry }: SessionEntryViewProps) {
       );
     case 'post_update':
       return <div style={styles.postUpdate}>{entry.content}</div>;
+    case 'subsession_divider': {
+      const label =
+        entry.phase === 'start'
+          ? `${entry.displayName} subagent took over`
+          : `${entry.parentDisplayName || 'Kōdo'} resumed${entry.displayName ? ` from ${entry.displayName}` : ''}`;
+      return (
+        <div style={styles.subsessionDivider}>
+          <span style={styles.subsessionDividerLine} />
+          <span style={styles.subsessionDividerLabel}>{label}</span>
+          <span style={styles.subsessionDividerLine} />
+        </div>
+      );
+    }
   }
 }
 
@@ -692,25 +784,31 @@ function ResumeBanner({ onResume, onDismiss }: ResumeBannerProps) {
 // ---------------------------------------------------------------------------
 
 interface UsagePanelProps {
+  sessionName: string;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
 }
 
-function UsagePanel({ cumulativeUsd, lastCallTokens }: UsagePanelProps) {
-  if (cumulativeUsd === 0 && lastCallTokens === null) {
-    return null;
-  }
+function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens }: UsagePanelProps) {
+  // Always render both header lines so the session name and running cost are
+  // visible from the very first frame — before a title is generated and before
+  // any cost has accrued.
   return (
     <div style={styles.usagePanel}>
-      <span style={styles.usageTotal}>
-        Session cost: <strong>${cumulativeUsd.toFixed(4)}</strong>
-      </span>
-      {lastCallTokens !== null && (
-        <span style={styles.usageDetail}>
-          {' '}| last call: {lastCallTokens.input}↑ {lastCallTokens.output}↓
-          {lastCallTokens.cache_read > 0 && ` ${lastCallTokens.cache_read}✦cached`}
+      <div style={styles.usageName}>
+        Session name: <strong>{sessionName || 'Unnamed Session'}</strong>
+      </div>
+      <div>
+        <span style={styles.usageTotal}>
+          Session cost: <strong>${cumulativeUsd.toFixed(4)}</strong>
         </span>
-      )}
+        {lastCallTokens !== null && (
+          <span style={styles.usageDetail}>
+            {' '}| last call: {lastCallTokens.input}↑ {lastCallTokens.output}↓
+            {lastCallTokens.cache_read > 0 && ` ${lastCallTokens.cache_read}✦cached`}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -972,6 +1070,7 @@ const styles = {
     padding: '4px 0',
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
+  usageName: { marginBottom: '2px', color: 'var(--vscode-foreground)' },
   usageTotal: { fontVariantNumeric: 'tabular-nums' },
   usageDetail: { opacity: 0.8 },
   stream: {
@@ -1067,6 +1166,26 @@ const styles = {
     fontSize: '12px',
     color: 'var(--vscode-descriptionForeground)',
     fontStyle: 'italic',
+  },
+  // Sub-agent takeover dividers
+  subsessionDivider: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    margin: '10px 0',
+  },
+  subsessionDividerLine: {
+    flex: 1,
+    height: '1px',
+    background: 'var(--vscode-panel-border)',
+  },
+  subsessionDividerLabel: {
+    fontSize: '11px',
+    fontWeight: 600,
+    letterSpacing: '0.03em',
+    textTransform: 'uppercase' as const,
+    color: 'var(--vscode-descriptionForeground)',
+    whiteSpace: 'nowrap' as const,
   },
   // File events
   fileEvents: {
