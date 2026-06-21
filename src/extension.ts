@@ -356,7 +356,7 @@ function openPanel(context: vscode.ExtensionContext): void {
   panel = vscode.window.createWebviewPanel(
     'kodoPanel',
     'Kōdo',
-    vscode.ViewColumn.One,
+    vscode.ViewColumn.Beside,
     {
       enableScripts: true,
       retainContextWhenHidden: true,
@@ -367,7 +367,7 @@ function openPanel(context: vscode.ExtensionContext): void {
   );
 
   panel.iconPath = vscode.Uri.file(
-    path.join(context.extensionPath, 'images', 'Kodo_16x16.svg'),
+    path.join(context.extensionPath, 'images', 'kodo16px.svg'),
   );
 
   if (sessionNameState) {
@@ -465,12 +465,27 @@ function openPanel(context: vscode.ExtensionContext): void {
       pendingQuestionState = null;
     } else if (msg.type === 'open_file') {
       const filePath = String(msg.path ?? '');
-      if (filePath && projectRoot) {
-        const fileUri = vscode.Uri.file(path.join(projectRoot, filePath));
+      if (filePath && (path.isAbsolute(filePath) || projectRoot)) {
+        const resolved = path.isAbsolute(filePath) ? filePath : path.join(projectRoot, filePath);
+        const fileUri = vscode.Uri.file(resolved);
         vscode.commands.executeCommand('vscode.open', fileUri).then(
           () => undefined,
           (err: unknown) => {
             vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`);
+          },
+        );
+      }
+    } else if (msg.type === 'open_diff') {
+      const prevPath = String(msg.prevPath ?? '');
+      const newPath = String(msg.newPath ?? '');
+      const label = String(msg.label ?? '');
+      if (prevPath && newPath) {
+        const prevUri = vscode.Uri.file(prevPath);
+        const newUri = vscode.Uri.file(newPath);
+        vscode.commands.executeCommand('vscode.diff', prevUri, newUri, label).then(
+          () => undefined,
+          (err: unknown) => {
+            vscode.window.showErrorMessage(`Kōdo: Cannot open diff — ${String(err)}`);
           },
         );
       }
@@ -499,6 +514,17 @@ function handleServerEnvelope(env: Envelope): void {
   if (env.kind === 'thinking_chunk') {
     const text = String(env.payload.text ?? '');
     panel?.webview.postMessage({ type: 'thinking_token', text });
+    return;
+  }
+
+  // Tool-call argument streaming — drives the live "Generating <tool>…"
+  // indicator while the model decodes a (possibly large) tool argument.
+  if (env.kind === 'toolgen_chunk') {
+    panel?.webview.postMessage({
+      type: 'toolgen_token',
+      toolName: String(env.payload.tool_name ?? ''),
+      text: String(env.payload.text ?? ''),
+    });
     return;
   }
 
@@ -691,7 +717,49 @@ function handleServerEnvelope(env: Envelope): void {
       type: 'tool_call',
       toolName: String(env.payload.tool_name ?? ''),
       description: String(env.payload.description ?? ''),
+      toolCallId: String(env.payload.tool_call_id ?? ''),
+      // run_command carries its mandatory timeout so the WebView can size the
+      // "waiting for tool output" progress bar; absent/non-numeric for others.
+      timeoutSeconds:
+        typeof env.payload.timeout_seconds === 'number' ? env.payload.timeout_seconds : null,
     });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'agent.tool_call_detail') {
+    const rawDiff = env.payload.diff as Record<string, unknown> | null | undefined;
+    const diff =
+      rawDiff && typeof rawDiff === 'object'
+        ? {
+            label: String(rawDiff.label ?? ''),
+            prevPath: String(rawDiff.prev_path ?? ''),
+            newPath: String(rawDiff.new_path ?? ''),
+          }
+        : null;
+    panel?.webview.postMessage({
+      type: 'tool_call_detail',
+      toolCallId: String(env.payload.tool_call_id ?? ''),
+      detailFile: typeof env.payload.file === 'string' ? env.payload.file : null,
+      rows: Array.isArray(env.payload.rows) ? env.payload.rows : [],
+      schemaCompliance:
+        typeof env.payload.schema_compliance === 'boolean'
+          ? env.payload.schema_compliance
+          : null,
+      success: typeof env.payload.success === 'boolean' ? env.payload.success : null,
+      diff,
+    });
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'tool.incompliant') {
+    const externalName = String(env.payload.external_name ?? 'A tool');
+    const desc = String(env.payload.user_description ?? '');
+    const internalName = String(env.payload.tool_name ?? '');
+    vscode.window.showErrorMessage(
+      `Kōdo: the "${externalName}" tool returned output that does not match its declared ` +
+        `schema, so Kōdo had to repair it.${desc ? ` (${desc})` : ''} ` +
+        `Internal tool name: ${internalName}.`,
+    );
     return;
   }
 

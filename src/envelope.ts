@@ -6,6 +6,7 @@ export type MessageKind =
   | 'event'
   | 'stream_chunk'
   | 'thinking_chunk'
+  | 'toolgen_chunk'
   | 'stream_end';
 
 export interface Envelope {

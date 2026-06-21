@@ -2,6 +2,7 @@
   "name": "kodo",
   "publisher": "StanislavMorozov",
   "displayName": "Kōdo",
+  "icon": "images/kodo128px.png",
   "description": "Agentic build system: requirements → working code.",
   "version": "0.1.0",
   "engines": {
@@ -20,7 +21,7 @@
         {
           "id": "kodo",
           "title": "Kōdo",
-          "icon": "images/Kodo_24x24.svg"
+          "icon": "images/kodo24px.svg"
         }
       ]
     },
@@ -29,7 +30,8 @@
         {
           "id": "kodo.view",
           "name": "Kōdo",
-          "type": "webview"
+          "type": "webview",
+          "icon": "images/kodo16px.svg"
         }
       ]
     },
@@ -37,19 +39,22 @@
       {
         "command": "kodo.openPanel",
         "title": "Kōdo: Open Panel",
-        "icon": "images/Kodo_16x16.svg"
+        "icon": "images/kodo16px.svg"
       },
       {
         "command": "kodo.createProject",
-        "title": "Kōdo: Create New Project"
+        "title": "Kōdo: Create New Project",
+        "icon": "images/kodo16px.svg"
       },
       {
         "command": "kodo.useCloudLLMs",
-        "title": "Kōdo: Use Cloud LLMs"
+        "title": "Kōdo: Use Cloud LLMs",
+        "icon": "images/kodo16px.svg"
       },
       {
         "command": "kodo.useLocalLLM",
-        "title": "Kōdo: Use Local LLM via llama.cpp"
+        "title": "Kōdo: Use Local LLM via llama.cpp",
+        "icon": "images/kodo16px.svg"
       }
     ],
     "menus": {
