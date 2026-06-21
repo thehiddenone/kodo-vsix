@@ -131,6 +131,8 @@ interface State {
   hasWorkspace: boolean;
   /** Human-readable session name shown in the header; empty until named. */
   sessionName: string;
+  /** Locked current project name (Guided), or empty when none is bound. */
+  currentProject: string;
   /** True while the silent session-titler call is running (shows a naming indicator). */
   namingSession: boolean;
   stage: string;
@@ -195,6 +197,7 @@ type Action =
   | { type: 'resume_dismissed' }
   | { type: 'post_update'; message: string }
   | { type: 'session_name'; name: string }
+  | { type: 'current_project'; name: string }
   | { type: 'session_naming'; active: boolean }
   | { type: 'session_history'; entries: Record<string, unknown>[] };
 
@@ -218,6 +221,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, connected: action.connected };
     case 'session_name':
       return { ...state, sessionName: action.name, namingSession: false };
+    case 'current_project':
+      return { ...state, currentProject: action.name };
     case 'session_naming':
       return { ...state, namingSession: action.active };
     case 'llm_turn_start':
@@ -488,6 +493,7 @@ const initial: State = {
   connected: false,
   hasWorkspace: false,
   sessionName: '',
+  currentProject: '',
   namingSession: false,
   stage: 'IDLE',
   agent: null,
@@ -532,6 +538,9 @@ function App() {
           break;
         case 'session_name':
           dispatch({ type: 'session_name', name: String(msg.name ?? '') });
+          break;
+        case 'current_project':
+          dispatch({ type: 'current_project', name: String(msg.name ?? '') });
           break;
         case 'session_naming':
           dispatch({ type: 'session_naming', active: Boolean(msg.active) });
@@ -731,6 +740,7 @@ function App() {
       {/* Usage panel */}
       <UsagePanel
         sessionName={state.sessionName}
+        currentProject={state.currentProject}
         cumulativeUsd={state.cumulativeUsd}
         lastCallTokens={state.lastCallTokens}
       />
@@ -1168,11 +1178,12 @@ function ResumeBanner({ onResume, onDismiss }: ResumeBannerProps) {
 
 interface UsagePanelProps {
   sessionName: string;
+  currentProject: string;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
 }
 
-function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens }: UsagePanelProps) {
+function UsagePanel({ sessionName, currentProject, cumulativeUsd, lastCallTokens }: UsagePanelProps) {
   // Always render both header lines so the session name and running cost are
   // visible from the very first frame — before a title is generated and before
   // any cost has accrued.
@@ -1181,6 +1192,11 @@ function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens }: UsagePanelPr
       <div style={styles.usageName}>
         Session name: <strong>{sessionName || 'Unnamed Session'}</strong>
       </div>
+      {currentProject && (
+        <div style={styles.usageName}>
+          Project: <strong>{currentProject}</strong> <span style={styles.usageDetail}>(locked for this session)</span>
+        </div>
+      )}
       <div>
         <span style={styles.usageTotal}>
           Session cost: <strong>${cumulativeUsd.toFixed(4)}</strong>

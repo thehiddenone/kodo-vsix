@@ -21,8 +21,8 @@ export class ServerLauncher {
   }
 
   /**
-   * Ensure the kōdo environment is ready, then launch the server for
-   * ``projectRoot`` on ``port``.
+   * Ensure the kōdo environment is ready, then launch the server for the
+   * physical workspace root ``workspaceRoot`` on ``port``.
    *
    * Returns a Promise that resolves once the subprocess has been spawned
    * (environment setup is complete).  The caller should wait for this before
@@ -32,7 +32,7 @@ export class ServerLauncher {
    * ``api_key.request`` / ``api_key.response`` — never via environment
    * variables.
    */
-  async launch(projectRoot: string, port = 9042): Promise<void> {
+  async launch(workspaceRoot: string, port = 9042): Promise<void> {
     if (this.proc !== null) {
       return; // already running
     }
@@ -49,7 +49,7 @@ export class ServerLauncher {
     // Spawn the venv Python directly (no shell wrapper).
     //
     // Node's spawn() handles argument quoting correctly via CreateProcess on
-    // Windows and execvp on POSIX, so projectRoot is always passed verbatim.
+    // Windows and execvp on POSIX, so workspaceRoot is always passed verbatim.
     // The venv Python already has all packages installed; no activation needed.
     const python = IS_WINDOWS
       ? path.join(venv, 'Scripts', 'python.exe')
@@ -57,7 +57,7 @@ export class ServerLauncher {
 
     const args = [
       '-m', 'kodo.server',
-      '--project', projectRoot,
+      '--workspace', workspaceRoot,
       '--port', String(port),
       '--log-level', 'DEBUG',
     ];

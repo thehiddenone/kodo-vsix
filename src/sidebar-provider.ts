@@ -256,7 +256,7 @@ function buildHtml(): string {
     </div>
     <div class="toggle-row">
       <button id="auto-btn" class="toggle-btn">💬 Interactive</button>
-      <button id="workflow-btn" class="toggle-btn">🧩 Guided Project Workflow</button>
+      <button id="workflow-btn" class="toggle-btn">🧩 Guided Development</button>
     </div>
     <button id="open-btn">Open Kōdo Panel</button>
 
@@ -287,7 +287,7 @@ function buildHtml(): string {
       interactive: 'Interactive mode — agents work alongside you, asking questions and checking in before key decisions.',
       autonomous: 'Autonomous mode — agents work on their own, making reasonable assumptions instead of pausing to ask you.',
       problem_solving: 'Problem Solving — a single generalist agent tackles your request end to end, however it sees fit.',
-      guided: 'Guided Project Workflow — Kōdo walks you through its build phases (design, tests, implementation) to grow a complete solution.',
+      guided: 'Guided Development — Kōdo walks you through its build phases (design, tests, implementation) to grow a complete solution.',
     };
 
     // ----------------------------------------------------------------
@@ -551,7 +551,7 @@ function buildHtml(): string {
       if (data.workflowMode !== undefined) { _state.workflowMode = data.workflowMode; }
       const workflowBtn = document.getElementById('workflow-btn');
       const isProblemSolving = _state.workflowMode === 'problem_solving';
-      workflowBtn.textContent = isProblemSolving ? '💡 Problem Solving' : '🧩 Guided Project Workflow';
+      workflowBtn.textContent = isProblemSolving ? '💡 Problem Solving' : '🧩 Guided Development';
       workflowBtn.title = isProblemSolving ? TOOLTIPS.problem_solving : TOOLTIPS.guided;
       if (_tooltipTarget === workflowBtn) { _showTooltip(workflowBtn, workflowBtn.title); }
 

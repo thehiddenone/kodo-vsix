@@ -43,6 +43,14 @@ let wsClient: WsClient | null = null;
 let panel: vscode.WebviewPanel | null = null;
 let sidebarProvider: SidebarProvider | null = null;
 let projectRoot = '';
+// Physical workspace root = parent dir of the first workspace folder; anchors
+// the workspace-level .kodo-workspace/ (sessions, logs, settings) and is what
+// the server is launched against.
+let physicalRoot = '';
+// The session's locked current project {root, name} for Guided mode, or null.
+// Chosen lazily on the first Guided prompt and immutable for the session;
+// mirrored from the server (hello.ack current_project + project.bound event).
+let currentProjectState: { root: string; name: string } | null = null;
 let hasWorkspace = false;
 let modeState: 'local' | 'cloud' = 'local';
 
@@ -116,6 +124,7 @@ interface QuestionData {
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionContext = context;
   projectRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  physicalRoot = projectRoot ? path.dirname(projectRoot) : '';
   hasWorkspace = projectRoot.length > 0;
 
   if (hasWorkspace) {
@@ -133,7 +142,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         sidebarProvider?.update({ connected });
         if (connected) {
           sendHello();
-          // Sync the server's session to the project's persisted preferences.
+          // Push the logical-root folder map so the server can resolve Problem
+          // Solver paths; then sync the workspace-persisted preferences.
+          _pushWorkspaceFolders();
           wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
           wsClient?.send(makeRequest('workflow.set', { mode: workflowModeState }));
         }
@@ -142,7 +153,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Launch runs uv/venv/install setup before spawning the subprocess.
     // Only connect the WebSocket once the subprocess is actually running.
-    launcher.launch(projectRoot, port).then(() => {
+    launcher.launch(physicalRoot, port).then(() => {
       setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
     }).catch(() => {
       // ensureKodoEnvironment already showed an error notification; nothing more to do.
@@ -153,9 +164,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       const newRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
       hasWorkspace = newRoot.length > 0;
-      if (newRoot) { projectRoot = newRoot; }
+      if (newRoot) {
+        projectRoot = newRoot;
+        physicalRoot = path.dirname(newRoot);
+      }
       sidebarProvider?.update({ hasWorkspace });
       panel?.webview.postMessage({ type: 'workspace_status', hasWorkspace });
+      // Folders added/removed mid-session — refresh the server's logical map.
+      _pushWorkspaceFolders();
     }),
   );
 
@@ -206,7 +222,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _writeSettings({ workflowMode: workflowModeState });
         wsClient?.send(makeRequest('workflow.set', { mode: workflowModeState }));
         sidebarProvider?.update({ workflowMode: workflowModeState });
-        const workflowLabel = workflowModeState === 'problem_solving' ? 'Problem Solving' : 'Guided Project Workflow';
+        const workflowLabel = workflowModeState === 'problem_solving' ? 'Problem Solving' : 'Guided Development';
         vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: `Kōdo: ${workflowLabel} will apply to the next prompt`, cancellable: false },
           () => new Promise<void>(resolve => setTimeout(resolve, 5000)),
@@ -259,7 +275,7 @@ export function deactivate(): void {
 // Init Project (FR-VSIX-05)
 // ---------------------------------------------------------------------------
 
-async function createProject(): Promise<void> {
+async function createProject(): Promise<string | null> {
   const picked = await vscode.window.showOpenDialog({
     canSelectFiles: false,
     canSelectFolders: true,
@@ -269,7 +285,7 @@ async function createProject(): Promise<void> {
   });
 
   if (!picked || picked.length === 0) {
-    return;
+    return null;
   }
 
   const root = picked[0].fsPath;
@@ -282,15 +298,17 @@ async function createProject(): Promise<void> {
       'Cancel',
     );
     if (choice !== 'Overwrite') {
-      return;
+      return null;
     }
   }
 
   try {
+    // Project-level skeleton only — sessions/logs/settings now live at the
+    // workspace level (.kodo-workspace/); the server creates the per-project
+    // .kodo/workspace and .kodo/checkpoints lazily when the project is bound.
     fs.mkdirSync(path.join(root, 'src'), { recursive: true });
     fs.mkdirSync(path.join(root, 'gen'), { recursive: true });
-    fs.mkdirSync(path.join(root, '.kodo', 'logs'), { recursive: true });
-    fs.mkdirSync(path.join(root, '.kodo', 'sessions'), { recursive: true });
+    fs.mkdirSync(path.join(root, '.kodo'), { recursive: true });
 
     const template = [
       '# Kodo Project',
@@ -313,18 +331,6 @@ async function createProject(): Promise<void> {
 
     fs.writeFileSync(kodoMd, template, 'utf8');
 
-    // New Kōdo projects start in Interactive + Guided Project Workflow.
-    const settingsPath = path.join(root, '.kodo', 'settings.json');
-    let settings: Record<string, unknown> = {};
-    if (fs.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
-      } catch { /* start fresh */ }
-    }
-    settings['autonomous'] = false;
-    settings['workflowMode'] = 'guided';
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
-
     const folderUri = vscode.Uri.file(root);
     const alreadyInWorkspace = vscode.workspace.workspaceFolders?.some(
       (f) => f.uri.fsPath === folderUri.fsPath,
@@ -338,9 +344,90 @@ async function createProject(): Promise<void> {
     await vscode.window.showTextDocument(doc);
 
     vscode.window.showInformationMessage(`Kōdo project initialised at ${root}`);
+    return root;
   } catch (err) {
     vscode.window.showErrorMessage(`Kōdo: Init Project failed — ${String(err)}`);
+    return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Prompt submission + Guided project selection (lazy bind)
+// ---------------------------------------------------------------------------
+
+/**
+ * Submit a user prompt. In Guided mode with no project yet locked for the
+ * session, first force the project picker (existing kodo.md folders + "Create
+ * new project…"), warn that the choice is fixed for the session, then bind it on
+ * the server before sending the prompt (WS frames are processed in order, so the
+ * bind completes before the prompt is dequeued).
+ */
+async function submitPrompt(text: string): Promise<void> {
+  if (workflowModeState === 'guided' && currentProjectState === null) {
+    const project = await pickProject();
+    if (project === null) {
+      return; // user cancelled — do not submit
+    }
+    currentProjectState = project;
+    wsClient?.send(makeRequest('project.set', { root: project.root, name: project.name }));
+  }
+
+  // Clear accumulated state for a new workflow run.
+  lastPromptState = text;
+  tokensState = '';
+  fileEventsState = [];
+  pendingGateState = null;
+  pendingQuestionState = null;
+  wsClient?.send(makeRequest('prompt.submit', { text }));
+}
+
+/**
+ * Present the Guided project picker: every workspace folder containing a
+ * kodo.md, plus a "Create new project…" action. Returns the chosen
+ * `{root, name}` (name = logical workspace-folder name), or null if cancelled.
+ */
+async function pickProject(): Promise<{ root: string; name: string } | null> {
+  const folderMap = _buildFolderMap();
+  const _CREATE = '$(add) Create new project…';
+  const items: vscode.QuickPickItem[] = Object.entries(folderMap)
+    .filter(([, fsPath]) => fs.existsSync(path.join(fsPath, 'kodo.md')))
+    .map(([name, fsPath]) => ({ label: name, description: fsPath }));
+  items.push({ label: _CREATE, description: 'Initialise a new Kōdo project folder' });
+
+  const choice = await vscode.window.showQuickPick(items, {
+    title: 'Kōdo: Choose the project for this Guided Development session',
+    placeHolder: 'This choice is fixed for the whole session and cannot be changed afterwards.',
+    ignoreFocusOut: true,
+  });
+  if (!choice) {
+    return null;
+  }
+
+  let root: string;
+  let name: string;
+  if (choice.label === _CREATE) {
+    const created = await createProject();
+    if (created === null) {
+      return null;
+    }
+    root = created;
+    // A freshly added folder is keyed in the logical map by its basename.
+    name = path.basename(created);
+  } else {
+    root = choice.description ?? '';
+    name = choice.label;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    `Guided Development mode will be locked to "${name}" for this session. ` +
+      'You cannot change the project until you start a new session. Continue?',
+    { modal: true },
+    'Lock project',
+  );
+  if (confirm !== 'Lock project') {
+    return null;
+  }
+  return { root, name };
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +480,9 @@ function openPanel(context: vscode.ExtensionContext): void {
       if (sessionNameState.length > 0) {
         panel?.webview.postMessage({ type: 'session_name', name: sessionNameState });
       }
+      if (currentProjectState !== null) {
+        panel?.webview.postMessage({ type: 'current_project', ...currentProjectState });
+      }
       if (lastPromptState.length > 0) {
         panel?.webview.postMessage({ type: 'restore_prompt', text: lastPromptState });
       }
@@ -420,13 +510,7 @@ function openPanel(context: vscode.ExtensionContext): void {
     } else if (msg.type === 'prompt') {
       const text = String(msg.text ?? '').trim();
       if (text) {
-        // Clear accumulated state for new workflow run
-        lastPromptState = text;
-        tokensState = '';
-        fileEventsState = [];
-        pendingGateState = null;
-        pendingQuestionState = null;
-        wsClient?.send(makeRequest('prompt.submit', { text }));
+        void submitPrompt(text);
       }
     } else if (msg.type === 'approval_respond') {
       const gateId = String(msg.gateId ?? '');
@@ -542,6 +626,11 @@ function handleServerEnvelope(env: Envelope): void {
   }
 
   if (env.kind === 'response' && evtType === 'hello.ack') {
+    const cp = env.payload.current_project as { root?: unknown; name?: unknown } | null | undefined;
+    if (cp && typeof cp.root === 'string' && cp.root) {
+      currentProjectState = { root: cp.root, name: typeof cp.name === 'string' ? cp.name : cp.root };
+      panel?.webview.postMessage({ type: 'current_project', ...currentProjectState });
+    }
     const raw = env.payload.models;
     if (Array.isArray(raw)) {
       modelsState = raw as ModelInfo[];
@@ -579,6 +668,16 @@ function handleServerEnvelope(env: Envelope): void {
       autonomousState = autonomous;
       panel?.webview.postMessage({ type: 'autonomous_changed', autonomous });
       sidebarProvider?.update({ autonomous });
+    }
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'project.bound') {
+    const root = String(env.payload.root ?? '');
+    const name = String(env.payload.name ?? root);
+    if (root) {
+      currentProjectState = { root, name };
+      panel?.webview.postMessage({ type: 'current_project', root, name });
     }
     return;
   }
@@ -890,41 +989,76 @@ function sendHello(): void {
   );
 }
 
-function _readMode(): 'local' | 'cloud' {
-  if (!projectRoot) { return 'local'; }
+/** Workspace-level state dir (`<physicalRoot>/.kodo-workspace`). */
+function _kodoWorkspaceDir(): string {
+  return physicalRoot ? path.join(physicalRoot, '.kodo-workspace') : '';
+}
+
+function _settingsPath(): string {
+  return path.join(_kodoWorkspaceDir(), 'settings.json');
+}
+
+function _readWorkspaceSettings(): Record<string, unknown> {
+  if (!physicalRoot) { return {}; }
   try {
-    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
-    return s['mode'] === 'cloud' ? 'cloud' : 'local';
+    return JSON.parse(fs.readFileSync(_settingsPath(), 'utf8')) as Record<string, unknown>;
   } catch {
-    return 'local';
+    return {};
   }
+}
+
+/**
+ * Logical-root folder map: VS-Code-disambiguated name → physical path. When two
+ * folders share a basename, each is suffixed with its parent dir so every
+ * logical name is unique (matches VS Code's own disambiguation intent).
+ */
+function _buildFolderMap(): Record<string, string> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const byName = new Map<string, vscode.WorkspaceFolder[]>();
+  for (const f of folders) {
+    const list = byName.get(f.name) ?? [];
+    list.push(f);
+    byName.set(f.name, list);
+  }
+  const map: Record<string, string> = {};
+  for (const [name, list] of byName) {
+    if (list.length === 1) {
+      map[name] = list[0].uri.fsPath;
+    } else {
+      for (const f of list) {
+        const parent = path.basename(path.dirname(f.uri.fsPath));
+        map[`${name} (${parent})`] = f.uri.fsPath;
+      }
+    }
+  }
+  return map;
+}
+
+/** Push the physical root + logical folder map to the server. */
+function _pushWorkspaceFolders(): void {
+  if (!wsClient || !connState) { return; }
+  wsClient.send(
+    makeRequest('workspace.folders', { physical_root: physicalRoot, folders: _buildFolderMap() }),
+  );
+}
+
+function _readMode(): 'local' | 'cloud' {
+  return _readWorkspaceSettings()['mode'] === 'cloud' ? 'cloud' : 'local';
 }
 
 function _readAutonomous(): boolean {
-  if (!projectRoot) { return false; }
-  try {
-    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
-    return s['autonomous'] === true;
-  } catch {
-    return false;
-  }
+  return _readWorkspaceSettings()['autonomous'] === true;
 }
 
 function _readWorkflowMode(): 'guided' | 'problem_solving' {
-  if (!projectRoot) { return 'guided'; }
-  try {
-    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
-    return s['workflowMode'] === 'problem_solving' ? 'problem_solving' : 'guided';
-  } catch {
-    return 'guided';
-  }
+  return _readWorkspaceSettings()['workflowMode'] === 'problem_solving' ? 'problem_solving' : 'guided';
 }
 
-/** Merge a patch into the project's .kodo/settings.json, preserving other keys. */
+/** Merge a patch into the workspace-level settings.json, preserving other keys. */
 function _writeSettings(patch: Record<string, unknown>): void {
-  if (!projectRoot) { return; }
-  const kodoDir = path.join(projectRoot, '.kodo');
-  const settingsPath = path.join(kodoDir, 'settings.json');
+  if (!physicalRoot) { return; }
+  const kodoDir = _kodoWorkspaceDir();
+  const settingsPath = _settingsPath();
 
   let settings: Record<string, unknown> = {};
   if (fs.existsSync(settingsPath)) {
@@ -939,14 +1073,8 @@ function _writeSettings(patch: Record<string, unknown>): void {
 }
 
 function _readActiveLocalModel(): string {
-  if (!projectRoot) { return _DEFAULT_LOCAL_MODEL; }
-  try {
-    const s = JSON.parse(fs.readFileSync(path.join(projectRoot, '.kodo', 'settings.json'), 'utf8')) as Record<string, unknown>;
-    const models = s['models'] as Record<string, unknown> | undefined;
-    return typeof models?.['local'] === 'string' ? models['local'] : _DEFAULT_LOCAL_MODEL;
-  } catch {
-    return _DEFAULT_LOCAL_MODEL;
-  }
+  const models = _readWorkspaceSettings()['models'] as Record<string, unknown> | undefined;
+  return typeof models?.['local'] === 'string' ? models['local'] : _DEFAULT_LOCAL_MODEL;
 }
 
 function _readInstalledModels(): string[] {
