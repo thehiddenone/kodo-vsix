@@ -92,6 +92,10 @@ export class SessionController {
   private readonly ws: WsClient;
   private connected = false;
   private disposed = false;
+  /** True between sending `session.delete` and the socket closing (success). */
+  private deleting = false;
+  /** Resolves the "Deleting this session…" progress notification early on error. */
+  private resolveDeleteProgress: (() => void) | null = null;
 
   // Per-session UI cache (rehydrates the webview on 'ready').
   private stage = 'IDLE';
@@ -151,6 +155,10 @@ export class SessionController {
     this._post({ type: 'status', connected });
     if (connected) {
       this._sendHello();
+    } else if (this.deleting) {
+      // The server closed the socket after deleting the session → success.
+      // Close the tab (the progress notification clears as the panel disposes).
+      this.panel.dispose();
     }
   }
 
@@ -192,8 +200,13 @@ export class SessionController {
       return;
     }
     this.disposed = true;
-    if (!this.deps.isDeactivating() && this.sessionId) {
+    if (this.resolveDeleteProgress) {
+      this.resolveDeleteProgress();
+      this.resolveDeleteProgress = null;
+    }
+    if (!this.deps.isDeactivating() && this.sessionId && !this.deleting) {
       // Explicit user close: free immediately (skip the disconnect grace).
+      // (When deleting, the session is already gone — no release needed.)
       this._sendStamped(makeRequest('session.release', { session_id: this.sessionId }));
     }
     this.ws.dispose();
@@ -248,6 +261,9 @@ export class SessionController {
       }
       case 'stop':
         this._sendStamped(makeRequest('stop', {}));
+        break;
+      case 'delete_session':
+        void this._confirmAndDelete();
         break;
       case 'mode_set': {
         const autonomous = Boolean(msg.autonomous);
@@ -311,6 +327,54 @@ export class SessionController {
     this.pendingGate = null;
     this.pendingQuestion = null;
     this._sendStamped(makeRequest('prompt.submit', { text }));
+  }
+
+  /**
+   * Delete this session after a yes/no confirmation. On confirm: show a ~5s
+   * progress notification, clear the webview, and ask the server to delete the
+   * session's files. The server closes the socket on success (→ close the tab)
+   * or replies `session.delete.error` (→ hide the progress, show the error).
+   */
+  private async _confirmAndDelete(): Promise<void> {
+    const choice = await vscode.window.showWarningMessage(
+      'Delete this Kōdo session?',
+      {
+        modal: true,
+        detail:
+          'This is a destructive action that cannot be undone. All agent history ' +
+          'associated with this session will be permanently deleted.\n\n' +
+          'The project this session was working on will not be affected.',
+      },
+      'Yes',
+    );
+    if (choice !== 'Yes') {
+      return;
+    }
+
+    if (!this.sessionId) {
+      // Nothing persisted on the server yet — just close the tab.
+      this.panel.dispose();
+      return;
+    }
+
+    this.deleting = true;
+    // (1) Progress notification, shown for ~5s (resolved early on a server error).
+    void vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Deleting this session…',
+        cancellable: false,
+      },
+      () =>
+        new Promise<void>((resolve) => {
+          this.resolveDeleteProgress = resolve;
+          setTimeout(resolve, 5000);
+        }),
+    );
+    // (2) Clear the webview content.
+    this._post({ type: 'session_cleared' });
+    // (3) Ask the server to delete the session's files.
+    this._sendStamped(makeRequest('session.delete', { session_id: this.sessionId }));
   }
 
   private _rehydrate(): void {
@@ -391,6 +455,19 @@ export class SessionController {
 
     if (env.kind === 'response' && evtType === 'hello.ack') {
       this._onHelloAck(env);
+      return;
+    }
+
+    if (env.kind === 'response' && evtType === 'session.delete.error') {
+      // The server could not delete the session: hide the progress, keep the
+      // tab open, and surface the error. (Nothing else happens.)
+      this.deleting = false;
+      if (this.resolveDeleteProgress) {
+        this.resolveDeleteProgress();
+        this.resolveDeleteProgress = null;
+      }
+      const message = String(env.payload.message ?? 'Unknown error');
+      void vscode.window.showErrorMessage(`Kōdo: failed to delete this session — ${message}`);
       return;
     }
 

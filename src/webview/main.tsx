@@ -207,6 +207,7 @@ type Action =
   | { type: 'session_name'; name: string }
   | { type: 'current_project'; name: string }
   | { type: 'session_naming'; active: boolean }
+  | { type: 'session_cleared' }
   | { type: 'session_history'; entries: Record<string, unknown>[] };
 
 function commitStreaming(state: State): SessionEntry[] {
@@ -233,6 +234,28 @@ function reducer(state: State, action: Action): State {
       return { ...state, currentProject: action.name };
     case 'session_naming':
       return { ...state, namingSession: action.active };
+    case 'session_cleared':
+      // Wipe the visible feed + all transient streaming state (the session is
+      // being deleted). Connection/mode/header fields are left as-is.
+      return {
+        ...state,
+        session: [],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        streaming: false,
+        awaitingLlm: false,
+        llmWaiting: null,
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
+        fileEvents: [],
+        pendingGate: null,
+        pendingQuestion: null,
+        namingSession: false,
+      };
     case 'llm_turn_start':
       // A new turn begins; clear any leftover toolgen indicator (e.g. from a
       // cancelled prior turn that never produced a tool_call entry).
@@ -563,6 +586,9 @@ function App() {
         case 'session_naming':
           dispatch({ type: 'session_naming', active: Boolean(msg.active) });
           break;
+        case 'session_cleared':
+          dispatch({ type: 'session_cleared' });
+          break;
         case 'token':
           dispatch({ type: 'token', text: String(msg.text ?? '') });
           break;
@@ -747,6 +773,11 @@ function App() {
     vscode.postMessage({ type: 'stop' });
   }
 
+  function handleDelete() {
+    // Confirmation + deletion are driven by the extension host (native dialog).
+    vscode.postMessage({ type: 'delete_session' });
+  }
+
   function handleInput(e: Event) {
     const el = e.currentTarget as HTMLTextAreaElement;
     el.style.height = 'auto';
@@ -878,6 +909,14 @@ function App() {
                 title="Stop all running agent work"
               >
                 {'🛑'}
+              </button>
+              <button
+                style={styles.deleteBtn}
+                onClick={handleDelete}
+                disabled={!state.connected}
+                title="Delete this session (permanently removes all its history)"
+              >
+                {'🗑'}
               </button>
             </div>
           </div>
@@ -1545,6 +1584,16 @@ const styles = {
     flexShrink: 0,
   },
   globalStopBtn: {
+    background: 'transparent',
+    color: 'var(--vscode-errorForeground)',
+    border: '1px solid var(--vscode-errorForeground)',
+    borderRadius: '2px',
+    width: '40px',
+    cursor: 'pointer',
+    fontSize: '16px',
+    flexShrink: 0,
+  },
+  deleteBtn: {
     background: 'transparent',
     color: 'var(--vscode-errorForeground)',
     border: '1px solid var(--vscode-errorForeground)',

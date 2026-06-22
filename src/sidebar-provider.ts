@@ -251,8 +251,8 @@ function buildHtml(): string {
         <span id="conn-lbl">Status: Disconnected</span>
       </div>
     </div>
-    <button id="open-btn" class="toggle-btn">⟳ Re-open existing Kōdo session</button>
     <button id="new-btn" class="toggle-btn">＋ Start new Kōdo session</button>
+    <button id="open-btn" class="toggle-btn">⟳ Re-open existing Kōdo session</button>
 
     <hr>
     <div class="radio-group">
