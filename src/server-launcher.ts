@@ -6,11 +6,63 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
+import * as fs from 'fs';
+import * as net from 'net';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ensureKodoEnvironment } from './uv-setup';
 
 const IS_WINDOWS = process.platform === 'win32';
+
+export const DEFAULT_PORT = 9042;
+
+/** Path to the singleton server's discovery file (`~/.kodo/kodo-server`). */
+export function discoveryPath(): string {
+  return path.join(os.homedir(), '.kodo', 'kodo-server');
+}
+
+/** Read `{pid, port}` from the discovery file, or null if absent/unparseable. */
+export function readServerDiscovery(): { pid: number; port: number } | null {
+  try {
+    const data = JSON.parse(fs.readFileSync(discoveryPath(), 'utf8')) as {
+      pid?: unknown;
+      port?: unknown;
+    };
+    if (typeof data.pid === 'number' && typeof data.port === 'number') {
+      return { pid: data.pid, port: data.port };
+    }
+  } catch {
+    /* missing or malformed */
+  }
+  return null;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0); // signal 0 = existence check
+    return true;
+  } catch (err) {
+    // EPERM means the process exists but we can't signal it — still alive.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Probe whether something is listening on a loopback port. */
+export function portBusy(port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const done = (busy: boolean): void => {
+      socket.destroy();
+      resolve(busy);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, '127.0.0.1');
+  });
+}
 
 export class ServerLauncher {
   private proc: ChildProcess | null = null;
@@ -32,9 +84,27 @@ export class ServerLauncher {
    * ``api_key.request`` / ``api_key.response`` — never via environment
    * variables.
    */
-  async launch(workspaceRoot: string, port = 9042): Promise<void> {
+  async launch(port = DEFAULT_PORT): Promise<void> {
     if (this.proc !== null) {
-      return; // already running
+      return; // we already spawned the singleton from this window
+    }
+
+    // Singleton discovery / stale-file protocol: if a live server already holds
+    // the discovery file (its port is busy or its PID is alive), reuse it and do
+    // not spawn. Only when the file is absent or stale do we launch a new one
+    // (the server itself does the authoritative exit-1 race guard).
+    const disc = readServerDiscovery();
+    if (disc !== null) {
+      if ((await portBusy(disc.port)) || pidAlive(disc.pid)) {
+        this.output.appendLine(`[reusing kodo-server pid=${disc.pid} port=${disc.port}]`);
+        return;
+      }
+      this.output.appendLine('[removing stale kodo-server discovery file]');
+      try {
+        fs.rmSync(discoveryPath());
+      } catch {
+        /* already gone */
+      }
     }
 
     const venv = await vscode.window.withProgress(
@@ -46,18 +116,14 @@ export class ServerLauncher {
       () => ensureKodoEnvironment(this.output),
     );
 
-    // Spawn the venv Python directly (no shell wrapper).
-    //
-    // Node's spawn() handles argument quoting correctly via CreateProcess on
-    // Windows and execvp on POSIX, so workspaceRoot is always passed verbatim.
-    // The venv Python already has all packages installed; no activation needed.
+    // Spawn the venv Python directly (no shell wrapper). The server is a global
+    // singleton rooted at ~/.kodo — no per-workspace argument.
     const python = IS_WINDOWS
       ? path.join(venv, 'Scripts', 'python.exe')
       : path.join(venv, 'bin', 'python');
 
     const args = [
       '-m', 'kodo.server',
-      '--workspace', workspaceRoot,
       '--port', String(port),
       '--log-level', 'DEBUG',
     ];
@@ -84,7 +150,11 @@ export class ServerLauncher {
     this.proc.on('exit', (code) => {
       this.output.appendLine(`[kodo-server exited with code ${String(code)}]`);
       this.proc = null;
-      if (code !== 0 && code !== null) {
+      // Exit code 1 means another window won the launch race and this spawn
+      // refused to start a duplicate (server-side discovery guard). That is
+      // expected: the WebSocket client just connects to the winner. Only alarm
+      // on other non-zero exits.
+      if (code !== 0 && code !== 1 && code !== null) {
         void vscode.window
           .showErrorMessage(
             `Kodo server exited with code ${String(code)}.`,

@@ -55,6 +55,11 @@
         "command": "kodo.useLocalLLM",
         "title": "Kōdo: Use Local LLM via llama.cpp",
         "icon": "images/kodo16px.svg"
+      },
+      {
+        "command": "kodo.pickSession",
+        "title": "Kōdo: Open Session…",
+        "icon": "images/kodo16px.svg"
       }
     ],
     "menus": {

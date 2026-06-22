@@ -15,7 +15,6 @@
  */
 
 import * as fs from 'fs';
-import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -23,7 +22,7 @@ import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
 import { SidebarProvider } from './sidebar-provider';
 import type { ModelInfo } from './sidebar-provider';
-import { ServerLauncher } from './server-launcher';
+import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
 
 const SERVER_STARTUP_DELAY_MS = 1_500;
@@ -43,9 +42,9 @@ let wsClient: WsClient | null = null;
 let panel: vscode.WebviewPanel | null = null;
 let sidebarProvider: SidebarProvider | null = null;
 let projectRoot = '';
-// Physical workspace root = parent dir of the first workspace folder; anchors
-// the workspace-level .kodo-workspace/ (sessions, logs, settings) and is what
-// the server is launched against.
+// Physical workspace root = parent dir of the first workspace folder. Pushed to
+// the server per session as this window's default cwd for Problem Solver work.
+// (Global server state lives in ~/.kodo, not under any workspace.)
 let physicalRoot = '';
 // The session's locked current project {root, name} for Guided mode, or null.
 // Chosen lazily on the first Guided prompt and immutable for the session;
@@ -53,6 +52,12 @@ let physicalRoot = '';
 let currentProjectState: { root: string; name: string } | null = null;
 let hasWorkspace = false;
 let modeState: 'local' | 'cloud' = 'local';
+// This VS Code window's stable id (persisted in workspaceState) and the session
+// it currently drives. Every frame except `hello` carries `session_id` so the
+// singleton server can route it; `hello` carries `window_id` so the server can
+// let this same window reclaim its session after a reload (grace window).
+let windowId = '';
+let sessionIdState = '';
 
 // ---------------------------------------------------------------------------
 // Persistent state owned by the extension host
@@ -127,8 +132,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   physicalRoot = projectRoot ? path.dirname(projectRoot) : '';
   hasWorkspace = projectRoot.length > 0;
 
+  // Stable per-window id (survives reloads) so the server lets this window
+  // reclaim its session within the disconnect grace window. The last session
+  // this window drove is resumed on reconnect.
+  windowId = context.workspaceState.get<string>('kodo.windowId') ?? _newId();
+  void context.workspaceState.update('kodo.windowId', windowId);
+  sessionIdState = context.workspaceState.get<string>('kodo.sessionId') ?? '';
+
   if (hasWorkspace) {
-    const port = await findFreePort();
+    // One singleton server per machine: connect to the port advertised in the
+    // discovery file, else the default. The launcher only spawns when no live
+    // server is found (stale-file protocol).
+    const port = readServerDiscovery()?.port ?? DEFAULT_PORT;
     const wsUrl = `ws://127.0.0.1:${port}/ws`;
 
     launcher = new ServerLauncher();
@@ -141,19 +156,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         panel?.webview.postMessage({ type: 'status', connected });
         sidebarProvider?.update({ connected });
         if (connected) {
+          // Only hello here. The session_id-stamped syncs (folders, mode,
+          // workflow) are sent from the hello.ack handler once the server has
+          // assigned/confirmed this window's session id — otherwise a fresh
+          // session's follow-up frames would carry an empty session_id and be
+          // rejected.
           sendHello();
-          // Push the logical-root folder map so the server can resolve Problem
-          // Solver paths; then sync the workspace-persisted preferences.
-          _pushWorkspaceFolders();
-          wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
-          wsClient?.send(makeRequest('workflow.set', { mode: workflowModeState }));
         }
       },
     );
 
-    // Launch runs uv/venv/install setup before spawning the subprocess.
-    // Only connect the WebSocket once the subprocess is actually running.
-    launcher.launch(physicalRoot, port).then(() => {
+    // Launch runs uv/venv/install setup before spawning the subprocess (only
+    // when no live singleton is found). Connect once it should be up.
+    launcher.launch(port).then(() => {
       setTimeout(() => wsClient?.connect(), SERVER_STARTUP_DELAY_MS);
     }).catch(() => {
       // ensureKodoEnvironment already showed an error notification; nothing more to do.
@@ -210,7 +225,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (msg.type === 'toggle_autonomous') {
         autonomousState = !autonomousState;
         _writeSettings({ autonomous: autonomousState });
-        wsClient?.send(makeRequest('mode.set', { autonomous: autonomousState }));
+        sendStamped(makeRequest('mode.set', { autonomous: autonomousState }));
         sidebarProvider?.update({ autonomous: autonomousState });
         const autonomousLabel = autonomousState ? 'Autonomous' : 'Interactive';
         vscode.window.withProgress(
@@ -220,7 +235,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (msg.type === 'toggle_workflow_mode') {
         workflowModeState = workflowModeState === 'problem_solving' ? 'guided' : 'problem_solving';
         _writeSettings({ workflowMode: workflowModeState });
-        wsClient?.send(makeRequest('workflow.set', { mode: workflowModeState }));
+        sendStamped(makeRequest('workflow.set', { mode: workflowModeState }));
         sidebarProvider?.update({ workflowMode: workflowModeState });
         const workflowLabel = workflowModeState === 'problem_solving' ? 'Problem Solving' : 'Guided Development';
         vscode.window.withProgress(
@@ -234,7 +249,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (msg.type === 'stop_llamacpp') {
         llamaStoppingState = true;
         sidebarProvider?.update({ llamaStopping: true });
-        wsClient?.send(makeRequest('llama.stop'));
+        sendStamped(makeRequest('llama.stop'));
       } else if (msg.type === 'install_llamacpp') {
         _installLlamaCpp();
       } else if (msg.type === 'install_model') {
@@ -259,13 +274,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('kodo.useLocalLLM', () =>
       _setMode('local'),
     ),
+    vscode.commands.registerCommand('kodo.pickSession', () => pickSession()),
   );
 }
 
 export function deactivate(): void {
+  // Free this window's session immediately so another window can open it, then
+  // just disconnect. The server is a shared singleton — it self-reaps once the
+  // last window leaves, so we do NOT kill the subprocess here.
+  if (sessionIdState) {
+    sendStamped(makeRequest('session.release', { session_id: sessionIdState }));
+  }
   wsClient?.dispose();
   wsClient = null;
-  launcher?.dispose();
   launcher = null;
   panel = null;
   sidebarProvider = null;
@@ -369,7 +390,7 @@ async function submitPrompt(text: string): Promise<void> {
       return; // user cancelled — do not submit
     }
     currentProjectState = project;
-    wsClient?.send(makeRequest('project.set', { root: project.root, name: project.name }));
+    sendStamped(makeRequest('project.set', { root: project.root, name: project.name }));
   }
 
   // Clear accumulated state for a new workflow run.
@@ -378,7 +399,86 @@ async function submitPrompt(text: string): Promise<void> {
   fileEventsState = [];
   pendingGateState = null;
   pendingQuestionState = null;
-  wsClient?.send(makeRequest('prompt.submit', { text }));
+  sendStamped(makeRequest('prompt.submit', { text }));
+}
+
+interface SessionPickItem extends vscode.QuickPickItem {
+  sessionId?: string;
+  isNew?: boolean;
+  disabledReason?: string;
+}
+
+/**
+ * Show the cross-window session picker (the VSIX-authoritative open gate).
+ *
+ * Sessions whose Guided project is not loaded in *this* window, or that are
+ * open in another window, stay visible but disabled with a tooltip — VS Code
+ * QuickPick has no native disabled flag, so we mark them and intercept the
+ * selection. Purely problem-solving sessions are openable anywhere (unless
+ * taken). "New session" mints a fresh one on the open folder(s).
+ */
+async function pickSession(): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendRequestAwait('session.list');
+  } catch {
+    void vscode.window.showErrorMessage('Kōdo: could not reach the server to list sessions.');
+    return;
+  }
+  const sessions = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
+  const loaded = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+
+  const items: SessionPickItem[] = [
+    { label: '$(add) New session', isNew: true, detail: 'Start a fresh session in this window' },
+  ];
+  for (const s of sessions) {
+    const id = String(s.id ?? '');
+    const name = String(s.name ?? id);
+    const projectRoot = typeof s.project_root === 'string' ? s.project_root : null;
+    const taken = Boolean(s.taken);
+    const isCurrent = id === sessionIdState;
+
+    let disabledReason: string | undefined;
+    if (taken && !isCurrent) {
+      disabledReason = 'Opened in another window';
+    } else if (projectRoot && !loaded.includes(projectRoot)) {
+      disabledReason = 'Guided Development project is not loaded into current workspace';
+    }
+
+    const kindLabel = projectRoot ? `Guided · ${path.basename(projectRoot)}` : 'Problem solving';
+    items.push({
+      label: (disabledReason ? '$(circle-slash) ' : '$(comment-discussion) ') + name,
+      description: isCurrent ? `${kindLabel} · (current)` : kindLabel,
+      detail: disabledReason,
+      sessionId: id,
+      disabledReason,
+    });
+  }
+
+  const choice = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Open a Kōdo session',
+    matchOnDetail: true,
+  });
+  if (!choice) {
+    return;
+  }
+  if (choice.disabledReason) {
+    void vscode.window.showInformationMessage(`Cannot open this session: ${choice.disabledReason}.`);
+    return pickSession();
+  }
+  if (choice.isNew) {
+    _setSessionId('');
+    currentProjectState = null;
+    sessionHistoryState = null;
+    sendHello();
+    return;
+  }
+  if (choice.sessionId && choice.sessionId !== sessionIdState) {
+    _setSessionId(choice.sessionId);
+    currentProjectState = null;
+    sessionHistoryState = null;
+    sendHello(); // resume the chosen session
+  }
 }
 
 /**
@@ -506,7 +606,7 @@ function openPanel(context: vscode.ExtensionContext): void {
         panel?.webview.postMessage({ type: 'resume_offer', sessionId: resumeSessionId });
       }
     } else if (msg.type === 'ping') {
-      wsClient?.send(makeRequest('ping'));
+      sendStamped(makeRequest('ping'));
     } else if (msg.type === 'prompt') {
       const text = String(msg.text ?? '').trim();
       if (text) {
@@ -516,7 +616,7 @@ function openPanel(context: vscode.ExtensionContext): void {
       const gateId = String(msg.gateId ?? '');
       const action = String(msg.action ?? 'agree');
       const feedback = String(msg.feedback ?? '');
-      wsClient?.send(
+      sendStamped(
         makeResponse(gateId, { type: 'prompt.approval.response', action, feedback_text: feedback || null }),
       );
       pendingGateState = null;
@@ -529,19 +629,19 @@ function openPanel(context: vscode.ExtensionContext): void {
       } else {
         payload.answer_text = String(msg.answerText ?? '');
       }
-      wsClient?.send(makeResponse(requestId, payload));
+      sendStamped(makeResponse(requestId, payload));
       pendingQuestionState = null;
     } else if (msg.type === 'stop') {
-      wsClient?.send(makeRequest('stop', {}));
+      sendStamped(makeRequest('stop', {}));
     } else if (msg.type === 'mode_set') {
       const autonomous = Boolean(msg.autonomous);
       autonomousState = autonomous;
       _writeSettings({ autonomous });
-      wsClient?.send(makeRequest('mode.set', { autonomous }));
+      sendStamped(makeRequest('mode.set', { autonomous }));
     } else if (msg.type === 'resume') {
       const sessionId = String(msg.sessionId ?? '');
       resumeSessionId = null;
-      wsClient?.send(makeRequest('session.resume', { session_id: sessionId }));
+      sendStamped(makeRequest('session.resume', { session_id: sessionId }));
       // Clear old accumulated UI state
       tokensState = '';
       fileEventsState = [];
@@ -618,6 +718,16 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  // Resolve any awaited request/response round-trip (e.g. session.list).
+  if (env.kind === 'response' && env.correlation_id) {
+    const resolver = _pendingResponses.get(env.correlation_id);
+    if (resolver) {
+      _pendingResponses.delete(env.correlation_id);
+      resolver(env.payload);
+      return;
+    }
+  }
+
   const evtType = String(env.payload.type ?? '');
 
   if (env.kind === 'response' && evtType === 'pong') {
@@ -626,6 +736,26 @@ function handleServerEnvelope(env: Envelope): void {
   }
 
   if (env.kind === 'response' && evtType === 'hello.ack') {
+    // The session this window asked to resume is held by another window.
+    if (env.payload.error === 'session_in_use') {
+      void vscode.window.showWarningMessage(
+        'This Kōdo session is open in another window. Starting a fresh session here.',
+      );
+      _setSessionId('');           // forget the taken id
+      currentProjectState = null;
+      sessionHistoryState = null;
+      sendHello();                 // re-hello with no session_id → server mints a new one
+      return;
+    }
+    const assigned = env.payload.session_id;
+    if (typeof assigned === 'string' && assigned) {
+      _setSessionId(assigned);
+    }
+    // Now that this window's session id is confirmed, send the session-scoped
+    // syncs (these carry session_id via sendStamped).
+    _pushWorkspaceFolders();
+    sendStamped(makeRequest('mode.set', { autonomous: autonomousState }));
+    sendStamped(makeRequest('workflow.set', { mode: workflowModeState }));
     const cp = env.payload.current_project as { root?: unknown; name?: unknown } | null | undefined;
     if (cp && typeof cp.root === 'string' && cp.root) {
       currentProjectState = { root: cp.root, name: typeof cp.name === 'string' ? cp.name : cp.root };
@@ -811,6 +941,29 @@ function handleServerEnvelope(env: Envelope): void {
     return;
   }
 
+  // Gateway-owned queue/throttle indicator. `reason:"queued"` = waiting behind
+  // the serial local gate / a saturated cloud feed; `reason:"throttled"` = held
+  // back by a 429 with an exponential retry delay.
+  if (env.kind === 'event' && evtType === 'llm.waiting') {
+    const waiting = Boolean(env.payload.waiting);
+    const reason = String(env.payload.reason ?? 'queued');
+    const retryIn = typeof env.payload.retry_in_seconds === 'number'
+      ? env.payload.retry_in_seconds : null;
+    panel?.webview.postMessage({ type: 'llm_waiting', waiting, reason, retryIn });
+    if (waiting && reason === 'throttled' && retryIn) {
+      const mins = Math.max(1, Math.round(retryIn / 60));
+      void vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Kōdo: rate-limited by the LLM provider — retrying in ~${mins} min`,
+          cancellable: false,
+        },
+        () => new Promise<void>((resolve) => setTimeout(resolve, 60_000)),
+      ).then(undefined, () => undefined);
+    }
+    return;
+  }
+
   if (env.kind === 'event' && evtType === 'agent.tool_call') {
     panel?.webview.postMessage({
       type: 'tool_call',
@@ -983,23 +1136,76 @@ function appendTokens(chunk: string): void {
   }
 }
 
-function sendHello(): void {
-  wsClient?.send(
-    makeRequest('hello', { client: 'vsix', version: '0.1.0' }),
-  );
+/**
+ * Send an envelope, stamping this window's `session_id` onto every request
+ * except `hello` (which carries `window_id` + the resumed session id instead).
+ * Responses pass through unchanged — the server routes them by correlation id
+ * on the connection.
+ */
+function sendStamped(env: Envelope): void {
+  if (env.kind === 'request' && env.payload.type !== 'hello') {
+    env.payload.session_id = sessionIdState;
+  }
+  wsClient?.send(env);
 }
 
-/** Workspace-level state dir (`<physicalRoot>/.kodo-workspace`). */
-function _kodoWorkspaceDir(): string {
-  return physicalRoot ? path.join(physicalRoot, '.kodo-workspace') : '';
+function _newId(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+// Pending client→server request/response round-trips keyed by request id
+// (e.g. session.list). Resolved in handleServerEnvelope when the correlated
+// response arrives.
+const _pendingResponses = new Map<string, (payload: Record<string, unknown>) => void>();
+
+/** Send a request and resolve with its correlated response payload. */
+function sendRequestAwait(
+  type: string,
+  payload: Record<string, unknown> = {},
+  timeoutMs = 5_000,
+): Promise<Record<string, unknown>> {
+  const env = makeRequest(type, payload);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      _pendingResponses.delete(env.id);
+      reject(new Error(`Timed out waiting for ${type} response`));
+    }, timeoutMs);
+    _pendingResponses.set(env.id, (p) => {
+      clearTimeout(timer);
+      resolve(p);
+    });
+    sendStamped(env);
+  });
+}
+
+/** Persist the session this window now drives (resumed on the next reload). */
+function _setSessionId(id: string): void {
+  sessionIdState = id;
+  void extensionContext?.workspaceState.update('kodo.sessionId', id);
+}
+
+function sendHello(): void {
+  const payload: Record<string, unknown> = {
+    client: 'vsix',
+    version: '0.2.0',
+    window_id: windowId,
+  };
+  if (sessionIdState) {
+    payload.session_id = sessionIdState;
+  }
+  sendStamped(makeRequest('hello', payload));
+}
+
+/** Global Kōdo home dir (`~/.kodo`) — the singleton server's single settings home. */
+function _kodoHomeDir(): string {
+  return path.join(os.homedir(), '.kodo');
 }
 
 function _settingsPath(): string {
-  return path.join(_kodoWorkspaceDir(), 'settings.json');
+  return path.join(_kodoHomeDir(), 'settings.json');
 }
 
 function _readWorkspaceSettings(): Record<string, unknown> {
-  if (!physicalRoot) { return {}; }
   try {
     return JSON.parse(fs.readFileSync(_settingsPath(), 'utf8')) as Record<string, unknown>;
   } catch {
@@ -1037,7 +1243,7 @@ function _buildFolderMap(): Record<string, string> {
 /** Push the physical root + logical folder map to the server. */
 function _pushWorkspaceFolders(): void {
   if (!wsClient || !connState) { return; }
-  wsClient.send(
+  sendStamped(
     makeRequest('workspace.folders', { physical_root: physicalRoot, folders: _buildFolderMap() }),
   );
 }
@@ -1054,10 +1260,9 @@ function _readWorkflowMode(): 'guided' | 'problem_solving' {
   return _readWorkspaceSettings()['workflowMode'] === 'problem_solving' ? 'problem_solving' : 'guided';
 }
 
-/** Merge a patch into the workspace-level settings.json, preserving other keys. */
+/** Merge a patch into the global ~/.kodo/settings.json, preserving other keys. */
 function _writeSettings(patch: Record<string, unknown>): void {
-  if (!physicalRoot) { return; }
-  const kodoDir = _kodoWorkspaceDir();
+  const kodoDir = _kodoHomeDir();
   const settingsPath = _settingsPath();
 
   let settings: Record<string, unknown> = {};
@@ -1096,7 +1301,7 @@ function _installLlamaCpp(): void {
   if (llamaInstallingState) { return; }
   llamaInstallingState = true;
   sidebarProvider?.update({ llamaInstalling: true });
-  wsClient?.send(makeRequest('llamacpp.install'));
+  sendStamped(makeRequest('llamacpp.install'));
 
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Installing llama.cpp', cancellable: false },
@@ -1145,7 +1350,7 @@ function _startLlamaCpp(): void {
   llamaStartingState = true;
   llamaRunningState = false;
   sidebarProvider?.update({ llamaRunning: false, llamaStarting: true });
-  wsClient?.send(makeRequest('llama.start'));
+  sendStamped(makeRequest('llama.start'));
 
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: notifTitle, cancellable: false },
@@ -1159,7 +1364,7 @@ function _installModel(name: string): void {
   if (installingModelsState.includes(name)) { return; }
   installingModelsState = [...installingModelsState, name];
   sidebarProvider?.update({ installingModels: installingModelsState });
-  wsClient?.send(makeRequest('model.install', { name }));
+  sendStamped(makeRequest('model.install', { name }));
 
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Downloading ${name}…`, cancellable: false },
@@ -1209,7 +1414,7 @@ function _setActiveLocalModel(name: string): void {
   fs.mkdirSync(kodoDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
 
-  wsClient?.send(makeRequest('config.reload'));
+  sendStamped(makeRequest('config.reload'));
   activeLocalModelState = name;
   sidebarProvider?.update({ activeLocalModel: name });
 }
@@ -1237,7 +1442,7 @@ function _setMode(mode: 'cloud' | 'local'): void {
   fs.mkdirSync(kodoDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
 
-  wsClient?.send(makeRequest('config.reload'));
+  sendStamped(makeRequest('config.reload'));
   modeState = mode;
   sidebarProvider?.update({ mode });
 
@@ -1259,7 +1464,7 @@ async function _handleApiKeyRequest(vendor: string, requestId: string): Promise<
   // Return the stored key if available — no user prompt needed.
   const stored = await extensionContext.secrets.get(secretKey);
   if (stored) {
-    wsClient?.send(makeResponse(requestId, { api_key: stored }));
+    sendStamped(makeResponse(requestId, { api_key: stored }));
     return;
   }
 
@@ -1277,35 +1482,17 @@ async function _handleApiKeyRequest(vendor: string, requestId: string): Promise<
       `Kōdo: prompt not sent. A ${vendor} API key is required to use cloud-based LLM. ` +
         'Alternatively, you can configure Kōdo to use a local model running on your machine (e.g., llama.cpp).',
     );
-    wsClient?.send(makeResponse(requestId, { error: 'cancelled' }));
+    sendStamped(makeResponse(requestId, { error: 'cancelled' }));
     return;
   }
 
   await extensionContext.secrets.store(secretKey, entered.trim());
-  wsClient?.send(makeResponse(requestId, { api_key: entered.trim() }));
+  sendStamped(makeResponse(requestId, { api_key: entered.trim() }));
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.unref();
-    probe.on('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const addr = probe.address();
-      if (typeof addr === 'object' && addr !== null) {
-        const picked = addr.port;
-        probe.close(() => resolve(picked));
-      } else {
-        probe.close();
-        reject(new Error('failed to read free port from probe socket'));
-      }
-    });
-  });
-}
 
 function generateNonce(): string {
   let text = '';

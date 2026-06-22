@@ -158,6 +158,8 @@ interface State {
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
   awaitingLlm: boolean;
+  /** Gateway queue/throttle wait state, or null when not waiting. Transient. */
+  llmWaiting: { reason: string; retryIn: number | null } | null;
   /** Live tool-call argument text accumulating from the current call. Transient. */
   streamingToolgen: string;
   /** True while ToolCallArgDelta fragments are arriving (shows ToolgenBlock). */
@@ -172,6 +174,7 @@ type Action =
   | { type: 'workspace_status'; hasWorkspace: boolean }
   | { type: 'status'; connected: boolean }
   | { type: 'llm_turn_start' }
+  | { type: 'llm_waiting'; waiting: boolean; reason: string; retryIn: number | null }
   | { type: 'tool_call'; toolName: string; description: string; toolCallId: string; timeoutSeconds: number | null }
   | { type: 'tool_call_detail'; toolCallId: string; rows: ToolCallDetailRow[]; detailFile: string | null; schemaCompliance: boolean | null; success: boolean | null; diff: DiffLinkData | null }
   | { type: 'token'; text: string }
@@ -228,7 +231,12 @@ function reducer(state: State, action: Action): State {
     case 'llm_turn_start':
       // A new turn begins; clear any leftover toolgen indicator (e.g. from a
       // cancelled prior turn that never produced a tool_call entry).
-      return { ...state, awaitingLlm: true, thinkingStartedAt: null, streamingToolgen: '', toolgenActive: false, toolgenToolName: '', toolgenStartedAt: null };
+      return { ...state, llmWaiting: null, awaitingLlm: true, thinkingStartedAt: null, streamingToolgen: '', toolgenActive: false, toolgenToolName: '', toolgenStartedAt: null };
+    case 'llm_waiting':
+      return {
+        ...state,
+        llmWaiting: action.waiting ? { reason: action.reason, retryIn: action.retryIn } : null,
+      };
     case 'tool_call': {
       // The tool call is now fully assembled, so any in-progress "Generating…"
       // indicator is done: bake its elapsed time into the entry as
@@ -262,7 +270,7 @@ function reducer(state: State, action: Action): State {
     case 'thinking_token':
       return { ...state, streamingThinking: state.streamingThinking + action.text, thinkingActive: true, thinkingStartedAt: state.thinkingStartedAt ?? Date.now(), awaitingLlm: false };
     case 'token':
-      return { ...state, streamingTokens: state.streamingTokens + action.text, streaming: true, thinkingActive: false, awaitingLlm: false };
+      return { ...state, streamingTokens: state.streamingTokens + action.text, streaming: true, thinkingActive: false, awaitingLlm: false, llmWaiting: null };
     case 'toolgen_token': {
       // On the first fragment, commit the visible thinking/text streamed so far
       // (the sentence is complete) so the "Generating…" block sits below it.
@@ -292,6 +300,7 @@ function reducer(state: State, action: Action): State {
         thinkingActive: false,
         thinkingStartedAt: null,
         streaming: false,
+        llmWaiting: null,
       };
     case 'pong':
       return { ...state, lastPong: new Date().toLocaleTimeString() };
@@ -512,6 +521,7 @@ const initial: State = {
   autonomous: false,
   resumeSessionId: null,
   awaitingLlm: false,
+  llmWaiting: null,
   streamingToolgen: '',
   toolgenActive: false,
   toolgenToolName: '',
@@ -585,6 +595,14 @@ function App() {
           break;
         case 'llm_turn_start':
           dispatch({ type: 'llm_turn_start' });
+          break;
+        case 'llm_waiting':
+          dispatch({
+            type: 'llm_waiting',
+            waiting: Boolean(msg.waiting),
+            reason: String(msg.reason ?? 'queued'),
+            retryIn: typeof msg.retryIn === 'number' ? msg.retryIn : null,
+          });
           break;
         case 'session_history':
           dispatch({ type: 'session_history', entries: (msg.entries as Record<string, unknown>[]) ?? [] });
@@ -724,7 +742,7 @@ function App() {
     dispatch({ type: 'resume_dismissed' });
   }
 
-  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.namingSession && !state.toolgenActive;
+  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.llmWaiting && !state.namingSession && !state.toolgenActive;
 
   return (
     <div style={styles.root}>
@@ -764,7 +782,8 @@ function App() {
           />
         )}
         {state.namingSession && <NamingIndicator />}
-        {state.awaitingLlm && <AwaitingIndicator />}
+        {state.llmWaiting && <LlmWaitingIndicator waiting={state.llmWaiting} />}
+        {state.awaitingLlm && !state.llmWaiting && <AwaitingIndicator />}
         {isEmpty && (
           state.connected ? "Hello there. I'm Kodo. Ready to build something awesome." : 'Not connected to server.'
         )}
@@ -864,6 +883,25 @@ function AwaitingIndicator() {
   return (
     <div style={styles.awaitingLine}>
       {'Awaiting response '}<BouncingDots />
+    </div>
+  );
+}
+
+/**
+ * Gateway queue/throttle indicator. While a request is queued behind the serial
+ * local gate / a saturated cloud feed it reads "LLM is busy, waiting"; while a
+ * 429 backoff is in effect it reads "Getting throttled, waiting for X minutes".
+ */
+function LlmWaitingIndicator({ waiting }: { waiting: { reason: string; retryIn: number | null } }) {
+  const label =
+    waiting.reason === 'throttled'
+      ? `Getting throttled, waiting for ${Math.max(1, Math.round((waiting.retryIn ?? 60) / 60))} minute${
+          Math.max(1, Math.round((waiting.retryIn ?? 60) / 60)) === 1 ? '' : 's'
+        } `
+      : 'LLM is busy, waiting ';
+  return (
+    <div style={styles.awaitingLine}>
+      {label}<BouncingDots />
     </div>
   );
 }
