@@ -13,8 +13,6 @@ export interface SidebarState {
   connected: boolean;
   hasWorkspace: boolean;
   stage: string;
-  autonomous: boolean;
-  workflowMode: 'guided' | 'problem_solving';
   mode: 'local' | 'cloud';
   models: ModelInfo[];
   installedModels: string[];
@@ -31,10 +29,9 @@ export interface SidebarState {
 }
 
 export type SidebarMessage =
-  | { type: 'open_panel' }
+  | { type: 'list_sessions' }
+  | { type: 'new_session' }
   | { type: 'set_mode'; mode: 'local' | 'cloud' }
-  | { type: 'toggle_autonomous' }
-  | { type: 'toggle_workflow_mode' }
   | { type: 'set_active_model'; name: string }
   | { type: 'restart_llamacpp' }
   | { type: 'install_llamacpp' }
@@ -163,7 +160,7 @@ function buildHtml(): string {
     .toggle-btn:hover {
       background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
     }
-    #open-btn { margin-bottom: 14px; }
+    #open-btn { margin-bottom: 8px; }
     .radio-group { display: flex; flex-direction: column; gap: 6px; }
     label {
       display: flex;
@@ -254,11 +251,8 @@ function buildHtml(): string {
         <span id="conn-lbl">Status: Disconnected</span>
       </div>
     </div>
-    <div class="toggle-row">
-      <button id="auto-btn" class="toggle-btn">💬 Interactive</button>
-      <button id="workflow-btn" class="toggle-btn">🧩 Guided Development</button>
-    </div>
-    <button id="open-btn">Open Kōdo Panel</button>
+    <button id="open-btn" class="toggle-btn">⟳ Re-open existing Kōdo session</button>
+    <button id="new-btn" class="toggle-btn">＋ Start new Kōdo session</button>
 
     <hr>
     <div class="radio-group">
@@ -282,72 +276,12 @@ function buildHtml(): string {
     // Notify extension that webview is ready to receive state.
     vsc.postMessage({ type: 'ready' });
 
-    // Tooltip copy for the two mode toggles.
-    const TOOLTIPS = {
-      interactive: 'Interactive mode — agents work alongside you, asking questions and checking in before key decisions.',
-      autonomous: 'Autonomous mode — agents work on their own, making reasonable assumptions instead of pausing to ask you.',
-      problem_solving: 'Problem Solving — a single generalist agent tackles your request end to end, however it sees fit.',
-      guided: 'Guided Development — Kōdo walks you through its build phases (design, tests, implementation) to grow a complete solution.',
-    };
-
-    // ----------------------------------------------------------------
-    // Tooltip
-    // ----------------------------------------------------------------
-    let _tooltipTarget = null;
-    const _tooltipEl = document.createElement('div');
-    _tooltipEl.style.cssText = [
-      'position:fixed',
-      'background:var(--vscode-editorHoverWidget-background,#252526)',
-      'color:var(--vscode-editorHoverWidget-foreground,#cccccc)',
-      'border:1px solid var(--vscode-editorHoverWidget-border,#454545)',
-      'border-radius:3px',
-      'padding:5px 8px',
-      'font-size:0.82em',
-      'pointer-events:none',
-      'display:none',
-      'z-index:1000',
-      'max-width:220px',
-      'white-space:normal',
-      'word-wrap:break-word',
-      'line-height:1.35',
-      'box-shadow:0 2px 8px rgba(0,0,0,0.3)',
-    ].join(';');
-    document.body.appendChild(_tooltipEl);
-
-    function _showTooltip(el, text) {
-      _tooltipTarget = el;
-      const rect = el.getBoundingClientRect();
-      _tooltipEl.textContent = text;
-      _tooltipEl.style.display = 'block';
-      _tooltipEl.style.left = '0';
-      _tooltipEl.style.top = (rect.bottom + 5) + 'px';
-      const tw = _tooltipEl.offsetWidth;
-      let left = rect.left + (rect.width - tw) / 2;
-      left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
-      _tooltipEl.style.left = left + 'px';
-    }
-    function _hideTooltip() { _tooltipTarget = null; _tooltipEl.style.display = 'none'; }
-
-    document.getElementById('auto-btn').addEventListener('mouseenter', function() {
-      _showTooltip(this, _state.autonomous ? TOOLTIPS.autonomous : TOOLTIPS.interactive);
-    });
-    document.getElementById('auto-btn').addEventListener('mouseleave', _hideTooltip);
-    document.getElementById('workflow-btn').addEventListener('mouseenter', function() {
-      _showTooltip(this, _state.workflowMode === 'problem_solving' ? TOOLTIPS.problem_solving : TOOLTIPS.guided);
-    });
-    document.getElementById('workflow-btn').addEventListener('mouseleave', _hideTooltip);
-
-    document.getElementById('auto-btn').addEventListener('click', () => {
-      _hideTooltip();
-      vsc.postMessage({ type: 'toggle_autonomous' });
-    });
-
-    document.getElementById('workflow-btn').addEventListener('click', () => {
-      vsc.postMessage({ type: 'toggle_workflow_mode' });
-    });
-
     document.getElementById('open-btn').addEventListener('click', () => {
-      vsc.postMessage({ type: 'open_panel' });
+      vsc.postMessage({ type: 'list_sessions' });
+    });
+
+    document.getElementById('new-btn').addEventListener('click', () => {
+      vsc.postMessage({ type: 'new_session' });
     });
 
     document.querySelectorAll('input[name="llm-mode"]').forEach(el => {
@@ -362,8 +296,6 @@ function buildHtml(): string {
     let _state = {
       connected: false,
       stage: 'intake',
-      autonomous: false,
-      workflowMode: 'guided',
       mode: 'local',
       models: [],
       installedModels: [],
@@ -541,19 +473,6 @@ function buildHtml(): string {
       const { cls, label } = statusDisplay(_state.connected, _state.stage);
       document.getElementById('conn-dot').className = 'conn-dot ' + cls;
       document.getElementById('conn-lbl').textContent = label;
-
-      _state.autonomous = Boolean(data.autonomous);
-      const autoBtn = document.getElementById('auto-btn');
-      autoBtn.textContent = _state.autonomous ? '⚡ Autonomous' : '💬 Interactive';
-      autoBtn.title = _state.autonomous ? TOOLTIPS.autonomous : TOOLTIPS.interactive;
-      if (_tooltipTarget === autoBtn) { _showTooltip(autoBtn, autoBtn.title); }
-
-      if (data.workflowMode !== undefined) { _state.workflowMode = data.workflowMode; }
-      const workflowBtn = document.getElementById('workflow-btn');
-      const isProblemSolving = _state.workflowMode === 'problem_solving';
-      workflowBtn.textContent = isProblemSolving ? '💡 Problem Solving' : '🧩 Guided Development';
-      workflowBtn.title = isProblemSolving ? TOOLTIPS.problem_solving : TOOLTIPS.guided;
-      if (_tooltipTarget === workflowBtn) { _showTooltip(workflowBtn, workflowBtn.title); }
 
       // Mode radio
       const radio = document.querySelector('input[value="' + data.mode + '"]');

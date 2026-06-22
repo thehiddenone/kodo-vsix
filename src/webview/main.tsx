@@ -12,6 +12,8 @@ import { useEffect, useReducer, useRef, useState } from 'preact/hooks';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: Record<string, unknown>): void;
+  getState(): unknown;
+  setState(state: unknown): void;
 };
 
 const vscode = acquireVsCodeApi();
@@ -155,6 +157,8 @@ interface State {
   pendingGate: GateData | null;
   pendingQuestion: QuestionData | null;
   autonomous: boolean;
+  /** Per-session workflow mode; toggled in this tab's header. */
+  workflowMode: 'guided' | 'problem_solving';
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
   awaitingLlm: boolean;
@@ -196,6 +200,7 @@ type Action =
   | { type: 'question_request'; requestId: string; question: string; mode: string; choices: QuestionChoice[] | null }
   | { type: 'question_cleared' }
   | { type: 'autonomous_changed'; autonomous: boolean }
+  | { type: 'workflow_changed'; mode: 'guided' | 'problem_solving' }
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
   | { type: 'post_update'; message: string }
@@ -425,6 +430,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, pendingQuestion: null };
     case 'autonomous_changed':
       return { ...state, autonomous: action.autonomous };
+    case 'workflow_changed':
+      return { ...state, workflowMode: action.mode };
     case 'resume_offer':
       return { ...state, resumeSessionId: action.sessionId };
     case 'resume_dismissed':
@@ -519,6 +526,7 @@ const initial: State = {
   pendingGate: null,
   pendingQuestion: null,
   autonomous: false,
+  workflowMode: 'problem_solving',
   resumeSessionId: null,
   awaitingLlm: false,
   llmWaiting: null,
@@ -682,6 +690,14 @@ function App() {
         case 'autonomous_changed':
           dispatch({ type: 'autonomous_changed', autonomous: Boolean(msg.autonomous) });
           break;
+        case 'workflow_changed':
+          dispatch({ type: 'workflow_changed', mode: msg.mode === 'guided' ? 'guided' : 'problem_solving' });
+          break;
+        case 'persist_session_id':
+          // Stash the id so VS Code's panel serializer can resume this exact
+          // session after a window reload / workspace reopen.
+          vscode.setState({ sessionId: String(msg.sessionId ?? '') });
+          break;
         case 'post_update':
           dispatch({ type: 'post_update', message: String(msg.message ?? '') });
           break;
@@ -831,6 +847,12 @@ function App() {
             disabled={!state.connected || isRunning || isBlocked}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
+          />
+          {/* Per-session mode toggles (apply to the next prompt) */}
+          <ModeControls
+            autonomous={state.autonomous}
+            workflowMode={state.workflowMode}
+            connected={state.connected}
           />
           <div style={styles.inputFooter}>
             <div style={{ flex: 1 }} />
@@ -1214,6 +1236,83 @@ function ResumeBanner({ onResume, onDismiss }: ResumeBannerProps) {
 // UsagePanel component
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// ModeControls — per-session autonomous + workflow toggles (tab header)
+// ---------------------------------------------------------------------------
+
+const _MODE_TOOLTIPS = {
+  interactive: 'Interactive — agents work alongside you, asking questions before key decisions. Applies to the next prompt.',
+  autonomous: 'Autonomous — agents work on their own, making reasonable assumptions instead of pausing. Applies to the next prompt.',
+  problem_solving: 'Problem Solving — one generalist agent tackles your request end to end. Applies to the next prompt.',
+  guided: 'Guided Development — Kōdo walks through design, tests and implementation phases. Applies to the next prompt.',
+  requireApproval: 'Require approval of all edits — Kōdo pauses for your sign-off before applying any file edit.',
+  allowEdits: 'Allow all edits — Kōdo applies file edits without pausing for approval.',
+  security: 'Security level — how much Kōdo restricts potentially risky tool use. Cycles High → Normal → Low.',
+};
+
+/** Security postures the bar cycles through (High → Normal → Low → High). */
+type SecurityLevel = 'high' | 'normal' | 'low';
+
+const _SECURITY_LABEL: Record<SecurityLevel, string> = {
+  high: '🛡️ High Security',
+  normal: '🔐 Normal Security',
+  low: '🔓 Low Security',
+};
+
+const _SECURITY_NEXT: Record<SecurityLevel, SecurityLevel> = {
+  high: 'normal',
+  normal: 'low',
+  low: 'high',
+};
+
+interface ModeControlsProps {
+  autonomous: boolean;
+  workflowMode: 'guided' | 'problem_solving';
+  connected: boolean;
+}
+
+function ModeControls({ autonomous, workflowMode, connected }: ModeControlsProps) {
+  const isPS = workflowMode === 'problem_solving';
+  // Local-only UI state for now — these two toggles are not yet wired to the
+  // server; they only cycle their own label so the interaction can be designed.
+  const [requireApproval, setRequireApproval] = useState(true);
+  const [security, setSecurity] = useState<SecurityLevel>('high');
+  return (
+    <div style={styles.modeControls}>
+      <button
+        style={styles.modeBtn}
+        disabled={!connected}
+        title={isPS ? _MODE_TOOLTIPS.problem_solving : _MODE_TOOLTIPS.guided}
+        onClick={() => vscode.postMessage({ type: 'workflow_set', mode: isPS ? 'guided' : 'problem_solving' })}
+      >
+        {isPS ? '💡 Problem Solving' : '🧩 Guided Development'}
+      </button>
+      <button
+        style={styles.modeBtn}
+        disabled={!connected}
+        title={autonomous ? _MODE_TOOLTIPS.autonomous : _MODE_TOOLTIPS.interactive}
+        onClick={() => vscode.postMessage({ type: 'mode_set', autonomous: !autonomous })}
+      >
+        {autonomous ? '⚡ Autonomous' : '💬 Interactive'}
+      </button>
+      <button
+        style={styles.modeBtn}
+        title={requireApproval ? _MODE_TOOLTIPS.requireApproval : _MODE_TOOLTIPS.allowEdits}
+        onClick={() => setRequireApproval((v) => !v)}
+      >
+        {requireApproval ? '🔍 Require approval of all edits' : '✅ Allow all edits'}
+      </button>
+      <button
+        style={styles.modeBtn}
+        title={_MODE_TOOLTIPS.security}
+        onClick={() => setSecurity((s) => _SECURITY_NEXT[s])}
+      >
+        {_SECURITY_LABEL[security]}
+      </button>
+    </div>
+  );
+}
+
 interface UsagePanelProps {
   sessionName: string;
   currentProject: string;
@@ -1510,6 +1609,27 @@ const styles = {
   usageName: { marginBottom: '2px', color: 'var(--vscode-foreground)' },
   usageTotal: { fontVariantNumeric: 'tabular-nums' },
   usageDetail: { opacity: 0.8 },
+  modeControls: {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '6px',
+    marginTop: '6px',
+    marginBottom: '8px',
+  },
+  modeBtn: {
+    flex: 1,
+    minWidth: '130px',
+    padding: '4px 8px',
+    fontSize: '11px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    border: 'none',
+    borderRadius: '3px',
+    cursor: 'pointer',
+    background: 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
+    color: 'var(--vscode-button-secondaryForeground, var(--vscode-button-foreground))',
+  },
   stream: {
     flex: 1,
     overflowY: 'auto',

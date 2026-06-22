@@ -1,0 +1,750 @@
+/**
+ * SessionController — one Kōdo session bound to one WebView panel (a native VS
+ * Code editor tab) and its own WebSocket connection to the singleton server.
+ *
+ * A VS Code window hosts many of these at once. Each owns:
+ *   - a `WebviewPanel` (the visible tab),
+ *   - a dedicated `WsClient` (one session == one connection, so the server
+ *     detects this session's disconnect via the socket closing, exactly as
+ *     before — see SessionManager.drop_connection),
+ *   - the per-session UI state cache that rehydrates the webview on 'ready'.
+ *
+ * Window-global concerns (llama/model management, the cloud/local radio, the
+ * session picker) live in extension.ts on a separate session-less *control*
+ * connection; they are NOT handled here.
+ */
+
+import * as path from 'path';
+import * as vscode from 'vscode';
+import { makeRequest, makeResponse } from './envelope';
+import type { Envelope } from './envelope';
+import { WsClient } from './ws-client';
+
+const TOKEN_BUFFER_MAX = 64 * 1024;
+
+export interface LastCallTokens {
+  input: number;
+  output: number;
+  cache_write: number;
+  cache_read: number;
+}
+
+interface UsageSummary {
+  cumulativeUsd: number;
+  lastCallTokens: LastCallTokens | null;
+}
+
+interface FileEventData {
+  path: string;
+  kind: string;
+}
+
+interface GateData {
+  gateId: string;
+  gateType: string;
+  summary: string;
+  artifactPath: string | null;
+}
+
+interface QuestionChoice {
+  key: string;
+  label: string;
+}
+
+interface QuestionData {
+  requestId: string;
+  question: string;
+  mode: string;
+  choices: QuestionChoice[] | null;
+}
+
+/** Collaborators the controller needs from the window-level host. */
+export interface SessionDeps {
+  context: vscode.ExtensionContext;
+  windowId: string;
+  wsUrl: string;
+  getPhysicalRoot: () => string;
+  getProjectRoot: () => string;
+  hasWorkspace: () => boolean;
+  buildFolderMap: () => Record<string, string>;
+  /** Guided project picker (returns {root,name} or null if cancelled). */
+  pickProject: () => Promise<{ root: string; name: string } | null>;
+  /** Shared SecretStorage-backed API-key prompt; replies on this session's WS. */
+  handleApiKeyRequest: (vendor: string, requestId: string, send: (env: Envelope) => void) => void;
+  /** Called once the server assigns/confirms this session's id. */
+  onSessionAssigned: (c: SessionController, sessionId: string) => void;
+  /** Called when the panel is disposed (user closed the tab, or reload). */
+  onClosed: (c: SessionController) => void;
+  /** True while the extension host is deactivating (window reload/close). */
+  isDeactivating: () => boolean;
+}
+
+let _keySeq = 0;
+
+export class SessionController {
+  readonly key: string;
+  /** Server-assigned session id; '' until the first hello.ack. */
+  sessionId = '';
+  /** True when opened blank (no id) → apply new-session defaults on hello.ack. */
+  private readonly isNewSession: boolean;
+
+  private readonly panel: vscode.WebviewPanel;
+  private readonly ws: WsClient;
+  private connected = false;
+  private disposed = false;
+
+  // Per-session UI cache (rehydrates the webview on 'ready').
+  private stage = 'IDLE';
+  private agent: string | null = null;
+  private tokens = '';
+  private lastPrompt = '';
+  private usage: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
+  private fileEvents: FileEventData[] = [];
+  private pendingGate: GateData | null = null;
+  private pendingQuestion: QuestionData | null = null;
+  private sessionHistory: Record<string, unknown>[] | null = null;
+  private sessionName = '';
+  private autonomous = false;
+  private workflowMode: 'guided' | 'problem_solving' = 'problem_solving';
+  private currentProject: { root: string; name: string } | null = null;
+  private resumeSessionId: string | null = null;
+
+  constructor(
+    private readonly deps: SessionDeps,
+    panel: vscode.WebviewPanel,
+    sessionId: string,
+  ) {
+    this.key = `session-${++_keySeq}`;
+    this.sessionId = sessionId;
+    this.isNewSession = sessionId === '';
+    this.panel = panel;
+
+    panel.iconPath = vscode.Uri.file(
+      path.join(deps.context.extensionPath, 'images', 'kodo16px.svg'),
+    );
+    const webviewJsUri = panel.webview.asWebviewUri(
+      vscode.Uri.file(path.join(deps.context.extensionPath, 'dist', 'webview.js')),
+    );
+    panel.webview.html = buildHtml(webviewJsUri, generateNonce());
+    panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => this._onWebviewMessage(msg));
+    panel.onDidDispose(() => this._onDispose());
+
+    this.ws = new WsClient(
+      deps.wsUrl,
+      (env) => this._onEnvelope(env),
+      (connected) => this._onStatus(connected),
+    );
+    this.ws.connect();
+  }
+
+  /** Bring this session's tab to the foreground. */
+  reveal(): void {
+    this.panel.reveal();
+  }
+
+  // ------------------------------------------------------------------
+  // Connection lifecycle
+  // ------------------------------------------------------------------
+
+  private _onStatus(connected: boolean): void {
+    this.connected = connected;
+    this._post({ type: 'status', connected });
+    if (connected) {
+      this._sendHello();
+    }
+  }
+
+  private _sendHello(): void {
+    const payload: Record<string, unknown> = {
+      client: 'vsix',
+      version: '0.2.0',
+      window_id: this.deps.windowId,
+    };
+    if (this.sessionId) {
+      payload.session_id = this.sessionId;
+    }
+    this._sendStamped(makeRequest('hello', payload));
+  }
+
+  /**
+   * Stamp this session's id onto every request except `hello`, so the singleton
+   * server routes the frame to this session's engine.
+   */
+  private _sendStamped(env: Envelope): void {
+    if (env.kind === 'request' && env.payload.type !== 'hello') {
+      env.payload.session_id = this.sessionId;
+    }
+    this.ws.send(env);
+  }
+
+  private _post(msg: Record<string, unknown>): void {
+    void this.panel.webview.postMessage(msg);
+  }
+
+  // ------------------------------------------------------------------
+  // Tab close → release the session (free for any window) — but NOT on a
+  // window reload, where the serializer restores the tab and grace lets it
+  // reclaim/resume from disk.
+  // ------------------------------------------------------------------
+
+  private _onDispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    if (!this.deps.isDeactivating() && this.sessionId) {
+      // Explicit user close: free immediately (skip the disconnect grace).
+      this._sendStamped(makeRequest('session.release', { session_id: this.sessionId }));
+    }
+    this.ws.dispose();
+    this.deps.onClosed(this);
+  }
+
+  /** Tear down without releasing (window reload / extension deactivate). */
+  dispose(): void {
+    this.disposed = true;
+    this.ws.dispose();
+  }
+
+  // ------------------------------------------------------------------
+  // WebView → controller
+  // ------------------------------------------------------------------
+
+  private _onWebviewMessage(msg: Record<string, unknown>): void {
+    switch (msg.type) {
+      case 'ready':
+        this._rehydrate();
+        break;
+      case 'ping':
+        this._sendStamped(makeRequest('ping'));
+        break;
+      case 'prompt': {
+        const text = String(msg.text ?? '').trim();
+        if (text) {
+          void this._submitPrompt(text);
+        }
+        break;
+      }
+      case 'approval_respond':
+        this._sendStamped(
+          makeResponse(String(msg.gateId ?? ''), {
+            type: 'prompt.approval.response',
+            action: String(msg.action ?? 'agree'),
+            feedback_text: String(msg.feedback ?? '') || null,
+          }),
+        );
+        this.pendingGate = null;
+        break;
+      case 'question_respond': {
+        const payload: Record<string, unknown> = { type: 'prompt.question.response' };
+        if (String(msg.mode ?? 'free_text') === 'choice') {
+          payload.choice_key = String(msg.choiceKey ?? '');
+        } else {
+          payload.answer_text = String(msg.answerText ?? '');
+        }
+        this._sendStamped(makeResponse(String(msg.requestId ?? ''), payload));
+        this.pendingQuestion = null;
+        break;
+      }
+      case 'stop':
+        this._sendStamped(makeRequest('stop', {}));
+        break;
+      case 'mode_set': {
+        const autonomous = Boolean(msg.autonomous);
+        this.autonomous = autonomous;
+        this._sendStamped(makeRequest('mode.set', { autonomous }));
+        this._post({ type: 'autonomous_changed', autonomous });
+        break;
+      }
+      case 'workflow_set': {
+        const mode = msg.mode === 'guided' ? 'guided' : 'problem_solving';
+        this.workflowMode = mode;
+        this._sendStamped(makeRequest('workflow.set', { mode }));
+        this._post({ type: 'workflow_changed', mode });
+        break;
+      }
+      case 'open_file': {
+        const filePath = String(msg.path ?? '');
+        const projectRoot = this.deps.getProjectRoot();
+        if (filePath && (path.isAbsolute(filePath) || projectRoot)) {
+          const resolved = path.isAbsolute(filePath) ? filePath : path.join(projectRoot, filePath);
+          void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(resolved)).then(
+            () => undefined,
+            (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`),
+          );
+        }
+        break;
+      }
+      case 'open_diff': {
+        const prevPath = String(msg.prevPath ?? '');
+        const newPath = String(msg.newPath ?? '');
+        if (prevPath && newPath) {
+          void vscode.commands
+            .executeCommand('vscode.diff', vscode.Uri.file(prevPath), vscode.Uri.file(newPath), String(msg.label ?? ''))
+            .then(
+              () => undefined,
+              (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot open diff — ${String(err)}`),
+            );
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Submit a prompt. In Guided mode with no project locked yet, force the
+   * project picker first and bind it on the server before sending (WS frames
+   * are processed in order, so the bind completes before the prompt dequeues).
+   */
+  private async _submitPrompt(text: string): Promise<void> {
+    if (this.workflowMode === 'guided' && this.currentProject === null) {
+      const project = await this.deps.pickProject();
+      if (project === null) {
+        return;
+      }
+      this.currentProject = project;
+      this._sendStamped(makeRequest('project.set', { root: project.root, name: project.name }));
+    }
+    this.lastPrompt = text;
+    this.tokens = '';
+    this.fileEvents = [];
+    this.pendingGate = null;
+    this.pendingQuestion = null;
+    this._sendStamped(makeRequest('prompt.submit', { text }));
+  }
+
+  private _rehydrate(): void {
+    this._post({ type: 'workspace_status', hasWorkspace: this.deps.hasWorkspace() });
+    this._post({ type: 'status', connected: this.connected });
+    this._post({ type: 'stage', stage: this.stage, agent: this.agent });
+    this._post({ type: 'autonomous_changed', autonomous: this.autonomous });
+    this._post({ type: 'workflow_changed', mode: this.workflowMode });
+    if (this.sessionHistory !== null) {
+      this._post({ type: 'session_history', entries: this.sessionHistory });
+    }
+    if (this.sessionName) {
+      this._post({ type: 'session_name', name: this.sessionName });
+    }
+    if (this.currentProject !== null) {
+      this._post({ type: 'current_project', ...this.currentProject });
+    }
+    if (this.lastPrompt) {
+      this._post({ type: 'restore_prompt', text: this.lastPrompt });
+    }
+    if (this.tokens) {
+      this._post({ type: 'token', text: this.tokens });
+    }
+    if (this.usage.lastCallTokens !== null || this.usage.cumulativeUsd > 0) {
+      this._post({ type: 'usage', ...this.usage });
+    }
+    for (const fe of this.fileEvents) {
+      this._post({ type: 'file_change', ...fe });
+    }
+    if (this.pendingGate !== null) {
+      this._post({ type: 'approval_request', ...this.pendingGate });
+    }
+    if (this.pendingQuestion !== null) {
+      this._post({ type: 'question_request', ...this.pendingQuestion });
+    }
+    if (this.resumeSessionId !== null) {
+      this._post({ type: 'resume_offer', sessionId: this.resumeSessionId });
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Server → controller cache → WebView
+  // ------------------------------------------------------------------
+
+  private _onEnvelope(env: Envelope): void {
+    if (env.kind === 'stream_chunk') {
+      const text = String(env.payload.text ?? '');
+      this.tokens += text;
+      if (this.tokens.length > TOKEN_BUFFER_MAX) {
+        this.tokens = this.tokens.slice(-TOKEN_BUFFER_MAX / 2);
+      }
+      this._post({ type: 'token', text });
+      return;
+    }
+    if (env.kind === 'thinking_chunk') {
+      this._post({ type: 'thinking_token', text: String(env.payload.text ?? '') });
+      return;
+    }
+    if (env.kind === 'toolgen_chunk') {
+      this._post({
+        type: 'toolgen_token',
+        toolName: String(env.payload.tool_name ?? ''),
+        text: String(env.payload.text ?? ''),
+      });
+      return;
+    }
+    if (env.kind === 'stream_end') {
+      this._post({ type: 'stream_end' });
+      return;
+    }
+
+    const evtType = String(env.payload.type ?? '');
+
+    if (env.kind === 'response' && evtType === 'pong') {
+      this._post({ type: 'pong' });
+      return;
+    }
+
+    if (env.kind === 'response' && evtType === 'hello.ack') {
+      this._onHelloAck(env);
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'state') {
+      this.stage = String(env.payload.stage ?? 'IDLE');
+      this.agent = env.payload.agent ? String(env.payload.agent) : null;
+      this._post({ type: 'stage', stage: this.stage, agent: this.agent });
+      const autonomous = Boolean(env.payload.autonomous ?? false);
+      if (autonomous !== this.autonomous) {
+        this.autonomous = autonomous;
+        this._post({ type: 'autonomous_changed', autonomous });
+      }
+      const workflowMode = env.payload.workflow_mode === 'problem_solving' ? 'problem_solving' : 'guided';
+      if (workflowMode !== this.workflowMode) {
+        this.workflowMode = workflowMode;
+        this._post({ type: 'workflow_changed', mode: workflowMode });
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'project.bound') {
+      const root = String(env.payload.root ?? '');
+      const name = String(env.payload.name ?? root);
+      if (root) {
+        this.currentProject = { root, name };
+        this._post({ type: 'current_project', root, name });
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'session.history') {
+      const entries = env.payload.entries;
+      if (Array.isArray(entries)) {
+        this.sessionHistory = entries as Record<string, unknown>[];
+        this._post({ type: 'session_history', entries: this.sessionHistory });
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'session.name') {
+      const name = String(env.payload.name ?? '');
+      this.sessionName = name;
+      this.panel.title = name || 'Kōdo';
+      this._post({ type: 'session_name', name });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'session.naming') {
+      this._post({ type: 'session_naming', active: Boolean(env.payload.active) });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'agent.started') {
+      this.agent = String(env.payload.agent ?? '');
+      this._post({ type: 'agent_started', agent: this.agent });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'agent.finished') {
+      this._post({ type: 'agent_finished', agent: String(env.payload.agent ?? '') });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'subsession.started') {
+      this._post({
+        type: 'subsession_started',
+        agent: String(env.payload.agent ?? ''),
+        displayName: String(env.payload.display_name ?? ''),
+      });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'subsession.ended') {
+      this._post({
+        type: 'subsession_ended',
+        agent: String(env.payload.agent ?? ''),
+        displayName: String(env.payload.display_name ?? ''),
+        parentDisplayName: String(env.payload.parent_display_name ?? ''),
+      });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'file.change') {
+      const fe: FileEventData = {
+        path: String(env.payload.path ?? ''),
+        kind: String(env.payload.kind ?? 'modify'),
+      };
+      this.fileEvents.push(fe);
+      this._post({ type: 'file_change', ...fe });
+      return;
+    }
+
+    if (env.kind === 'request' && evtType === 'prompt.approval') {
+      this.pendingGate = {
+        gateId: env.id,
+        gateType: String(env.payload.gate_type ?? ''),
+        summary: String(env.payload.summary ?? ''),
+        artifactPath: env.payload.artifact_path ? String(env.payload.artifact_path) : null,
+      };
+      this._post({ type: 'approval_request', ...this.pendingGate });
+      return;
+    }
+
+    if (env.kind === 'request' && evtType === 'prompt.question') {
+      const rawChoices = env.payload.choices;
+      const choices: QuestionChoice[] | null = Array.isArray(rawChoices)
+        ? rawChoices.map((c) => ({
+            key: String((c as Record<string, unknown>).key ?? ''),
+            label: String((c as Record<string, unknown>).label ?? ''),
+          }))
+        : null;
+      this.pendingQuestion = {
+        requestId: env.id,
+        question: String(env.payload.question ?? ''),
+        mode: String(env.payload.mode ?? 'free_text'),
+        choices,
+      };
+      this._post({ type: 'question_request', ...this.pendingQuestion });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'autonomous.changed') {
+      const autonomous = Boolean(env.payload.autonomous ?? false);
+      this.autonomous = autonomous;
+      this._post({ type: 'autonomous_changed', autonomous });
+      if (!autonomous) {
+        void vscode.window.showInformationMessage('Kōdo: Autonomous mode has been turned off.');
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'post.update') {
+      this._post({ type: 'post_update', message: String(env.payload.message ?? '') });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'llm.turn_start') {
+      this._post({ type: 'llm_turn_start' });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'llm.waiting') {
+      const waiting = Boolean(env.payload.waiting);
+      const reason = String(env.payload.reason ?? 'queued');
+      const retryIn = typeof env.payload.retry_in_seconds === 'number' ? env.payload.retry_in_seconds : null;
+      this._post({ type: 'llm_waiting', waiting, reason, retryIn });
+      if (waiting && reason === 'throttled' && retryIn) {
+        const mins = Math.max(1, Math.round(retryIn / 60));
+        void vscode.window
+          .withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Kōdo: rate-limited by the LLM provider — retrying in ~${mins} min`,
+              cancellable: false,
+            },
+            () => new Promise<void>((resolve) => setTimeout(resolve, 60_000)),
+          )
+          .then(undefined, () => undefined);
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'agent.tool_call') {
+      this._post({
+        type: 'tool_call',
+        toolName: String(env.payload.tool_name ?? ''),
+        description: String(env.payload.description ?? ''),
+        toolCallId: String(env.payload.tool_call_id ?? ''),
+        timeoutSeconds: typeof env.payload.timeout_seconds === 'number' ? env.payload.timeout_seconds : null,
+      });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'agent.tool_call_detail') {
+      const rawDiff = env.payload.diff as Record<string, unknown> | null | undefined;
+      const diff =
+        rawDiff && typeof rawDiff === 'object'
+          ? {
+              label: String(rawDiff.label ?? ''),
+              prevPath: String(rawDiff.prev_path ?? ''),
+              newPath: String(rawDiff.new_path ?? ''),
+            }
+          : null;
+      this._post({
+        type: 'tool_call_detail',
+        toolCallId: String(env.payload.tool_call_id ?? ''),
+        detailFile: typeof env.payload.file === 'string' ? env.payload.file : null,
+        rows: Array.isArray(env.payload.rows) ? env.payload.rows : [],
+        schemaCompliance: typeof env.payload.schema_compliance === 'boolean' ? env.payload.schema_compliance : null,
+        success: typeof env.payload.success === 'boolean' ? env.payload.success : null,
+        diff,
+      });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'tool.incompliant') {
+      const externalName = String(env.payload.external_name ?? 'A tool');
+      const desc = String(env.payload.user_description ?? '');
+      const internalName = String(env.payload.tool_name ?? '');
+      void vscode.window.showErrorMessage(
+        `Kōdo: the "${externalName}" tool returned output that does not match its declared ` +
+          `schema, so Kōdo had to repair it.${desc ? ` (${desc})` : ''} ` +
+          `Internal tool name: ${internalName}.`,
+      );
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'usage.update') {
+      const cumulativeUsd = Number(env.payload.cumulative_usd ?? 0);
+      const durationSeconds = Number(env.payload.duration_seconds ?? 0);
+      const raw = env.payload.last_call_tokens;
+      const lastCallTokens: LastCallTokens | null =
+        raw && typeof raw === 'object'
+          ? {
+              input: Number((raw as Record<string, unknown>).input ?? 0),
+              output: Number((raw as Record<string, unknown>).output ?? 0),
+              cache_write: Number((raw as Record<string, unknown>).cache_write ?? 0),
+              cache_read: Number((raw as Record<string, unknown>).cache_read ?? 0),
+            }
+          : null;
+      this.usage = { cumulativeUsd, lastCallTokens };
+      this._post({ type: 'usage', cumulativeUsd, lastCallTokens, durationSeconds });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'error') {
+      const message = String(env.payload.message ?? 'Unknown server error');
+      if (!Boolean(env.payload.recoverable ?? true)) {
+        void vscode.window.showErrorMessage(
+          `Kōdo: an error occurred and the workflow cannot proceed — ${message}`,
+        );
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'resume_offer') {
+      this.resumeSessionId = String(env.payload.session_id ?? '');
+      this._post({ type: 'resume_offer', sessionId: this.resumeSessionId });
+      return;
+    }
+
+    // Server-initiated API-key request for THIS session's LLM call. Reply on
+    // this session's connection via the shared SecretStorage-backed handler.
+    if (env.kind === 'request' && evtType === 'api_key.request') {
+      this.deps.handleApiKeyRequest(String(env.payload.vendor ?? ''), env.id, (e) => this._sendStamped(e));
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'api_key.revoke') {
+      const vendor = String(env.payload.vendor ?? '');
+      if (vendor) {
+        void this.deps.context.secrets.delete(`kodo.apiKey.${vendor}`).then(undefined, () => undefined);
+      }
+      return;
+    }
+  }
+
+  private _onHelloAck(env: Envelope): void {
+    if (env.payload.error === 'session_in_use') {
+      // A restored/resumed tab whose session is now held by another window.
+      void vscode.window.showWarningMessage(
+        'This Kōdo session is open in another window. Close it there first to reopen it here.',
+      );
+      this.panel.dispose();
+      return;
+    }
+
+    const assigned = env.payload.session_id;
+    if (typeof assigned === 'string' && assigned) {
+      this.sessionId = assigned;
+      this.deps.onSessionAssigned(this, assigned);
+      // Persist the id INTO the webview so the panel serializer can resume this
+      // exact session after a window reload / workspace reopen.
+      this._post({ type: 'persist_session_id', sessionId: assigned });
+    }
+
+    // Per-session syncs now that the id is confirmed.
+    this._sendStamped(
+      makeRequest('workspace.folders', {
+        physical_root: this.deps.getPhysicalRoot(),
+        folders: this.deps.buildFolderMap(),
+      }),
+    );
+
+    if (this.isNewSession) {
+      // A blank session starts in interactive + problem-solving mode.
+      this.workflowMode = 'problem_solving';
+      this.autonomous = false;
+      this._sendStamped(makeRequest('workflow.set', { mode: 'problem_solving' }));
+      this._post({ type: 'workflow_changed', mode: 'problem_solving' });
+      this._post({ type: 'autonomous_changed', autonomous: false });
+    } else {
+      // Resumed: adopt the session's own persisted prefs from hello.ack state.
+      const state = env.payload.state as Record<string, unknown> | undefined;
+      if (state) {
+        this.autonomous = Boolean(state.autonomous ?? false);
+        this.workflowMode = state.workflow_mode === 'problem_solving' ? 'problem_solving' : 'guided';
+        this._post({ type: 'autonomous_changed', autonomous: this.autonomous });
+        this._post({ type: 'workflow_changed', mode: this.workflowMode });
+      }
+    }
+
+    const cp = env.payload.current_project as { root?: unknown; name?: unknown } | null | undefined;
+    if (cp && typeof cp.root === 'string' && cp.root) {
+      this.currentProject = { root: cp.root, name: typeof cp.name === 'string' ? cp.name : cp.root };
+      this._post({ type: 'current_project', ...this.currentProject });
+    }
+  }
+
+  /** Re-push the folder map (e.g. after onDidChangeWorkspaceFolders). */
+  pushWorkspaceFolders(): void {
+    if (!this.connected || !this.sessionId) {
+      return;
+    }
+    this._sendStamped(
+      makeRequest('workspace.folders', {
+        physical_root: this.deps.getPhysicalRoot(),
+        folders: this.deps.buildFolderMap(),
+      }),
+    );
+  }
+
+  /** Notify the webview of a workspace open/close gate change. */
+  postWorkspaceStatus(hasWorkspace: boolean): void {
+    this._post({ type: 'workspace_status', hasWorkspace });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// WebView HTML
+// ---------------------------------------------------------------------------
+
+function generateNonce(): string {
+  let text = '';
+  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
+}
+
+function buildHtml(webviewJsUri: vscode.Uri, nonce: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'nonce-${nonce}';">
+  <title>Kōdo</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script nonce="${nonce}" src="${webviewJsUri}"></script>
+</body>
+</html>`;
+}

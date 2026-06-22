@@ -42,6 +42,11 @@
         "icon": "images/kodo16px.svg"
       },
       {
+        "command": "kodo.newSession",
+        "title": "Kōdo: Start New Session",
+        "icon": "images/kodo16px.svg"
+      },
+      {
         "command": "kodo.createProject",
         "title": "Kōdo: Create New Project",
         "icon": "images/kodo16px.svg"
