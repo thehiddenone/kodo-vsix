@@ -122,7 +122,10 @@ type SessionEntry =
   | { type: 'post_update'; content: string; exclude_from_context: true }
   // Sub-agent takeover dividers. 'start' marks a sub-agent taking over from the
   // main agent; 'end' marks the main agent resuming. Display-only.
-  | { type: 'subsession_divider'; phase: 'start' | 'end'; displayName: string; parentDisplayName: string; exclude_from_context: true };
+  | { type: 'subsession_divider'; phase: 'start' | 'end'; displayName: string; parentDisplayName: string; exclude_from_context: true }
+  // Context-compaction divider: marks where the prior conversation was summarised
+  // and the live LLM context reset. Everything above stays visible as history.
+  | { type: 'compaction_divider'; summaryExcerpt: string; tokensBefore: number; tokensAfter: number; exclude_from_context: true };
 
 // ---------------------------------------------------------------------------
 // State
@@ -178,6 +181,18 @@ interface State {
    * files and prepends them to prompt.submit). Capacity is capped at 9.
    */
   attachedFiles: AttachedFile[];
+  /** Live context-window gauge shown in the header, or null until first reported. */
+  contextStats: ContextStats | null;
+  /** True while the engine is running the compactor (shows a "Compacting…" banner). */
+  compacting: boolean;
+}
+
+/** Header context-window gauge: current/limit tokens, percent, and whether a manual compaction is allowed right now. */
+interface ContextStats {
+  currentTokens: number;
+  limitTokens: number;
+  percent: number;
+  canCompact: boolean;
 }
 
 /** One staged attachment chip (id assigned by the host on validation). */
@@ -236,6 +251,9 @@ type Action =
   | { type: 'attachment_removed'; id: string }
   | { type: 'attachments_cleared' }
   | { type: 'sent_attachments'; attachments: AttachedFileRef[] }
+  | { type: 'context_stats'; currentTokens: number; limitTokens: number; percent: number; canCompact: boolean }
+  | { type: 'context_compacting'; active: boolean }
+  | { type: 'context_compacted'; summaryExcerpt: string; tokensBefore: number; tokensAfter: number }
   | { type: 'session_history'; entries: Record<string, unknown>[] };
 
 function commitStreaming(state: State): SessionEntry[] {
@@ -476,6 +494,36 @@ function reducer(state: State, action: Action): State {
         session: [...baseSession, statusEntry],
       };
     }
+    case 'context_stats':
+      return {
+        ...state,
+        contextStats: {
+          currentTokens: action.currentTokens,
+          limitTokens: action.limitTokens,
+          percent: action.percent,
+          canCompact: action.canCompact,
+        },
+      };
+    case 'context_compacting':
+      return { ...state, compacting: action.active };
+    case 'context_compacted':
+      return {
+        ...state,
+        session: [
+          ...commitStreaming(state),
+          {
+            type: 'compaction_divider',
+            summaryExcerpt: action.summaryExcerpt,
+            tokensBefore: action.tokensBefore,
+            tokensAfter: action.tokensAfter,
+            exclude_from_context: true,
+          },
+        ],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+      };
     case 'file_change':
       return {
         ...state,
@@ -585,6 +633,14 @@ function reducer(state: State, action: Action): State {
             parentDisplayName: String(e.parentDisplayName ?? ''),
             exclude_from_context: true,
           });
+        } else if (type === 'context_compacted') {
+          entries.push({
+            type: 'compaction_divider',
+            summaryExcerpt: String(e.summaryExcerpt ?? ''),
+            tokensBefore: typeof e.tokensBefore === 'number' ? e.tokensBefore : 0,
+            tokensAfter: typeof e.tokensAfter === 'number' ? e.tokensAfter : 0,
+            exclude_from_context: true,
+          });
         }
       }
       return { ...state, session: entries };
@@ -624,6 +680,8 @@ const initial: State = {
   toolgenToolName: '',
   toolgenStartedAt: null,
   attachedFiles: [],
+  contextStats: null,
+  compacting: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -762,6 +820,26 @@ function App() {
             durationSeconds: Number(msg.durationSeconds ?? 0),
           });
           break;
+        case 'context_stats':
+          dispatch({
+            type: 'context_stats',
+            currentTokens: Number(msg.currentTokens ?? 0),
+            limitTokens: Number(msg.limitTokens ?? 0),
+            percent: Number(msg.percent ?? 0),
+            canCompact: Boolean(msg.canCompact ?? false),
+          });
+          break;
+        case 'context_compacting':
+          dispatch({ type: 'context_compacting', active: Boolean(msg.active ?? false) });
+          break;
+        case 'context_compacted':
+          dispatch({
+            type: 'context_compacted',
+            summaryExcerpt: String(msg.summaryExcerpt ?? ''),
+            tokensBefore: Number(msg.tokensBefore ?? 0),
+            tokensAfter: Number(msg.tokensAfter ?? 0),
+          });
+          break;
         case 'file_change':
           dispatch({
             type: 'file_change',
@@ -855,6 +933,10 @@ function App() {
     vscode.postMessage({ type: 'stop' });
   }
 
+  function handleCompact() {
+    vscode.postMessage({ type: 'compact_now' });
+  }
+
   function handleDelete() {
     // Confirmation + deletion are driven by the extension host (native dialog).
     vscode.postMessage({ type: 'delete_session' });
@@ -883,7 +965,7 @@ function App() {
     dispatch({ type: 'resume_dismissed' });
   }
 
-  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.llmWaiting && !state.namingSession && !state.toolgenActive;
+  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.llmWaiting && !state.namingSession && !state.toolgenActive && !state.compacting;
 
   return (
     <div style={styles.root}>
@@ -902,6 +984,9 @@ function App() {
         currentProject={state.currentProject}
         cumulativeUsd={state.cumulativeUsd}
         lastCallTokens={state.lastCallTokens}
+        contextStats={state.contextStats}
+        compacting={state.compacting}
+        onCompact={handleCompact}
       />
 
       {/* Session feed */}
@@ -923,6 +1008,7 @@ function App() {
           />
         )}
         {state.namingSession && <NamingIndicator />}
+        {state.compacting && <CompactingIndicator />}
         {state.llmWaiting && <LlmWaitingIndicator waiting={state.llmWaiting} />}
         {state.awaitingLlm && !state.llmWaiting && <AwaitingIndicator />}
         {isEmpty && (
@@ -1126,6 +1212,14 @@ function NamingIndicator() {
   return (
     <div style={styles.awaitingLine}>
       {'Starting a new session '}<BouncingDots />
+    </div>
+  );
+}
+
+function CompactingIndicator() {
+  return (
+    <div style={styles.awaitingLine}>
+      {'Compacting context, please hold on '}<BouncingDots />
     </div>
   );
 }
@@ -1388,6 +1482,19 @@ function SessionEntryView({ entry }: SessionEntryViewProps) {
         </div>
       );
     }
+    case 'compaction_divider': {
+      const reduction =
+        entry.tokensBefore > 0 && entry.tokensAfter > 0
+          ? ` (${formatTokens(entry.tokensBefore)} → ${formatTokens(entry.tokensAfter)} tokens)`
+          : '';
+      return (
+        <div style={styles.subsessionDivider} title={entry.summaryExcerpt}>
+          <span style={styles.subsessionDividerLine} />
+          <span style={styles.subsessionDividerLabel}>{`✦ Context compacted${reduction}`}</span>
+          <span style={styles.subsessionDividerLine} />
+        </div>
+      );
+    }
   }
 }
 
@@ -1438,9 +1545,9 @@ const _MODE_TOOLTIPS = {
 type SecurityLevel = 'high' | 'normal' | 'low';
 
 const _SECURITY_LABEL: Record<SecurityLevel, string> = {
-  high: '🛡️ High Security',
-  normal: '🔐 Normal Security',
-  low: '🔓 Low Security',
+  high: '🛡️ Access Control: Defensive',
+  normal: '🔐 Access Control: Balanced',
+  low: '🔓 Access Control: Permissive',
 };
 
 const _SECURITY_NEXT: Record<SecurityLevel, SecurityLevel> = {
@@ -1502,9 +1609,12 @@ interface UsagePanelProps {
   currentProject: string;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
+  contextStats: ContextStats | null;
+  compacting: boolean;
+  onCompact: () => void;
 }
 
-function UsagePanel({ sessionName, currentProject, cumulativeUsd, lastCallTokens }: UsagePanelProps) {
+function UsagePanel({ sessionName, currentProject, cumulativeUsd, lastCallTokens, contextStats, compacting, onCompact }: UsagePanelProps) {
   // Always render both header lines so the session name and running cost are
   // visible from the very first frame — before a title is generated and before
   // any cost has accrued.
@@ -1518,7 +1628,7 @@ function UsagePanel({ sessionName, currentProject, cumulativeUsd, lastCallTokens
           Project: <strong>{currentProject}</strong> <span style={styles.usageDetail}>(locked for this session)</span>
         </div>
       )}
-      <div>
+      <div style={styles.usageCostLine}>
         <span style={styles.usageTotal}>
           Session cost: <strong>${cumulativeUsd.toFixed(4)}</strong>
         </span>
@@ -1528,9 +1638,32 @@ function UsagePanel({ sessionName, currentProject, cumulativeUsd, lastCallTokens
             {lastCallTokens.cache_read > 0 && ` ${lastCallTokens.cache_read}✦cached`}
           </span>
         )}
+        {contextStats !== null && (
+          <>
+            <span style={styles.usageDetail}>
+              {' '}| context: <strong>{formatTokens(contextStats.currentTokens)}</strong>
+              {' / '}{formatTokens(contextStats.limitTokens)}
+              {' ('}{contextStats.percent.toFixed(0)}%)
+            </span>
+            <button
+              style={contextStats.canCompact && !compacting ? styles.compactBtn : styles.compactBtnDisabled}
+              onClick={onCompact}
+              disabled={!contextStats.canCompact || compacting}
+              title={compacting ? 'Compaction in progress' : contextStats.canCompact ? 'Summarise and reset the LLM context now' : 'Available once the current turn has finished'}
+            >
+              Compact now
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
+}
+
+/** Compact a token count for the header: 1234 → "1,234", 25600 → "25.6K". */
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}K`;
+  return n.toLocaleString();
 }
 
 // ---------------------------------------------------------------------------
@@ -1839,8 +1972,32 @@ const styles = {
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
   usageName: { marginBottom: '2px', color: 'var(--vscode-foreground)' },
+  usageCostLine: { display: 'flex', alignItems: 'center', flexWrap: 'wrap' as const, gap: '2px' },
   usageTotal: { fontVariantNumeric: 'tabular-nums' },
   usageDetail: { opacity: 0.8 },
+  compactBtn: {
+    marginLeft: '8px',
+    background: 'transparent',
+    color: 'var(--vscode-textLink-foreground)',
+    border: '1px solid var(--vscode-textLink-foreground)',
+    borderRadius: '2px',
+    padding: '1px 8px',
+    cursor: 'pointer',
+    fontSize: '10px',
+    flexShrink: 0,
+  },
+  compactBtnDisabled: {
+    marginLeft: '8px',
+    background: 'transparent',
+    color: 'var(--vscode-descriptionForeground)',
+    border: '1px solid var(--vscode-panel-border)',
+    borderRadius: '2px',
+    padding: '1px 8px',
+    cursor: 'default',
+    fontSize: '10px',
+    opacity: 0.6,
+    flexShrink: 0,
+  },
   modeControls: {
     display: 'flex',
     flexWrap: 'wrap' as const,

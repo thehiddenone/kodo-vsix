@@ -131,6 +131,10 @@ export class SessionController {
   private tokens = '';
   private lastPrompt = '';
   private usage: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
+  /** Latest context gauge for the header (current/limit/percent + compactability). */
+  private contextStats: { currentTokens: number; limitTokens: number; percent: number; canCompact: boolean } | null = null;
+  /** True while a compaction run is in flight (drives the "Compacting…" banner). */
+  private compacting = false;
   private fileEvents: FileEventData[] = [];
   private pendingGate: GateData | null = null;
   private pendingQuestion: QuestionData | null = null;
@@ -292,6 +296,9 @@ export class SessionController {
       }
       case 'stop':
         this._sendStamped(makeRequest('stop', {}));
+        break;
+      case 'compact_now':
+        this._sendStamped(makeRequest('compact.now', {}));
         break;
       case 'delete_session':
         void this._confirmAndDelete();
@@ -558,6 +565,12 @@ export class SessionController {
     }
     if (this.usage.lastCallTokens !== null || this.usage.cumulativeUsd > 0) {
       this._post({ type: 'usage', ...this.usage });
+    }
+    if (this.contextStats !== null) {
+      this._post({ type: 'context_stats', ...this.contextStats });
+    }
+    if (this.compacting) {
+      this._post({ type: 'context_compacting', active: true });
     }
     for (const fe of this.fileEvents) {
       this._post({ type: 'file_change', ...fe });
@@ -873,6 +886,34 @@ export class SessionController {
           : null;
       this.usage = { cumulativeUsd, lastCallTokens };
       this._post({ type: 'usage', cumulativeUsd, lastCallTokens, durationSeconds });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'context.stats') {
+      const stats = {
+        currentTokens: Number(env.payload.current_tokens ?? 0),
+        limitTokens: Number(env.payload.limit_tokens ?? 0),
+        percent: Number(env.payload.percent ?? 0),
+        canCompact: Boolean(env.payload.can_compact ?? false),
+      };
+      this.contextStats = stats;
+      this._post({ type: 'context_stats', ...stats });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'context.compacting') {
+      this.compacting = Boolean(env.payload.active ?? false);
+      this._post({ type: 'context_compacting', active: this.compacting });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'context.compacted') {
+      this._post({
+        type: 'context_compacted',
+        summaryExcerpt: String(env.payload.summary_excerpt ?? ''),
+        tokensBefore: Number(env.payload.tokens_before ?? 0),
+        tokensAfter: Number(env.payload.tokens_after ?? 0),
+      });
       return;
     }
 
