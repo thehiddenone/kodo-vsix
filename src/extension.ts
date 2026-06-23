@@ -229,6 +229,7 @@ function _sessionDeps(): SessionDeps {
       _apiKeyQueue = _apiKeyQueue.then(() => _handleApiKeyRequest(vendor, requestId, send));
     },
     onSessionAssigned: () => undefined,
+    onLlamaState: _applyLlamaState,
     onClosed: (c) => sessions.delete(c.key),
     isDeactivating: () => deactivating,
   };
@@ -538,6 +539,58 @@ function sendControlAwait(
   });
 }
 
+/**
+ * Apply an `llama.state` event to the window-global sidebar mirror + progress
+ * UI. Called both from the control connection (explicit Start/Stop buttons) and
+ * — crucially — from any session connection, because llama.cpp is auto-started
+ * inside an engine run, which emits this event on that *session's* socket, not
+ * the control socket. Without the session-side forward the "starting…"
+ * notification and the sidebar's running state are lost on a prompt-triggered
+ * launch. The llama server is a window-wide singleton, so these updates are
+ * idempotent no matter which connection delivers them.
+ */
+function _applyLlamaState(payload: Record<string, unknown>): void {
+  if (Boolean(payload.starting)) {
+    llamaStartingState = true;
+    llamaRunningState = false;
+    sidebarProvider?.update({ llamaStarting: true, llamaRunning: false });
+    if (_llamaStartProgressResolve === null) {
+      vscode.window
+        .withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'llama.cpp is starting…', cancellable: false },
+          () => new Promise<void>((resolve) => { _llamaStartProgressResolve = resolve; }),
+        )
+        .then(undefined, () => undefined);
+    }
+    return;
+  }
+
+  llamaRunningState = Boolean(payload.running);
+  llamaRunningModelState =
+    llamaRunningState && typeof payload.model === 'string' ? payload.model : '';
+  llamaStartingState = false;
+  llamaStoppingState = false;
+
+  const errMsg = typeof payload.error === 'string' ? payload.error : '';
+  if (errMsg) {
+    vscode.window.showErrorMessage(`Kōdo: llama-server — ${errMsg}`);
+    _llamaStartProgressResolve?.();
+    _llamaStartProgressResolve = null;
+  } else if (llamaRunningState) {
+    const port = Number(payload.port ?? 8080);
+    _llamaStartProgressResolve?.();
+    _llamaStartProgressResolve = null;
+    vscode.window.showInformationMessage(`Kōdo: llama.cpp is running on localhost:${port}`);
+  }
+
+  sidebarProvider?.update({
+    llamaRunning: llamaRunningState,
+    llamaRunningModel: llamaRunningModelState,
+    llamaStarting: false,
+    llamaStopping: false,
+  });
+}
+
 function handleControlEnvelope(env: Envelope): void {
   if (env.kind === 'response' && env.correlation_id) {
     const resolver = _pendingControl.get(env.correlation_id);
@@ -573,45 +626,7 @@ function handleControlEnvelope(env: Envelope): void {
   }
 
   if (env.kind === 'event' && evtType === 'llama.state') {
-    if (Boolean(env.payload.starting)) {
-      llamaStartingState = true;
-      llamaRunningState = false;
-      sidebarProvider?.update({ llamaStarting: true, llamaRunning: false });
-      if (_llamaStartProgressResolve === null) {
-        vscode.window
-          .withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'llama.cpp is starting…', cancellable: false },
-            () => new Promise<void>((resolve) => { _llamaStartProgressResolve = resolve; }),
-          )
-          .then(undefined, () => undefined);
-      }
-      return;
-    }
-
-    llamaRunningState = Boolean(env.payload.running);
-    llamaRunningModelState =
-      llamaRunningState && typeof env.payload.model === 'string' ? env.payload.model : '';
-    llamaStartingState = false;
-    llamaStoppingState = false;
-
-    const errMsg = typeof env.payload.error === 'string' ? env.payload.error : '';
-    if (errMsg) {
-      vscode.window.showErrorMessage(`Kōdo: llama-server — ${errMsg}`);
-      _llamaStartProgressResolve?.();
-      _llamaStartProgressResolve = null;
-    } else if (llamaRunningState) {
-      const port = Number(env.payload.port ?? 8080);
-      _llamaStartProgressResolve?.();
-      _llamaStartProgressResolve = null;
-      vscode.window.showInformationMessage(`Kōdo: llama.cpp is running on localhost:${port}`);
-    }
-
-    sidebarProvider?.update({
-      llamaRunning: llamaRunningState,
-      llamaRunningModel: llamaRunningModelState,
-      llamaStarting: false,
-      llamaStopping: false,
-    });
+    _applyLlamaState(env.payload);
     return;
   }
 

@@ -94,6 +94,13 @@ export interface SessionDeps {
   handleApiKeyRequest: (vendor: string, requestId: string, send: (env: Envelope) => void) => void;
   /** Called once the server assigns/confirms this session's id. */
   onSessionAssigned: (c: SessionController, sessionId: string) => void;
+  /**
+   * Forward a window-global `llama.state` event to the host. llama.cpp is
+   * auto-started inside an engine run, so the event arrives on THIS session's
+   * socket (not the session-less control connection); the host owns the sidebar
+   * mirror + "starting…" progress notification.
+   */
+  onLlamaState: (payload: Record<string, unknown>) => void;
   /** Called when the panel is disposed (user closed the tab, or reload). */
   onClosed: (c: SessionController) => void;
   /** True while the extension host is deactivating (window reload/close). */
@@ -769,6 +776,14 @@ export class SessionController {
         return { name: String(rec.name ?? ''), path: String(rec.path ?? '') };
       });
       this._post({ type: 'sent_attachments', attachments });
+      return;
+    }
+
+    // llama.cpp is auto-started inside this session's engine run, so its state
+    // events land here rather than on the control connection. Hand them to the
+    // host's window-global handler (sidebar mirror + "starting…" progress).
+    if (env.kind === 'event' && evtType === 'llama.state') {
+      this.deps.onLlamaState(env.payload);
       return;
     }
 

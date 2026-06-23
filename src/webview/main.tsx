@@ -1852,7 +1852,7 @@ const styles = {
     flex: 1,
     minWidth: '130px',
     padding: '4px 8px',
-    fontSize: '11px',
+    fontSize: '14px',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
