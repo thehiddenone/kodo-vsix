@@ -423,6 +423,24 @@ interface SessionPickItem extends vscode.QuickPickItem {
   disabledReason?: string;
 }
 
+/** Render an ISO-8601 timestamp as a short local date/time, or "unknown". */
+function formatTimestamp(iso: string): string {
+  if (!iso) {
+    return 'unknown';
+  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown';
+  }
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 async function pickSession(): Promise<void> {
   let resp: Record<string, unknown>;
   try {
@@ -452,10 +470,13 @@ async function pickSession(): Promise<void> {
     }
 
     const kindLabel = root ? `Guided · ${path.basename(root)}` : 'Problem solving';
+    const created = typeof s.created_at === 'string' ? s.created_at : '';
+    const lastModified = typeof s.last_modified === 'string' ? s.last_modified : '';
+    const timeLabel = `created ${formatTimestamp(created)}, last modified ${formatTimestamp(lastModified)}`;
     items.push({
       label: (disabledReason ? '$(circle-slash) ' : '$(comment-discussion) ') + name,
       description: openHere ? `${kindLabel} · (opened here)` : kindLabel,
-      detail: disabledReason,
+      detail: disabledReason ? `${disabledReason} · ${timeLabel}` : timeLabel,
       sessionId: id,
       disabledReason,
     });
