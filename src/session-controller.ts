@@ -378,6 +378,16 @@ export class SessionController {
   }
 
   private _rehydrate(): void {
+    // Re-persist the session id now that the webview is provably listening (it
+    // just posted 'ready'). The live `persist_session_id` from _onHelloAck can
+    // fire before the webview attaches its message listener — the hello round-
+    // trip to the localhost server routinely beats the first React mount — and
+    // is then lost. Without this, the id is never written to VS Code webview
+    // state, so on the next window restore the panel deserializes with no id
+    // and the server mints a brand-new session instead of resuming this one.
+    if (this.sessionId) {
+      this._post({ type: 'persist_session_id', sessionId: this.sessionId });
+    }
     this._post({ type: 'workspace_status', hasWorkspace: this.deps.hasWorkspace() });
     this._post({ type: 'status', connected: this.connected });
     this._post({ type: 'stage', stage: this.stage, agent: this.agent });
