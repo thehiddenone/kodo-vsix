@@ -125,7 +125,7 @@ type SessionEntry =
   | { type: 'subsession_divider'; phase: 'start' | 'end'; displayName: string; parentDisplayName: string; exclude_from_context: true }
   // Context-compaction divider: marks where the prior conversation was summarised
   // and the live LLM context reset. Everything above stays visible as history.
-  | { type: 'compaction_divider'; summaryExcerpt: string; tokensBefore: number; tokensAfter: number; exclude_from_context: true };
+  | { type: 'compaction_divider'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number; exclude_from_context: true };
 
 // ---------------------------------------------------------------------------
 // State
@@ -253,7 +253,7 @@ type Action =
   | { type: 'sent_attachments'; attachments: AttachedFileRef[] }
   | { type: 'context_stats'; currentTokens: number; limitTokens: number; percent: number; canCompact: boolean }
   | { type: 'context_compacting'; active: boolean }
-  | { type: 'context_compacted'; summaryExcerpt: string; tokensBefore: number; tokensAfter: number }
+  | { type: 'context_compacted'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number }
   | { type: 'session_history'; entries: Record<string, unknown>[] };
 
 function commitStreaming(state: State): SessionEntry[] {
@@ -514,6 +514,7 @@ function reducer(state: State, action: Action): State {
           {
             type: 'compaction_divider',
             summaryExcerpt: action.summaryExcerpt,
+            summary: action.summary,
             tokensBefore: action.tokensBefore,
             tokensAfter: action.tokensAfter,
             exclude_from_context: true,
@@ -637,6 +638,7 @@ function reducer(state: State, action: Action): State {
           entries.push({
             type: 'compaction_divider',
             summaryExcerpt: String(e.summaryExcerpt ?? ''),
+            summary: String(e.summary ?? e.summaryExcerpt ?? ''),
             tokensBefore: typeof e.tokensBefore === 'number' ? e.tokensBefore : 0,
             tokensAfter: typeof e.tokensAfter === 'number' ? e.tokensAfter : 0,
             exclude_from_context: true,
@@ -836,6 +838,7 @@ function App() {
           dispatch({
             type: 'context_compacted',
             summaryExcerpt: String(msg.summaryExcerpt ?? ''),
+            summary: String(msg.summary ?? msg.summaryExcerpt ?? ''),
             tokensBefore: Number(msg.tokensBefore ?? 0),
             tokensAfter: Number(msg.tokensAfter ?? 0),
           });
@@ -1284,6 +1287,31 @@ function ThinkingBlock({ content, isActive, startedAt = null, durationMs = null 
 }
 
 // ---------------------------------------------------------------------------
+// CompactionBlock component
+// ---------------------------------------------------------------------------
+
+/**
+ * Marks where the prior conversation was summarised and the live LLM context
+ * reset. Rendered as a collapsible block in the same visual language as
+ * ThinkingBlock: the summary line shows "✦ Context compacted (before → after
+ * tokens)" and expanding it reveals the full summary — i.e. the exact context
+ * the conversation continues from after compaction. Everything above the block
+ * stays visible as history but is no longer part of the LLM context.
+ */
+function CompactionBlock({ summary, tokensBefore, tokensAfter }: { summary: string; tokensBefore: number; tokensAfter: number }) {
+  const reduction =
+    tokensBefore > 0 && tokensAfter > 0
+      ? ` (${formatTokens(tokensBefore)} → ${formatTokens(tokensAfter)} tokens)`
+      : '';
+  return (
+    <details style={styles.thinkingBlock}>
+      <summary style={styles.thinkingSummary}>{`✦ Context compacted${reduction}`}</summary>
+      <div style={styles.thinkingContent}>{summary || '(no summary recorded)'}</div>
+    </details>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ToolgenBlock component
 // ---------------------------------------------------------------------------
 
@@ -1482,19 +1510,14 @@ function SessionEntryView({ entry }: SessionEntryViewProps) {
         </div>
       );
     }
-    case 'compaction_divider': {
-      const reduction =
-        entry.tokensBefore > 0 && entry.tokensAfter > 0
-          ? ` (${formatTokens(entry.tokensBefore)} → ${formatTokens(entry.tokensAfter)} tokens)`
-          : '';
+    case 'compaction_divider':
       return (
-        <div style={styles.subsessionDivider} title={entry.summaryExcerpt}>
-          <span style={styles.subsessionDividerLine} />
-          <span style={styles.subsessionDividerLabel}>{`✦ Context compacted${reduction}`}</span>
-          <span style={styles.subsessionDividerLine} />
-        </div>
+        <CompactionBlock
+          summary={entry.summary}
+          tokensBefore={entry.tokensBefore}
+          tokensAfter={entry.tokensAfter}
+        />
       );
-    }
   }
 }
 

@@ -911,6 +911,7 @@ export class SessionController {
       this._post({
         type: 'context_compacted',
         summaryExcerpt: String(env.payload.summary_excerpt ?? ''),
+        summary: String(env.payload.summary ?? env.payload.summary_excerpt ?? ''),
         tokensBefore: Number(env.payload.tokens_before ?? 0),
         tokensAfter: Number(env.payload.tokens_after ?? 0),
       });
