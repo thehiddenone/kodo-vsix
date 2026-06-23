@@ -14,6 +14,7 @@
  * connection; they are NOT handled here.
  */
 
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeRequest, makeResponse } from './envelope';
@@ -21,6 +22,26 @@ import type { Envelope } from './envelope';
 import { WsClient } from './ws-client';
 
 const TOKEN_BUFFER_MAX = 64 * 1024;
+
+/** Most attachments a prompt may carry (one per slot in the webview's area). */
+const MAX_ATTACHMENTS = 9;
+/** Per-file and total-attachment text-content cap (128 KB). */
+const MAX_ATTACH_BYTES = 128 * 1024;
+
+/**
+ * A file staged for the next prompt. The host holds only display metadata and
+ * the absolute path — the file's *content* is never read into the extension nor
+ * shipped over the wire. On submit the path rides a control tag in the prompt
+ * (see {@link _composePrompt}); the server reads, validates, copies, and injects
+ * the file. `size` is kept solely for the local running-total pre-check that
+ * gives the user immediate feedback before the server's authoritative gate.
+ */
+interface AttachedFile {
+  name: string;
+  /** Absolute path on disk; used to build the attachment control tag. */
+  path: string;
+  size: number;
+}
 
 export interface LastCallTokens {
   input: number;
@@ -112,6 +133,9 @@ export class SessionController {
   private workflowMode: 'guided' | 'problem_solving' = 'problem_solving';
   private currentProject: { root: string; name: string } | null = null;
   private resumeSessionId: string | null = null;
+  /** Validated files staged to be prepended to the next prompt, keyed by chip id. */
+  private readonly attachedFiles = new Map<string, AttachedFile>();
+  private _attachSeq = 0;
 
   constructor(
     private readonly deps: SessionDeps,
@@ -265,6 +289,12 @@ export class SessionController {
       case 'delete_session':
         void this._confirmAndDelete();
         break;
+      case 'attach_file':
+        void this._attachFiles();
+        break;
+      case 'remove_attachment':
+        this.attachedFiles.delete(String(msg.id ?? ''));
+        break;
       case 'mode_set': {
         const autonomous = Boolean(msg.autonomous);
         this.autonomous = autonomous;
@@ -326,7 +356,118 @@ export class SessionController {
     this.fileEvents = [];
     this.pendingGate = null;
     this.pendingQuestion = null;
-    this._sendStamped(makeRequest('prompt.submit', { text }));
+    this._sendStamped(makeRequest('prompt.submit', { text: this._composePrompt(text) }));
+    this._clearAttachments();
+  }
+
+  /**
+   * Prepend a single machine-generated control line listing the staged
+   * attachment paths, which the server parses, strips, and replaces with the
+   * files' content when prepping the prompt for the LLM. The content itself is
+   * never embedded here, so it never lands in `session.jsonl`. Format:
+   *
+   *   <!--KODO_ATTACHMENTS:["/abs/a.py","/abs/b.md"]-->
+   *   <the user's prompt>
+   *
+   * Kept byte-compatible with `kodo.runtime._attachments.parse_attachment_marker`.
+   */
+  private _composePrompt(text: string): string {
+    if (this.attachedFiles.size === 0) {
+      return text;
+    }
+    const paths = [...this.attachedFiles.values()].map((f) => f.path);
+    return `<!--KODO_ATTACHMENTS:${JSON.stringify(paths)}-->\n${text}`;
+  }
+
+  /** Forget all staged attachments and clear their chips in the webview. */
+  private _clearAttachments(): void {
+    if (this.attachedFiles.size === 0) {
+      return;
+    }
+    this.attachedFiles.clear();
+    this._post({ type: 'attachments_cleared' });
+  }
+
+  /**
+   * Open a file picker and stage each chosen file after a sanity check: it must
+   * be a text file (no binary/NUL bytes), at most 128 KB on its own, and must
+   * not push the combined attachment size to/over 128 KB. Rejections surface a
+   * native error message explaining why; accepted files post `attachment_added`.
+   */
+  private async _attachFiles(): Promise<void> {
+    if (this.attachedFiles.size >= MAX_ATTACHMENTS) {
+      void vscode.window.showWarningMessage(`Kōdo: You can attach at most ${MAX_ATTACHMENTS} files.`);
+      return;
+    }
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      openLabel: 'Attach',
+      title: 'Attach text files to your prompt',
+    });
+    if (!uris || uris.length === 0) {
+      return;
+    }
+    for (const uri of uris) {
+      if (this.attachedFiles.size >= MAX_ATTACHMENTS) {
+        void vscode.window.showWarningMessage(
+          `Kōdo: You can attach at most ${MAX_ATTACHMENTS} files — some files were not attached.`,
+        );
+        break;
+      }
+      await this._tryAttachOne(uri);
+    }
+  }
+
+  /**
+   * Validate a single file for instant user feedback and, if it passes, stage
+   * its path + chip. The content is read here only to validate (text + size);
+   * it is discarded — the server re-reads, re-validates, and copies the file at
+   * submit time and is the authoritative gate (the original may change before
+   * the prompt is sent).
+   */
+  private async _tryAttachOne(uri: vscode.Uri): Promise<void> {
+    const name = path.basename(uri.fsPath);
+    let data: Buffer;
+    try {
+      data = await fs.promises.readFile(uri.fsPath);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`Kōdo: Cannot attach "${name}" — ${String(err)}`);
+      return;
+    }
+    // A NUL byte (or a UTF-8 decode failure) means this is not a text file.
+    if (data.includes(0) || !_isValidUtf8(data)) {
+      void vscode.window.showErrorMessage(
+        `Kōdo: Cannot attach "${name}" — it appears to be a binary file. Only text files can be attached.`,
+      );
+      return;
+    }
+    const size = data.byteLength;
+    if (size > MAX_ATTACH_BYTES) {
+      void vscode.window.showErrorMessage(
+        `Kōdo: Cannot attach "${name}" — its text content is larger than 128 KB.`,
+      );
+      return;
+    }
+    if (this._attachedBytes() + size > MAX_ATTACH_BYTES) {
+      void vscode.window.showErrorMessage(
+        `Kōdo: Cannot attach "${name}" — the combined size of attached files would exceed the 128 KB limit.`,
+      );
+      return;
+    }
+    const id = `att-${++this._attachSeq}`;
+    this.attachedFiles.set(id, { name, path: uri.fsPath, size });
+    this._post({ type: 'attachment_added', id, name, path: uri.fsPath });
+  }
+
+  /** Total text-content bytes across all staged attachments. */
+  private _attachedBytes(): number {
+    let total = 0;
+    for (const f of this.attachedFiles.values()) {
+      total += f.size;
+    }
+    return total;
   }
 
   /**
@@ -422,6 +563,10 @@ export class SessionController {
     }
     if (this.resumeSessionId !== null) {
       this._post({ type: 'resume_offer', sessionId: this.resumeSessionId });
+    }
+    // Staged attachments live on the host, so restore their chips on reload.
+    for (const [id, f] of this.attachedFiles) {
+      this._post({ type: 'attachment_added', id, name: f.name, path: f.path });
     }
   }
 
@@ -614,6 +759,19 @@ export class SessionController {
       return;
     }
 
+    // The server stored this prompt's attachments and copied them into the
+    // session. Hand the absolute stored-copy paths to the webview so the chips
+    // on the just-sent bubble open the durable copies (not the originals).
+    if (env.kind === 'event' && evtType === 'user.attachments') {
+      const raw = Array.isArray(env.payload.attachments) ? env.payload.attachments : [];
+      const attachments = raw.map((a) => {
+        const rec = a as Record<string, unknown>;
+        return { name: String(rec.name ?? ''), path: String(rec.path ?? '') };
+      });
+      this._post({ type: 'sent_attachments', attachments });
+      return;
+    }
+
     if (env.kind === 'event' && evtType === 'llm.turn_start') {
       this._post({ type: 'llm_turn_start' });
       return;
@@ -803,6 +961,20 @@ export class SessionController {
   /** Notify the webview of a workspace open/close gate change. */
   postWorkspaceStatus(hasWorkspace: boolean): void {
     this._post({ type: 'workspace_status', hasWorkspace });
+  }
+}
+
+/**
+ * True iff `data` decodes cleanly as UTF-8. Used (alongside a NUL-byte scan) to
+ * reject binary files: `Buffer.toString('utf8')` silently substitutes U+FFFD on
+ * malformed input, so a fatal TextDecoder is needed to actually detect it.
+ */
+function _isValidUtf8(data: Buffer): boolean {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(data);
+    return true;
+  } catch {
+    return false;
   }
 }
 

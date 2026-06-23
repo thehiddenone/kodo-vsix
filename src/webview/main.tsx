@@ -88,7 +88,7 @@ interface DiffLinkData {
 }
 
 type SessionEntry =
-  | { type: 'user_message'; content: string; exclude_from_context: false }
+  | { type: 'user_message'; content: string; attachments: AttachedFileRef[]; exclude_from_context: false }
   | { type: 'assistant_response'; content: string; exclude_from_context: false }
   | {
       type: 'tool_call';
@@ -172,6 +172,30 @@ interface State {
   toolgenToolName: string;
   /** Client clock (ms) when tool-arg streaming began; drives the elapsed timer. */
   toolgenStartedAt: number | null;
+  /**
+   * Files staged to be injected ahead of the next prompt. Display metadata only
+   * — the file content lives in the extension host (it reads + validates the
+   * files and prepends them to prompt.submit). Capacity is capped at 9.
+   */
+  attachedFiles: AttachedFile[];
+}
+
+/** One staged attachment chip (id assigned by the host on validation). */
+interface AttachedFile {
+  id: string;
+  name: string;
+  /** Absolute path on disk; preserved so the sent chip can re-open the file. */
+  path: string;
+}
+
+/**
+ * A file attachment baked into a sent user message. Unlike a staged
+ * {@link AttachedFile} it has no id (it can no longer be removed) but keeps the
+ * path so its chip stays clickable (opens the file in VS Code).
+ */
+interface AttachedFileRef {
+  name: string;
+  path: string;
 }
 
 type Action =
@@ -208,6 +232,10 @@ type Action =
   | { type: 'current_project'; name: string }
   | { type: 'session_naming'; active: boolean }
   | { type: 'session_cleared' }
+  | { type: 'attachment_added'; id: string; name: string; path: string }
+  | { type: 'attachment_removed'; id: string }
+  | { type: 'attachments_cleared' }
+  | { type: 'sent_attachments'; attachments: AttachedFileRef[] }
   | { type: 'session_history'; entries: Record<string, unknown>[] };
 
 function commitStreaming(state: State): SessionEntry[] {
@@ -255,7 +283,32 @@ function reducer(state: State, action: Action): State {
         pendingGate: null,
         pendingQuestion: null,
         namingSession: false,
+        attachedFiles: [],
       };
+    case 'attachment_added':
+      // Host validated the file and assigned it an id; show its chip.
+      if (state.attachedFiles.some((f) => f.id === action.id)) return state;
+      return { ...state, attachedFiles: [...state.attachedFiles, { id: action.id, name: action.name, path: action.path }] };
+    case 'attachment_removed':
+      return { ...state, attachedFiles: state.attachedFiles.filter((f) => f.id !== action.id) };
+    case 'attachments_cleared':
+      // Host consumed the staged files (injected them into the submitted prompt).
+      return { ...state, attachedFiles: [] };
+    case 'sent_attachments': {
+      // The server stored the just-sent prompt's attachments and copied them
+      // into the session. Retarget the most recent user_message's chips to the
+      // durable stored copies (and reflect any the server dropped). Walk from
+      // the end so the freshest bubble — the one we optimistically rendered on
+      // prompt_sent — is the one updated.
+      const idx = [...state.session].reverse().findIndex((e) => e.type === 'user_message');
+      if (idx === -1) return state;
+      const at = state.session.length - 1 - idx;
+      const target = state.session[at];
+      if (target.type !== 'user_message') return state;
+      const session = [...state.session];
+      session[at] = { ...target, attachments: action.attachments };
+      return { ...state, session };
+    }
     case 'llm_turn_start':
       // A new turn begins; clear any leftover toolgen indicator (e.g. from a
       // cancelled prior turn that never produced a tool_call entry).
@@ -342,9 +395,12 @@ function reducer(state: State, action: Action): State {
       };
     }
     case 'prompt_sent':
+      // Bake the staged attachments into this user message so the fact that
+      // files rode along is preserved in the feed, then clear the staging area.
       return {
         ...state,
-        session: [...state.session, { type: 'user_message', content: action.text, exclude_from_context: false }],
+        session: [...state.session, { type: 'user_message', content: action.text, attachments: state.attachedFiles.map((f) => ({ name: f.name, path: f.path })), exclude_from_context: false }],
+        attachedFiles: [],
         streamingTokens: '',
         streaming: false,
         awaitingLlm: false,
@@ -357,7 +413,7 @@ function reducer(state: State, action: Action): State {
       if (state.session.length > 0) return state;
       return {
         ...state,
-        session: [{ type: 'user_message', content: action.text, exclude_from_context: false }],
+        session: [{ type: 'user_message', content: action.text, attachments: [], exclude_from_context: false }],
       };
     case 'agent_started':
       return { ...state, agent: action.agent };
@@ -469,7 +525,17 @@ function reducer(state: State, action: Action): State {
       const entries: SessionEntry[] = [];
       for (const e of action.entries) {
         const type = String(e.type ?? '');
-        if (type === 'user_message' || type === 'assistant_response') {
+        if (type === 'user_message') {
+          // The server persists attachments as links (name + absolute path of
+          // the session's stored copy), never inline content, so rebuild the
+          // clickable chips from those links.
+          const rawAtts = Array.isArray(e.attachments) ? e.attachments : [];
+          const attachments = rawAtts.map((a) => {
+            const rec = a as Record<string, unknown>;
+            return { name: String(rec.name ?? ''), path: String(rec.path ?? '') };
+          });
+          entries.push({ type, content: String(e.content ?? ''), attachments, exclude_from_context: false });
+        } else if (type === 'assistant_response') {
           entries.push({ type, content: String(e.content ?? ''), exclude_from_context: false });
         } else if (type === 'thinking_block') {
           entries.push({ type: 'thinking_block', content: String(e.content ?? ''), durationMs: typeof e.durationMs === 'number' ? e.durationMs : null, exclude_from_context: true });
@@ -557,6 +623,7 @@ const initial: State = {
   toolgenActive: false,
   toolgenToolName: '',
   toolgenStartedAt: null,
+  attachedFiles: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -589,6 +656,21 @@ function App() {
         case 'session_cleared':
           dispatch({ type: 'session_cleared' });
           break;
+        case 'attachment_added':
+          dispatch({ type: 'attachment_added', id: String(msg.id ?? ''), name: String(msg.name ?? ''), path: String(msg.path ?? '') });
+          break;
+        case 'attachments_cleared':
+          dispatch({ type: 'attachments_cleared' });
+          break;
+        case 'sent_attachments': {
+          const raw = Array.isArray(msg.attachments) ? msg.attachments : [];
+          const attachments = raw.map((a) => {
+            const rec = a as Record<string, unknown>;
+            return { name: String(rec.name ?? ''), path: String(rec.path ?? '') };
+          });
+          dispatch({ type: 'sent_attachments', attachments });
+          break;
+        }
         case 'token':
           dispatch({ type: 'token', text: String(msg.text ?? '') });
           break;
@@ -778,6 +860,18 @@ function App() {
     vscode.postMessage({ type: 'delete_session' });
   }
 
+  function handleAttach() {
+    // The open dialog, validation, and file reading all live in the host; it
+    // posts back `attachment_added` for each accepted file.
+    vscode.postMessage({ type: 'attach_file' });
+  }
+
+  function removeAttachment(id: string) {
+    // Drop the chip locally and tell the host to forget the file's content.
+    dispatch({ type: 'attachment_removed', id });
+    vscode.postMessage({ type: 'remove_attachment', id });
+  }
+
   function handleInput(e: Event) {
     const el = e.currentTarget as HTMLTextAreaElement;
     el.style.height = 'auto';
@@ -886,7 +980,7 @@ function App() {
             connected={state.connected}
           />
           <div style={styles.inputFooter}>
-            <div style={{ flex: 1 }} />
+            <AttachedFilesArea files={state.attachedFiles} onRemove={removeAttachment} />
             <div style={styles.footerButtons}>
               <button
                 style={styles.sendBtn}
@@ -898,7 +992,9 @@ function App() {
               </button>
               <button
                 style={styles.attachBtn}
-                title="Attach files (coming soon)"
+                onClick={handleAttach}
+                disabled={!state.connected || state.attachedFiles.length >= 9}
+                title="Attach text files to the next prompt"
               >
                 +
               </button>
@@ -922,6 +1018,35 @@ function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AttachedFilesArea — staged-attachment chips, left of the footer buttons
+// ---------------------------------------------------------------------------
+
+/**
+ * The space to the left of the footer buttons. Holds up to 9 attachment chips,
+ * each a hollow yellow-bordered rounded rectangle showing the (truncated) file
+ * name and a clickable 🗑 that removes it. File content is owned by the host.
+ */
+function AttachedFilesArea({ files, onRemove }: { files: AttachedFile[]; onRemove: (id: string) => void }) {
+  return (
+    <div style={styles.attachArea}>
+      {files.map((f) => (
+        <div key={f.id} style={styles.attachChip} title={f.name}>
+          <span style={styles.attachChipName}>{f.name}</span>
+          <span
+            style={styles.attachChipRemove}
+            title="Remove attachment"
+            role="button"
+            onClick={() => onRemove(f.id)}
+          >
+            {'🗑'}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1177,7 +1302,27 @@ interface SessionEntryViewProps {
 function SessionEntryView({ entry }: SessionEntryViewProps) {
   switch (entry.type) {
     case 'user_message':
-      return <div style={styles.userPrompt}>{entry.content}</div>;
+      return (
+        <div style={styles.userPrompt}>
+          <div style={styles.userPromptText}>{entry.content}</div>
+          {entry.attachments.length > 0 && (
+            <div style={styles.userPromptAttachments}>
+              {entry.attachments.map((a, i) => (
+                <div
+                  key={i}
+                  style={styles.sentAttachChip}
+                  title={`Open ${a.path}`}
+                  role="button"
+                  onClick={() => vscode.postMessage({ type: 'open_file', path: a.path })}
+                >
+                  <span style={styles.sentAttachIcon}>📄</span>
+                  <span style={styles.attachChipName}>{a.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
     case 'assistant_response':
       return <div style={styles.agentTokens}>{entry.content}</div>;
     case 'status_response': {
@@ -1583,6 +1728,44 @@ const styles = {
     fontWeight: 'bold',
     flexShrink: 0,
   },
+  attachArea: {
+    flex: 1,
+    minWidth: 0,
+    alignSelf: 'stretch',
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    alignContent: 'flex-start',
+    alignItems: 'flex-start',
+    gap: '4px',
+    overflowY: 'auto' as const,
+    paddingRight: '8px',
+  },
+  attachChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    maxWidth: '140px',
+    boxSizing: 'border-box' as const,
+    padding: '2px 6px',
+    border: '1px solid #c8a400',
+    borderRadius: '6px',
+    background: 'transparent',
+    fontSize: '11px',
+    height: '22px',
+  },
+  attachChipName: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+  },
+  attachChipRemove: {
+    flexShrink: 0,
+    cursor: 'pointer',
+    fontSize: '11px',
+    lineHeight: 1,
+  },
   globalStopBtn: {
     background: 'transparent',
     color: 'var(--vscode-errorForeground)',
@@ -1690,18 +1873,55 @@ const styles = {
     minHeight: '80px',
   },
   userPrompt: {
+    // Shrink-to-fit chat bubble pinned to the right edge (marginLeft:auto), so
+    // it no longer spans the full WebView width and grows with its content
+    // (including any attached-file chips below the text).
     background: 'var(--vscode-input-background)',
     border: '1px solid #107C41',
     borderRadius: '6px',
     padding: '12px 20px',
     marginTop: '40px',
     marginBottom: '40px',
+    marginLeft: 'auto',
+    width: 'fit-content',
+    maxWidth: '85%',
+    boxSizing: 'border-box' as const,
     color: 'var(--vscode-input-foreground)',
-    fontFamily: "Georgia, 'Times New Roman', serif",
-    fontSize: '13px',
+    // Match the agent-response font (inherited editor font), one notch larger.
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+    fontSize: 'calc(var(--vscode-editor-font-size, 13px) + 2px)',
     textAlign: 'right',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
+  },
+  userPromptText: {
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+  },
+  userPromptAttachments: {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '4px',
+    justifyContent: 'flex-end',
+    marginTop: '8px',
+  },
+  sentAttachChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    maxWidth: '160px',
+    boxSizing: 'border-box' as const,
+    padding: '2px 8px',
+    border: '1px solid #c8a400',
+    borderRadius: '6px',
+    background: 'transparent',
+    fontSize: '11px',
+    height: '22px',
+    cursor: 'pointer',
+    textAlign: 'left' as const,
+  },
+  sentAttachIcon: {
+    flexShrink: 0,
+    fontSize: '11px',
+    lineHeight: 1,
   },
   agentTokens: {
     whiteSpace: 'pre-wrap',
