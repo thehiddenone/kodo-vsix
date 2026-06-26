@@ -8,6 +8,7 @@
  */
 
 import { h, render } from 'preact';
+import type { ComponentChildren } from 'preact';
 import { useEffect, useReducer, useRef, useState } from 'preact/hooks';
 
 declare function acquireVsCodeApi(): {
@@ -21,6 +22,21 @@ const vscode = acquireVsCodeApi();
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
+
+/** Edit Control posture the Edit toggle cycles through. `smart` is the default. */
+type EditControl = 'review_all' | 'allow_all' | 'smart';
+/** Command Control posture the Command toggle cycles through. `smart` is the default. */
+type CommandControl = 'defensive' | 'permissive' | 'smart';
+
+/** Coerce an untyped wire value into a valid {@link EditControl} (default smart). */
+function coerceEditControl(value: unknown): EditControl {
+  return value === 'review_all' || value === 'allow_all' ? value : 'smart';
+}
+
+/** Coerce an untyped wire value into a valid {@link CommandControl} (default smart). */
+function coerceCommandControl(value: unknown): CommandControl {
+  return value === 'defensive' || value === 'permissive' ? value : 'smart';
+}
 
 interface LastCallTokens {
   input: number;
@@ -123,6 +139,9 @@ type SessionEntry =
   // Sub-agent takeover dividers. 'start' marks a sub-agent taking over from the
   // main agent; 'end' marks the main agent resuming. Display-only.
   | { type: 'subsession_divider'; phase: 'start' | 'end'; displayName: string; parentDisplayName: string; exclude_from_context: true }
+  // The structured task brief the engine handed a sub-agent on spawn. Rendered as
+  // a distinct card (NOT the user's prompt bubble) even though it rides a user turn.
+  | { type: 'subagent_task'; content: string; exclude_from_context: true }
   // Context-compaction divider: marks where the prior conversation was summarised
   // and the live LLM context reset. Everything above stays visible as history.
   | { type: 'compaction_divider'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number; exclude_from_context: true };
@@ -159,9 +178,23 @@ interface State {
   fileEvents: FileEventData[];
   pendingGate: GateData | null;
   pendingQuestion: QuestionData | null;
+  // The two *frozen* toggles are pairs: the user-facing *selected* value (flips
+  // the instant the user clicks) and the per-turn frozen *effective* value the
+  // server reports. While a turn runs and the two differ, the toggle is "queued
+  // for the next prompt"; otherwise it is "in effect".
   autonomous: boolean;
+  effectiveAutonomous: boolean;
   /** Per-session workflow mode; toggled in this tab's header. */
   workflowMode: 'guided' | 'problem_solving';
+  effectiveWorkflowMode: 'guided' | 'problem_solving';
+  // Edit/Command Control are never frozen. The host owns them and sends the
+  // *shown* value (forced to Allow All / Permissive while Autonomous is in
+  // effect) plus `editCommandLocked`, which disables both toggles in the UI.
+  editControl: EditControl;
+  commandControl: CommandControl;
+  editCommandLocked: boolean;
+  /** True while a turn is in progress (server phase "running"); gates the frozen toggles' "queued" status. */
+  running: boolean;
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
   awaitingLlm: boolean;
@@ -228,7 +261,7 @@ type Action =
   | { type: 'stage'; stage: string; agent: string | null }
   | { type: 'agent_started'; agent: string }
   | { type: 'agent_finished'; agent: string }
-  | { type: 'subsession_started'; displayName: string }
+  | { type: 'subsession_started'; displayName: string; task: string }
   | { type: 'subsession_ended'; displayName: string; parentDisplayName: string }
   | { type: 'prompt_sent'; text: string }
   | { type: 'restore_prompt'; text: string }
@@ -238,8 +271,17 @@ type Action =
   | { type: 'approval_cleared' }
   | { type: 'question_request'; requestId: string; question: string; mode: string; choices: QuestionChoice[] | null }
   | { type: 'question_cleared' }
-  | { type: 'autonomous_changed'; autonomous: boolean }
-  | { type: 'workflow_changed'; mode: 'guided' | 'problem_solving' }
+  | {
+      type: 'mode_state';
+      autonomous: boolean;
+      effectiveAutonomous: boolean;
+      workflowMode: 'guided' | 'problem_solving';
+      effectiveWorkflowMode: 'guided' | 'problem_solving';
+      editControl: EditControl;
+      commandControl: CommandControl;
+      editCommandLocked: boolean;
+      running: boolean;
+    }
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
   | { type: 'post_update'; message: string }
@@ -439,14 +481,18 @@ function reducer(state: State, action: Action): State {
       return { ...state, agent: null };
     case 'subsession_started': {
       // A sub-agent takes over: commit any in-flight main streaming first, then
-      // drop a "took over from" divider into the feed.
+      // drop a "took over from" divider into the feed, followed by the structured
+      // task brief the sub-agent was handed (a distinct card, not a user bubble).
       const baseSession = commitStreaming(state);
+      const startEntries: SessionEntry[] = [
+        { type: 'subsession_divider', phase: 'start', displayName: action.displayName, parentDisplayName: '', exclude_from_context: true },
+      ];
+      if (action.task) {
+        startEntries.push({ type: 'subagent_task', content: action.task, exclude_from_context: true });
+      }
       return {
         ...state,
-        session: [
-          ...baseSession,
-          { type: 'subsession_divider', phase: 'start', displayName: action.displayName, parentDisplayName: '', exclude_from_context: true },
-        ],
+        session: [...baseSession, ...startEntries],
         streamingTokens: '',
         streamingThinking: '',
         thinkingActive: false,
@@ -556,10 +602,18 @@ function reducer(state: State, action: Action): State {
       };
     case 'question_cleared':
       return { ...state, pendingQuestion: null };
-    case 'autonomous_changed':
-      return { ...state, autonomous: action.autonomous };
-    case 'workflow_changed':
-      return { ...state, workflowMode: action.mode };
+    case 'mode_state':
+      return {
+        ...state,
+        autonomous: action.autonomous,
+        effectiveAutonomous: action.effectiveAutonomous,
+        workflowMode: action.workflowMode,
+        effectiveWorkflowMode: action.effectiveWorkflowMode,
+        editControl: action.editControl,
+        commandControl: action.commandControl,
+        editCommandLocked: action.editCommandLocked,
+        running: action.running,
+      };
     case 'resume_offer':
       return { ...state, resumeSessionId: action.sessionId };
     case 'resume_dismissed':
@@ -626,6 +680,8 @@ function reducer(state: State, action: Action): State {
             toolgenChars: null,
             exclude_from_context: false,
           });
+        } else if (type === 'subagent_task') {
+          entries.push({ type: 'subagent_task', content: String(e.content ?? ''), exclude_from_context: true });
         } else if (type === 'subsession_start' || type === 'subsession_end') {
           entries.push({
             type: 'subsession_divider',
@@ -673,7 +729,13 @@ const initial: State = {
   pendingGate: null,
   pendingQuestion: null,
   autonomous: false,
+  effectiveAutonomous: false,
   workflowMode: 'problem_solving',
+  effectiveWorkflowMode: 'problem_solving',
+  editControl: 'smart',
+  commandControl: 'smart',
+  editCommandLocked: false,
+  running: false,
   resumeSessionId: null,
   awaitingLlm: false,
   llmWaiting: null,
@@ -760,7 +822,7 @@ function App() {
           dispatch({ type: 'agent_finished', agent: String(msg.agent ?? '') });
           break;
         case 'subsession_started':
-          dispatch({ type: 'subsession_started', displayName: String(msg.displayName ?? '') });
+          dispatch({ type: 'subsession_started', displayName: String(msg.displayName ?? ''), task: String(msg.task ?? '') });
           break;
         case 'subsession_ended':
           dispatch({
@@ -876,11 +938,18 @@ function App() {
           });
           break;
         }
-        case 'autonomous_changed':
-          dispatch({ type: 'autonomous_changed', autonomous: Boolean(msg.autonomous) });
-          break;
-        case 'workflow_changed':
-          dispatch({ type: 'workflow_changed', mode: msg.mode === 'guided' ? 'guided' : 'problem_solving' });
+        case 'mode_state':
+          dispatch({
+            type: 'mode_state',
+            autonomous: Boolean(msg.autonomous),
+            effectiveAutonomous: Boolean(msg.effectiveAutonomous),
+            workflowMode: msg.workflowMode === 'guided' ? 'guided' : 'problem_solving',
+            effectiveWorkflowMode: msg.effectiveWorkflowMode === 'guided' ? 'guided' : 'problem_solving',
+            editControl: coerceEditControl(msg.editControl),
+            commandControl: coerceCommandControl(msg.commandControl),
+            editCommandLocked: Boolean(msg.editCommandLocked),
+            running: Boolean(msg.running),
+          });
           break;
         case 'persist_session_id':
           // Stash the id so VS Code's panel serializer can resume this exact
@@ -1065,8 +1134,14 @@ function App() {
           {/* Per-session mode toggles (apply to the next prompt) */}
           <ModeControls
             autonomous={state.autonomous}
+            effectiveAutonomous={state.effectiveAutonomous}
             workflowMode={state.workflowMode}
+            effectiveWorkflowMode={state.effectiveWorkflowMode}
+            editControl={state.editControl}
+            commandControl={state.commandControl}
+            editCommandLocked={state.editCommandLocked}
             connected={state.connected}
+            running={state.running}
           />
           <div style={styles.inputFooter}>
             <AttachedFilesArea files={state.attachedFiles} onRemove={removeAttachment} />
@@ -1500,8 +1575,8 @@ function SessionEntryView({ entry }: SessionEntryViewProps) {
     case 'subsession_divider': {
       const label =
         entry.phase === 'start'
-          ? `${entry.displayName} subagent took over`
-          : `${entry.parentDisplayName || 'Kōdo'} resumed${entry.displayName ? ` from ${entry.displayName}` : ''}`;
+          ? `Delegating the task to ${entry.displayName} subagent`
+          : `${entry.displayName} subagent has finished working on the task.`;
       return (
         <div style={styles.subsessionDivider}>
           <span style={styles.subsessionDividerLine} />
@@ -1510,6 +1585,13 @@ function SessionEntryView({ entry }: SessionEntryViewProps) {
         </div>
       );
     }
+    case 'subagent_task':
+      return (
+        <div style={styles.subagentTask}>
+          <div style={styles.subagentTaskLabel}>Task brief</div>
+          <div style={styles.subagentTaskText}>{entry.content}</div>
+        </div>
+      );
     case 'compaction_divider':
       return (
         <CompactionBlock
@@ -1554,75 +1636,223 @@ function ResumeBanner({ onResume, onDismiss }: ResumeBannerProps) {
 // ModeControls — per-session autonomous + workflow toggles (tab header)
 // ---------------------------------------------------------------------------
 
-const _MODE_TOOLTIPS = {
-  interactive: 'Interactive — agents work alongside you, asking questions before key decisions. Applies to the next prompt.',
-  autonomous: 'Autonomous — agents work on their own, making reasonable assumptions instead of pausing. Applies to the next prompt.',
-  problem_solving: 'Problem Solving — one generalist agent tackles your request end to end. Applies to the next prompt.',
-  guided: 'Guided Development — Kōdo walks through design, tests and implementation phases. Applies to the next prompt.',
-  requireApproval: 'Require approval of all edits — Kōdo pauses for your sign-off before applying any file edit.',
-  allowEdits: 'Allow all edits — Kōdo applies file edits without pausing for approval.',
-  security: 'Security level — how much Kōdo restricts potentially risky tool use. Cycles High → Normal → Low.',
+// Base, status-free description of what each toggle controls. The dynamic
+// status line ("in effect" / "queued for the next prompt" / "locked by
+// Autonomous") is appended at render time by the build*Tooltip helpers.
+const _MODE_DESC = {
+  interactive: 'Interactive — agents work alongside you, asking questions before key decisions.',
+  autonomous: 'Autonomous — agents work on their own, making reasonable assumptions instead of pausing.',
+  problem_solving: 'Problem Solving — one generalist agent tackles your request end to end.',
+  guided: 'Guided Development — Kōdo walks through design, tests and implementation phases.',
+  editControl:
+    'Edit Control — how Kōdo handles file edits. Review All pauses for your sign-off on every edit; Allow All applies edits without pausing; Smart lets Kōdo decide per edit.',
+  commandControl:
+    'Command Control — how much Kōdo restricts potentially risky commands. Defensive blocks risky commands; Permissive allows them; Smart decides per command.',
 };
 
-/** Security postures the bar cycles through (High → Normal → Low → High). */
-type SecurityLevel = 'high' | 'normal' | 'low';
-
-const _SECURITY_LABEL: Record<SecurityLevel, string> = {
-  high: '🛡️ Access Control: Defensive',
-  normal: '🔐 Access Control: Balanced',
-  low: '🔓 Access Control: Permissive',
+/** Button label per Edit Control posture. */
+const _EDIT_LABEL: Record<EditControl, string> = {
+  smart: '🧠 Edit Control: Smart',
+  review_all: '🔍 Edit Control: Review All',
+  allow_all: '✅ Edit Control: Allow All',
 };
 
-const _SECURITY_NEXT: Record<SecurityLevel, SecurityLevel> = {
-  high: 'normal',
-  normal: 'low',
-  low: 'high',
+/** Short posture name used inside tooltips. */
+const _EDIT_NAME: Record<EditControl, string> = {
+  smart: 'Smart',
+  review_all: 'Review All',
+  allow_all: 'Allow All',
 };
+
+/** Click-cycle order, default-first: Smart → Review All → Allow All → Smart. */
+const _EDIT_NEXT: Record<EditControl, EditControl> = {
+  smart: 'review_all',
+  review_all: 'allow_all',
+  allow_all: 'smart',
+};
+
+/** Button label per Command Control posture. */
+const _COMMAND_LABEL: Record<CommandControl, string> = {
+  smart: '🧠 Command Control: Smart',
+  defensive: '🛡️ Command Control: Defensive',
+  permissive: '🔓 Command Control: Permissive',
+};
+
+/** Short posture name used inside tooltips. */
+const _COMMAND_NAME: Record<CommandControl, string> = {
+  smart: 'Smart',
+  defensive: 'Defensive',
+  permissive: 'Permissive',
+};
+
+/** Click-cycle order, default-first: Smart → Defensive → Permissive → Smart. */
+const _COMMAND_NEXT: Record<CommandControl, CommandControl> = {
+  smart: 'defensive',
+  defensive: 'permissive',
+  permissive: 'smart',
+};
+
+/**
+ * Tooltip for the two *frozen* toggles (workflow, autonomous): the description
+ * plus a status line. The effective value only changes when a new turn starts,
+ * so while a turn is running and the user's selection differs from the frozen
+ * effective value the toggle is "queued for the next prompt"; otherwise it is
+ * "in effect". When idle a flip takes effect immediately, so it reads as in
+ * effect.
+ *
+ * @param desc Status-free description of the selected position.
+ * @param effectiveName Human name of the value the in-flight turn is using.
+ * @param pending True when running and the selection diverges from effective.
+ */
+function buildModeTooltip(desc: string, effectiveName: string, pending: boolean): string {
+  return pending
+    ? `${desc} Will be applied to the next prompt, current mode: ${effectiveName}.`
+    : `${desc} This mode is in effect.`;
+}
+
+/**
+ * Tooltip for the two *never-frozen* toggles (Edit/Command Control). They are
+ * locked to a forced posture while Autonomous mode is in effect; otherwise they
+ * apply immediately (no per-turn freeze).
+ *
+ * @param desc Status-free description of the toggle.
+ * @param locked True while Autonomous mode is in effect.
+ * @param lockedName The forced posture name shown when locked.
+ */
+function buildLockTooltip(desc: string, locked: boolean, lockedName: string): string {
+  return locked
+    ? `${desc} Locked to ${lockedName} while Autonomous mode is in effect.`
+    : `${desc} This setting is in effect.`;
+}
+
+/**
+ * Custom hover tooltip. Native `title` is unreliable in VS Code webviews (no
+ * tooltip on disabled buttons, inconsistent timing), so the ⓘ marker renders
+ * its own positioned bubble. Shown above the trigger to avoid clipping at the
+ * panel footer where the mode bar lives.
+ */
+function Tooltip({ text, children }: { text: string; children: ComponentChildren }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      style={styles.tooltipWrap}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      {children}
+      {show && (
+        <span style={styles.tooltipBox} role="tooltip">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * One toggle cell: the cycling button plus a trailing ⓘ marker that owns the
+ * tooltip (the button itself has none — hovering ⓘ is how you read what the
+ * toggle does, which also works while the button is disabled/locked).
+ */
+function ModeButton({
+  label,
+  tip,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  tip: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <span style={styles.modeBtnWrap}>
+      <button
+        style={disabled ? { ...styles.modeBtn, ...styles.modeBtnDisabled } : styles.modeBtn}
+        disabled={disabled}
+        onClick={onClick}
+      >
+        {label}
+      </button>
+      <Tooltip text={tip}>
+        <span style={styles.modeInfo} role="img" aria-label="info">
+          ⓘ
+        </span>
+      </Tooltip>
+    </span>
+  );
+}
 
 interface ModeControlsProps {
   autonomous: boolean;
+  effectiveAutonomous: boolean;
   workflowMode: 'guided' | 'problem_solving';
+  effectiveWorkflowMode: 'guided' | 'problem_solving';
+  editControl: EditControl;
+  commandControl: CommandControl;
+  /** True while Autonomous is in effect: Edit/Command are forced and locked. */
+  editCommandLocked: boolean;
   connected: boolean;
+  /** True while a turn is in flight; gates the frozen toggles' "queued" status. */
+  running: boolean;
 }
 
-function ModeControls({ autonomous, workflowMode, connected }: ModeControlsProps) {
+function ModeControls({
+  autonomous,
+  effectiveAutonomous,
+  workflowMode,
+  effectiveWorkflowMode,
+  editControl,
+  commandControl,
+  editCommandLocked,
+  connected,
+  running,
+}: ModeControlsProps) {
   const isPS = workflowMode === 'problem_solving';
-  // Local-only UI state for now — these two toggles are not yet wired to the
-  // server; they only cycle their own label so the interaction can be designed.
-  const [requireApproval, setRequireApproval] = useState(true);
-  const [security, setSecurity] = useState<SecurityLevel>('high');
+
+  const wfTip = buildModeTooltip(
+    isPS ? _MODE_DESC.problem_solving : _MODE_DESC.guided,
+    effectiveWorkflowMode === 'problem_solving' ? 'Problem Solving' : 'Guided Development',
+    running && workflowMode !== effectiveWorkflowMode,
+  );
+  const autoTip = buildModeTooltip(
+    autonomous ? _MODE_DESC.autonomous : _MODE_DESC.interactive,
+    effectiveAutonomous ? 'Autonomous' : 'Interactive',
+    running && autonomous !== effectiveAutonomous,
+  );
+  const editTip = buildLockTooltip(_MODE_DESC.editControl, editCommandLocked, _EDIT_NAME.allow_all);
+  const commandTip = buildLockTooltip(
+    _MODE_DESC.commandControl,
+    editCommandLocked,
+    _COMMAND_NAME.permissive,
+  );
+
   return (
     <div style={styles.modeControls}>
-      <button
-        style={styles.modeBtn}
+      <ModeButton
+        label={isPS ? '💡 Problem Solving' : '🧩 Guided Development'}
+        tip={wfTip}
         disabled={!connected}
-        title={isPS ? _MODE_TOOLTIPS.problem_solving : _MODE_TOOLTIPS.guided}
         onClick={() => vscode.postMessage({ type: 'workflow_set', mode: isPS ? 'guided' : 'problem_solving' })}
-      >
-        {isPS ? '💡 Problem Solving' : '🧩 Guided Development'}
-      </button>
-      <button
-        style={styles.modeBtn}
+      />
+      <ModeButton
+        label={autonomous ? '⚡ Autonomous' : '💬 Interactive'}
+        tip={autoTip}
         disabled={!connected}
-        title={autonomous ? _MODE_TOOLTIPS.autonomous : _MODE_TOOLTIPS.interactive}
         onClick={() => vscode.postMessage({ type: 'mode_set', autonomous: !autonomous })}
-      >
-        {autonomous ? '⚡ Autonomous' : '💬 Interactive'}
-      </button>
-      <button
-        style={styles.modeBtn}
-        title={requireApproval ? _MODE_TOOLTIPS.requireApproval : _MODE_TOOLTIPS.allowEdits}
-        onClick={() => setRequireApproval((v) => !v)}
-      >
-        {requireApproval ? '🔍 Require approval of all edits' : '✅ Allow all edits'}
-      </button>
-      <button
-        style={styles.modeBtn}
-        title={_MODE_TOOLTIPS.security}
-        onClick={() => setSecurity((s) => _SECURITY_NEXT[s])}
-      >
-        {_SECURITY_LABEL[security]}
-      </button>
+      />
+      <ModeButton
+        label={_EDIT_LABEL[editControl]}
+        tip={editTip}
+        disabled={!connected || editCommandLocked}
+        onClick={() => vscode.postMessage({ type: 'edit_control_set', editControl: _EDIT_NEXT[editControl] })}
+      />
+      <ModeButton
+        label={_COMMAND_LABEL[commandControl]}
+        tip={commandTip}
+        disabled={!connected || editCommandLocked}
+        onClick={() => vscode.postMessage({ type: 'command_control_set', commandControl: _COMMAND_NEXT[commandControl] })}
+      />
     </div>
   );
 }
@@ -2028,9 +2258,21 @@ const styles = {
     marginTop: '6px',
     marginBottom: '8px',
   },
-  modeBtn: {
+  // Toggle cell — the flex item that shares the row evenly, holding the button
+  // (which fills it) plus the trailing ⓘ marker.
+  modeBtnWrap: {
     flex: 1,
-    minWidth: '130px',
+    minWidth: '150px',
+    display: 'flex',
+    alignItems: 'center',
+    // Fixed gap between the button and its trailing ⓘ marker (the button no
+    // longer stretches, so this is the actual visible spacing).
+    gap: '1px',
+  },
+  modeBtn: {
+    // Size to content so the ⓘ sits a fixed gap away instead of being pushed
+    // to the far edge of the (stretched) cell.
+    minWidth: 0,
     padding: '4px 8px',
     fontSize: '14px',
     whiteSpace: 'nowrap',
@@ -2041,6 +2283,46 @@ const styles = {
     cursor: 'pointer',
     background: 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
     color: 'var(--vscode-button-secondaryForeground, var(--vscode-button-foreground))',
+  },
+  // Greyed-out look applied when a toggle is disabled — most notably when Edit/
+  // Command Control are auto-locked to their forced posture under Autonomous —
+  // so the user gets a visual cue that the state is fixed and not clickable.
+  modeBtnDisabled: {
+    opacity: 0.5,
+    cursor: 'not-allowed' as const,
+  },
+  // The ⓘ marker, rendered one step larger than the button text (+2px) and
+  // dimmed; it is the sole tooltip trigger for each toggle.
+  modeInfo: {
+    fontSize: '16px',
+    lineHeight: 1,
+    cursor: 'help',
+    opacity: 0.7,
+    flex: 'none' as const,
+  },
+  // Tooltip wrapper — wraps only the ⓘ marker, anchoring its bubble.
+  tooltipWrap: {
+    position: 'relative' as const,
+    display: 'inline-flex',
+  },
+  tooltipBox: {
+    position: 'absolute' as const,
+    bottom: 'calc(100% + 6px)',
+    right: 0,
+    width: '230px',
+    maxWidth: '90vw',
+    padding: '6px 9px',
+    fontSize: '12px',
+    lineHeight: 1.4,
+    whiteSpace: 'normal' as const,
+    textAlign: 'left' as const,
+    background: 'var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background))',
+    color: 'var(--vscode-editorHoverWidget-foreground, var(--vscode-editorWidget-foreground))',
+    border: '1px solid var(--vscode-editorHoverWidget-border, var(--vscode-widget-border))',
+    borderRadius: '4px',
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.35)',
+    zIndex: 1000,
+    pointerEvents: 'none' as const,
   },
   stream: {
     flex: 1,
@@ -2057,7 +2339,8 @@ const styles = {
     // it no longer spans the full WebView width and grows with its content
     // (including any attached-file chips below the text).
     background: 'var(--vscode-input-background)',
-    border: '1px solid #107C41',
+    // Yellow-ish accent matching the active prompt edit box / attach-file chips.
+    border: '1px solid #c8a400',
     borderRadius: '6px',
     padding: '12px 20px',
     marginTop: '40px',
@@ -2280,6 +2563,30 @@ const styles = {
     textTransform: 'uppercase' as const,
     color: 'var(--vscode-descriptionForeground)',
     whiteSpace: 'nowrap' as const,
+  },
+  // Sub-agent task brief — the structured task handed to a spawned sub-agent.
+  // Left-aligned card, deliberately distinct from the user's prompt bubble.
+  subagentTask: {
+    alignSelf: 'flex-start' as const,
+    maxWidth: '85%',
+    margin: '2px 0 8px',
+    padding: '6px 10px',
+    borderLeft: '3px solid var(--vscode-panel-border)',
+    background: 'var(--vscode-textBlockQuote-background)',
+    borderRadius: '4px',
+  },
+  subagentTaskLabel: {
+    fontSize: '10px',
+    fontWeight: 600,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase' as const,
+    color: 'var(--vscode-descriptionForeground)',
+    marginBottom: '4px',
+  },
+  subagentTaskText: {
+    whiteSpace: 'pre-wrap' as const,
+    fontSize: '12px',
+    color: 'var(--vscode-foreground)',
   },
   // File events
   fileEvents: {

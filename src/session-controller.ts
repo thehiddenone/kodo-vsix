@@ -23,6 +23,30 @@ import { WsClient } from './ws-client';
 
 const TOKEN_BUFFER_MAX = 64 * 1024;
 
+/** Edit Control posture. `smart` is the default. */
+type EditControl = 'review_all' | 'allow_all' | 'smart';
+/** Command Control posture. `smart` is the default. */
+type CommandControl = 'defensive' | 'permissive' | 'smart';
+
+/** Coerce an untyped wire value into a valid {@link EditControl} (default smart). */
+function coerceEditControl(value: unknown): EditControl {
+  return value === 'review_all' || value === 'allow_all' ? value : 'smart';
+}
+
+/** Coerce an untyped wire value into a valid {@link CommandControl} (default smart). */
+function coerceCommandControl(value: unknown): CommandControl {
+  return value === 'defensive' || value === 'permissive' ? value : 'smart';
+}
+
+/** The Edit/Command values forced while Autonomous mode is in effect. */
+const _AUTONOMOUS_EDIT: EditControl = 'allow_all';
+const _AUTONOMOUS_COMMAND: CommandControl = 'permissive';
+
+/** Coerce an untyped wire value into a workflow mode (default guided). */
+function coerceWorkflowMode(value: unknown): 'guided' | 'problem_solving' {
+  return value === 'problem_solving' ? 'problem_solving' : 'guided';
+}
+
 /** Most attachments a prompt may carry (one per slot in the webview's area). */
 const MAX_ATTACHMENTS = 9;
 /** Per-file and total-attachment text-content cap (128 KB). */
@@ -140,8 +164,29 @@ export class SessionController {
   private pendingQuestion: QuestionData | null = null;
   private sessionHistory: Record<string, unknown>[] | null = null;
   private sessionName = '';
+  // The two *frozen* toggles come in pairs: the user-facing *selected* value
+  // (flips the instant the user clicks) and the per-turn frozen *effective*
+  // value the server reports (what the in-flight prompt actually runs under).
+  // The webview uses the pair to show "in effect" vs "queued for the next
+  // prompt".
   private autonomous = false;
+  private effectiveAutonomous = false;
   private workflowMode: 'guided' | 'problem_solving' = 'problem_solving';
+  private effectiveWorkflowMode: 'guided' | 'problem_solving' = 'problem_solving';
+  // Edit/Command Control are NEVER frozen. The host owns them: it keeps the
+  // user's *selected* posture, and derives the *shown* value — which equals the
+  // selection unless Autonomous mode is currently in effect, in which case it is
+  // forced to Allow All / Permissive (the toggles also lock in the UI). `running`
+  // (derived from the server's `phase`) decides whether "in effect" means the
+  // frozen `effectiveAutonomous` (mid-turn) or the selected `autonomous` (idle),
+  // so a switch to Autonomous only locks them once the next turn actually starts.
+  private editControl: EditControl = 'smart';
+  private commandControl: CommandControl = 'smart';
+  private running = false;
+  // The last shown values pushed to the server, so we resend only on change
+  // (`undefined` until the first sync forces an initial send).
+  private sentEditControl: EditControl | undefined;
+  private sentCommandControl: CommandControl | undefined;
   private currentProject: { root: string; name: string } | null = null;
   private resumeSessionId: string | null = null;
   /** Validated files staged to be prepended to the next prompt, keyed by chip id. */
@@ -207,6 +252,67 @@ export class SessionController {
       payload.session_id = this.sessionId;
     }
     this._sendStamped(makeRequest('hello', payload));
+  }
+
+  /**
+   * Whether Autonomous mode is currently *in effect* (not merely selected).
+   * While a turn runs this is the frozen `effectiveAutonomous`; when idle it is
+   * the live `autonomous` selection, so a mid-turn switch to Autonomous defers
+   * its lock until the next turn starts, and a switch to Interactive unlocks
+   * only once the running turn finishes.
+   */
+  private _autonomousInEffect(): boolean {
+    return this.running ? this.effectiveAutonomous : this.autonomous;
+  }
+
+  /** Edit Control value the UI shows — forced to Allow All under Autonomous. */
+  private _editShown(): EditControl {
+    return this._autonomousInEffect() ? _AUTONOMOUS_EDIT : this.editControl;
+  }
+
+  /** Command Control value the UI shows — forced to Permissive under Autonomous. */
+  private _commandShown(): CommandControl {
+    return this._autonomousInEffect() ? _AUTONOMOUS_COMMAND : this.commandControl;
+  }
+
+  /**
+   * Mirror the shown Edit/Command values to the server, resending only on a
+   * change. The server stores exactly what the UI shows (the host is the single
+   * source of truth for these never-frozen toggles), so this is called whenever
+   * a shown value can move: a user flip, an autonomous toggle, a phase change.
+   */
+  private _syncEditCommandToServer(): void {
+    const edit = this._editShown();
+    if (edit !== this.sentEditControl) {
+      this.sentEditControl = edit;
+      this._sendStamped(makeRequest('edit_control.set', { edit_control: edit }));
+    }
+    const command = this._commandShown();
+    if (command !== this.sentCommandControl) {
+      this.sentCommandControl = command;
+      this._sendStamped(makeRequest('command_control.set', { command_control: command }));
+    }
+  }
+
+  /**
+   * Push the full mode-toggle snapshot to the webview. The two frozen toggles
+   * carry their selected + effective pair; Edit/Command carry the single shown
+   * value plus `editCommandLocked` (true while Autonomous is in effect, which
+   * disables those two toggles). `running` lets the frozen toggles render "in
+   * effect" vs "queued for the next prompt".
+   */
+  private _postModeState(): void {
+    this._post({
+      type: 'mode_state',
+      autonomous: this.autonomous,
+      effectiveAutonomous: this.effectiveAutonomous,
+      workflowMode: this.workflowMode,
+      effectiveWorkflowMode: this.effectiveWorkflowMode,
+      editControl: this._editShown(),
+      commandControl: this._commandShown(),
+      editCommandLocked: this._autonomousInEffect(),
+      running: this.running,
+    });
   }
 
   /**
@@ -313,14 +419,35 @@ export class SessionController {
         const autonomous = Boolean(msg.autonomous);
         this.autonomous = autonomous;
         this._sendStamped(makeRequest('mode.set', { autonomous }));
-        this._post({ type: 'autonomous_changed', autonomous });
+        // A switch while idle locks/unlocks Edit & Command immediately; while a
+        // turn runs the shown values stay put (gated on `effectiveAutonomous`).
+        this._syncEditCommandToServer();
+        this._postModeState();
         break;
       }
       case 'workflow_set': {
-        const mode = msg.mode === 'guided' ? 'guided' : 'problem_solving';
+        const mode = coerceWorkflowMode(msg.mode);
         this.workflowMode = mode;
         this._sendStamped(makeRequest('workflow.set', { mode }));
-        this._post({ type: 'workflow_changed', mode });
+        this._postModeState();
+        break;
+      }
+      case 'edit_control_set': {
+        // Only reachable while unlocked (the webview disables the toggle under
+        // Autonomous), so the click always sets the user's selection.
+        if (!this._autonomousInEffect()) {
+          this.editControl = coerceEditControl(msg.editControl);
+          this._syncEditCommandToServer();
+          this._postModeState();
+        }
+        break;
+      }
+      case 'command_control_set': {
+        if (!this._autonomousInEffect()) {
+          this.commandControl = coerceCommandControl(msg.commandControl);
+          this._syncEditCommandToServer();
+          this._postModeState();
+        }
         break;
       }
       case 'open_file': {
@@ -546,8 +673,7 @@ export class SessionController {
     this._post({ type: 'workspace_status', hasWorkspace: this.deps.hasWorkspace() });
     this._post({ type: 'status', connected: this.connected });
     this._post({ type: 'stage', stage: this.stage, agent: this.agent });
-    this._post({ type: 'autonomous_changed', autonomous: this.autonomous });
-    this._post({ type: 'workflow_changed', mode: this.workflowMode });
+    this._postModeState();
     if (this.sessionHistory !== null) {
       this._post({ type: 'session_history', entries: this.sessionHistory });
     }
@@ -650,16 +776,25 @@ export class SessionController {
       this.stage = String(env.payload.stage ?? 'IDLE');
       this.agent = env.payload.agent ? String(env.payload.agent) : null;
       this._post({ type: 'stage', stage: this.stage, agent: this.agent });
-      const autonomous = Boolean(env.payload.autonomous ?? false);
-      if (autonomous !== this.autonomous) {
-        this.autonomous = autonomous;
-        this._post({ type: 'autonomous_changed', autonomous });
-      }
-      const workflowMode = env.payload.workflow_mode === 'problem_solving' ? 'problem_solving' : 'guided';
-      if (workflowMode !== this.workflowMode) {
-        this.workflowMode = workflowMode;
-        this._post({ type: 'workflow_changed', mode: workflowMode });
-      }
+      // A turn is in progress iff the server reports phase "running"; this is the
+      // authoritative signal the Edit/Command lock and the frozen-toggle "queued"
+      // status hang off (the legacy `stage` field above is vestigial/always IDLE).
+      this.running = String(env.payload.phase ?? '') === 'running';
+      // Adopt the server's authoritative snapshot for the two *frozen* toggles —
+      // both the selected values and the per-turn frozen effective values it just
+      // froze/reported. Edit/Command are host-owned (never adopted from the
+      // server, which only echoes back the shown value we last sent).
+      this.autonomous = Boolean(env.payload.autonomous ?? false);
+      this.effectiveAutonomous = Boolean(env.payload.effective_autonomous ?? this.autonomous);
+      this.workflowMode = coerceWorkflowMode(env.payload.workflow_mode);
+      this.effectiveWorkflowMode = coerceWorkflowMode(
+        env.payload.effective_workflow_mode ?? env.payload.workflow_mode,
+      );
+      // The turn boundary may have just locked/unlocked Edit & Command (a turn
+      // starting under Autonomous forces Allow All/Permissive; a turn ending
+      // unlocks to the user's selection) — resync the shown values if so.
+      this._syncEditCommandToServer();
+      this._postModeState();
       return;
     }
 
@@ -711,6 +846,7 @@ export class SessionController {
         type: 'subsession_started',
         agent: String(env.payload.agent ?? ''),
         displayName: String(env.payload.display_name ?? ''),
+        task: String(env.payload.task ?? ''),
       });
       return;
     }
@@ -765,9 +901,16 @@ export class SessionController {
     }
 
     if (env.kind === 'event' && evtType === 'autonomous.changed') {
+      // A Guide-driven disable clears both the selected and effective values
+      // immediately (it accompanies a fresh `state` event carrying the same).
       const autonomous = Boolean(env.payload.autonomous ?? false);
       this.autonomous = autonomous;
-      this._post({ type: 'autonomous_changed', autonomous });
+      if (!autonomous) {
+        this.effectiveAutonomous = false;
+      }
+      // Clearing Autonomous unlocks Edit & Command back to the user's selection.
+      this._syncEditCommandToServer();
+      this._postModeState();
       if (!autonomous) {
         void vscode.window.showInformationMessage('Kōdo: Autonomous mode has been turned off.');
       }
@@ -978,20 +1121,44 @@ export class SessionController {
     );
 
     if (this.isNewSession) {
-      // A blank session starts in interactive + problem-solving mode.
+      // A blank session starts interactive, problem-solving, with Edit & Command
+      // Control at their Smart default — selected == effective, nothing locked.
       this.workflowMode = 'problem_solving';
+      this.effectiveWorkflowMode = 'problem_solving';
       this.autonomous = false;
+      this.effectiveAutonomous = false;
+      this.running = false;
+      this.editControl = 'smart';
+      this.commandControl = 'smart';
       this._sendStamped(makeRequest('workflow.set', { mode: 'problem_solving' }));
-      this._post({ type: 'workflow_changed', mode: 'problem_solving' });
-      this._post({ type: 'autonomous_changed', autonomous: false });
+      this._syncEditCommandToServer();
+      this._postModeState();
     } else {
       // Resumed: adopt the session's own persisted prefs from hello.ack state.
       const state = env.payload.state as Record<string, unknown> | undefined;
       if (state) {
         this.autonomous = Boolean(state.autonomous ?? false);
-        this.workflowMode = state.workflow_mode === 'problem_solving' ? 'problem_solving' : 'guided';
-        this._post({ type: 'autonomous_changed', autonomous: this.autonomous });
-        this._post({ type: 'workflow_changed', mode: this.workflowMode });
+        this.effectiveAutonomous = Boolean(state.effective_autonomous ?? this.autonomous);
+        this.workflowMode = coerceWorkflowMode(state.workflow_mode);
+        this.effectiveWorkflowMode = coerceWorkflowMode(
+          state.effective_workflow_mode ?? state.workflow_mode,
+        );
+        // A resumed tab is never mid-turn (the worker is idle on connect), so
+        // the lock follows the resumed `autonomous` selection. Hydrate the
+        // Edit/Command selection from the persisted value only when *not* locked;
+        // while locked the persisted value is the forced Allow All/Permissive, so
+        // we leave the selection at its Smart default (it would otherwise show a
+        // stale forced value on the next unlock).
+        this.running = false;
+        if (this.autonomous) {
+          this.editControl = 'smart';
+          this.commandControl = 'smart';
+        } else {
+          this.editControl = coerceEditControl(state.edit_control);
+          this.commandControl = coerceCommandControl(state.command_control);
+        }
+        this._syncEditCommandToServer();
+        this._postModeState();
       }
     }
 
