@@ -1,6 +1,6 @@
 import { styles } from './styles';
 import { vscode } from './vscode';
-import type { SessionEntry, DiffLinkData } from './types';
+import type { SessionEntry, DiffLinkData, CheckpointData } from './types';
 import { Markdown } from './markdown';
 import { ThinkingBlock, CompactionBlock } from './streaming-blocks';
 import { RunCommandProgress } from './indicators';
@@ -81,6 +81,48 @@ function DiffLink({ diff }: { diff: DiffLinkData }) {
     </div>
   );
 }
+
+/**
+ * Inline "undo this change" control shown next to a file-mutating tool call's
+ * header. Surgically reverts only the files this call touched (and discards any
+ * later edits to those same files), leaving everything else untouched. Posts
+ * 'checkpoint_undo' so the extension host forwards it to the server.
+ */
+function UndoChangeLink({ checkpoint }: { checkpoint: CheckpointData }) {
+  const undo = () => {
+    vscode.postMessage({ type: 'checkpoint_undo', root: checkpoint.root, sha: checkpoint.sha });
+  };
+  return (
+    <span
+      style={styles.undoChangeLink}
+      onClick={undo}
+      title="Undo only this change — restores the files this step touched to their state just before it (discarding any later edits to those same files). Itself undoable, so you can redo it afterwards."
+    >
+      ↩ undo this change
+    </span>
+  );
+}
+
+/**
+ * "Rollback to this state" box shown below a file-mutating tool call's
+ * parameters. Restores the whole project tree to its state right after this
+ * call ran; a new checkpoint is recorded so rolling forward stays possible.
+ * Posts 'checkpoint_rollback' for the extension host to forward to the server.
+ */
+function RollbackBox({ checkpoint }: { checkpoint: CheckpointData }) {
+  const rollback = () => {
+    vscode.postMessage({ type: 'checkpoint_rollback', root: checkpoint.root, sha: checkpoint.sha });
+  };
+  return (
+    <div
+      style={{ ...styles.toolCallBox, ...styles.toolCallBoxClickable, ...styles.rollbackBox }}
+      onClick={rollback}
+      title="Restore the entire project to its state right after this step ran. A new checkpoint is recorded, so you can still roll forward to a later state afterwards."
+    >
+      ⟲ Rollback to this state
+    </div>
+  );
+}
 interface SessionEntryViewProps {
   entry: SessionEntry;
 }
@@ -150,12 +192,14 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
             {entry.description && (
               <span style={styles.toolCallDesc}>{' — '}{entry.description}</span>
             )}
+            {entry.checkpoint !== null && <UndoChangeLink checkpoint={entry.checkpoint} />}
           </div>
           {showProgress && (
             <RunCommandProgress timeoutSeconds={entry.timeoutSeconds!} startedAt={entry.startedAt!} />
           )}
           {entry.diff !== null && <DiffLink diff={entry.diff} />}
           <ToolCallDetail entry={entry} />
+          {entry.checkpoint !== null && <RollbackBox checkpoint={entry.checkpoint} />}
         </div>
       );
     }

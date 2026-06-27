@@ -406,6 +406,12 @@ export class SessionController {
       case 'compact_now':
         this._sendStamped(makeRequest('compact.now', {}));
         break;
+      case 'checkpoint_undo':
+        this._sendStamped(makeRequest('checkpoint.undo', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
+        break;
+      case 'checkpoint_rollback':
+        this._sendStamped(makeRequest('checkpoint.rollback', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
+        break;
       case 'delete_session':
         void this._confirmAndDelete();
         break;
@@ -990,6 +996,15 @@ export class SessionController {
               newPath: String(rawDiff.new_path ?? ''),
             }
           : null;
+      const rawCheckpoint = env.payload.checkpoint as Record<string, unknown> | null | undefined;
+      const checkpoint =
+        rawCheckpoint && typeof rawCheckpoint === 'object'
+          ? {
+              root: String(rawCheckpoint.root ?? ''),
+              sha: String(rawCheckpoint.sha ?? ''),
+              parent: String(rawCheckpoint.parent ?? ''),
+            }
+          : null;
       this._post({
         type: 'tool_call_detail',
         toolCallId: String(env.payload.tool_call_id ?? ''),
@@ -998,6 +1013,7 @@ export class SessionController {
         schemaCompliance: typeof env.payload.schema_compliance === 'boolean' ? env.payload.schema_compliance : null,
         success: typeof env.payload.success === 'boolean' ? env.payload.success : null,
         diff,
+        checkpoint,
       });
       return;
     }

@@ -313,7 +313,7 @@ async function createProject(): Promise<string | null> {
   }
 
   const root = picked[0].fsPath;
-  const kodoMd = path.join(root, 'kodo.md');
+  const kodoMd = path.join(root, '.kodo', 'kodo.md');
 
   if (fs.existsSync(kodoMd)) {
     const choice = await vscode.window.showWarningMessage(
@@ -375,7 +375,7 @@ async function pickProject(): Promise<{ root: string; name: string } | null> {
   const folderMap = _buildFolderMap();
   const _CREATE = '$(add) Create new project…';
   const items: vscode.QuickPickItem[] = Object.entries(folderMap)
-    .filter(([, fsPath]) => fs.existsSync(path.join(fsPath, 'kodo.md')))
+    .filter(([, fsPath]) => fs.existsSync(path.join(fsPath, '.kodo', 'kodo.md')))
     .map(([name, fsPath]) => ({ label: name, description: fsPath }));
   items.push({ label: _CREATE, description: 'Initialise a new Kōdo project folder' });
 

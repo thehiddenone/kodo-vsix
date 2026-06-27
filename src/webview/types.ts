@@ -79,6 +79,17 @@ export interface DiffLinkData {
   newPath: string;
 }
 
+/**
+ * The mirror checkpoint commit a file-mutating tool call produced, backing its
+ * "Undo this change" / "Rollback to this state" controls. `root` names which
+ * per-root `.kodo/checkpoints` mirror the `sha` belongs to.
+ */
+export interface CheckpointData {
+  root: string;
+  sha: string;
+  parent: string;
+}
+
 export type SessionEntry =
   | { type: 'user_message'; content: string; attachments: AttachedFileRef[]; exclude_from_context: false }
   | { type: 'assistant_response'; content: string; exclude_from_context: false }
@@ -102,6 +113,8 @@ export type SessionEntry =
       startedAt: number | null;
       /** Before/after file pair for this call (e.g. edit_file), or null if none was captured. */
       diff: DiffLinkData | null;
+      /** Mirror checkpoint backing the undo/rollback controls, or null if this call made none. */
+      checkpoint: CheckpointData | null;
       /** How long the model spent streaming this call's arguments (ms), shown as
        *  "Generated content for <tool> in Xs, …". null when unknown (history / no toolgen). */
       toolgenDurationMs: number | null;
@@ -225,7 +238,7 @@ export type Action =
   | { type: 'llm_turn_start' }
   | { type: 'llm_waiting'; waiting: boolean; reason: string; retryIn: number | null }
   | { type: 'tool_call'; toolName: string; description: string; toolCallId: string; timeoutSeconds: number | null }
-  | { type: 'tool_call_detail'; toolCallId: string; rows: ToolCallDetailRow[]; detailFile: string | null; schemaCompliance: boolean | null; success: boolean | null; diff: DiffLinkData | null }
+  | { type: 'tool_call_detail'; toolCallId: string; rows: ToolCallDetailRow[]; detailFile: string | null; schemaCompliance: boolean | null; success: boolean | null; diff: DiffLinkData | null; checkpoint: CheckpointData | null }
   | { type: 'token'; text: string }
   | { type: 'thinking_token'; text: string }
   | { type: 'toolgen_token'; toolName: string; text: string }

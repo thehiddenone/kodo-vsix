@@ -1,4 +1,4 @@
-import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData } from './types';
+import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData } from './types';
 export function commitStreaming(state: State): SessionEntry[] {
   let session = state.session;
   if (state.streamingThinking) {
@@ -94,7 +94,7 @@ export function reducer(state: State, action: Action): State {
       const toolgenChars = state.toolgenActive ? state.streamingToolgen.length : null;
       return {
         ...state,
-        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: Date.now(), diff: null, toolgenDurationMs, toolgenChars, exclude_from_context: false }],
+        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: Date.now(), diff: null, checkpoint: null, toolgenDurationMs, toolgenChars, exclude_from_context: false }],
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -108,7 +108,7 @@ export function reducer(state: State, action: Action): State {
       for (let i = session.length - 1; i >= 0; i--) {
         const e = session[i];
         if (e.type === 'tool_call' && e.toolCallId === action.toolCallId) {
-          session[i] = { ...e, rows: action.rows, detailFile: action.detailFile, schemaCompliance: action.schemaCompliance, success: action.success, diff: action.diff };
+          session[i] = { ...e, rows: action.rows, detailFile: action.detailFile, schemaCompliance: action.schemaCompliance, success: action.success, diff: action.diff, checkpoint: action.checkpoint };
           patched = true;
           break;
         }
@@ -373,6 +373,15 @@ export function reducer(state: State, action: Action): State {
                   newPath: String(rawDiff.newPath ?? ''),
                 }
               : null;
+          const rawCheckpoint = e.checkpoint as Record<string, unknown> | null | undefined;
+          const checkpoint: CheckpointData | null =
+            rawCheckpoint && typeof rawCheckpoint === 'object'
+              ? {
+                  root: String(rawCheckpoint.root ?? ''),
+                  sha: String(rawCheckpoint.sha ?? ''),
+                  parent: String(rawCheckpoint.parent ?? ''),
+                }
+              : null;
           entries.push({
             type: 'tool_call',
             toolName: String(e.toolName ?? ''),
@@ -386,6 +395,7 @@ export function reducer(state: State, action: Action): State {
             timeoutSeconds: null,
             startedAt: null,
             diff,
+            checkpoint,
             // Generation timing is a live-only nicety; not persisted to history.
             toolgenDurationMs: null,
             toolgenChars: null,

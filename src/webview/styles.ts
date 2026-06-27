@@ -496,6 +496,17 @@ export const styles = {
     color: 'var(--vscode-textLink-foreground)',
     fontSize: '12px',
   },
+  undoChangeLink: {
+    color: 'var(--vscode-textLink-foreground)',
+    fontSize: '11px',
+    marginLeft: '6px',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  rollbackBox: {
+    color: 'var(--vscode-textLink-foreground)',
+    fontSize: '12px',
+  },
   toolCallWarn: {
     color: 'var(--vscode-editorWarning-foreground, #cca700)',
     fontSize: '11px',

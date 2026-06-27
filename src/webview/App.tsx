@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
-import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, QuestionChoice } from './types';
+import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, QuestionChoice } from './types';
 import { coerceEditControl, coerceCommandControl } from './types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
@@ -128,6 +128,15 @@ export function App() {
                   newPath: String(rawDiff.newPath ?? ''),
                 }
               : null;
+          const rawCheckpoint = msg.checkpoint as Record<string, unknown> | null | undefined;
+          const checkpoint: CheckpointData | null =
+            rawCheckpoint && typeof rawCheckpoint === 'object'
+              ? {
+                  root: String(rawCheckpoint.root ?? ''),
+                  sha: String(rawCheckpoint.sha ?? ''),
+                  parent: String(rawCheckpoint.parent ?? ''),
+                }
+              : null;
           dispatch({
             type: 'tool_call_detail',
             toolCallId: String(msg.toolCallId ?? ''),
@@ -136,6 +145,7 @@ export function App() {
             schemaCompliance: typeof msg.schemaCompliance === 'boolean' ? msg.schemaCompliance : null,
             success: typeof msg.success === 'boolean' ? msg.success : null,
             diff,
+            checkpoint,
           });
           break;
         }
