@@ -409,8 +409,14 @@ export class SessionController {
       case 'checkpoint_undo':
         this._sendStamped(makeRequest('checkpoint.undo', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
         break;
+      case 'checkpoint_redo':
+        this._sendStamped(makeRequest('checkpoint.redo', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
+        break;
       case 'checkpoint_rollback':
         this._sendStamped(makeRequest('checkpoint.rollback', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
+        break;
+      case 'checkpoint_roll_forward':
+        this._sendStamped(makeRequest('checkpoint.roll_forward', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
         break;
       case 'delete_session':
         void this._confirmAndDelete();
@@ -663,6 +669,36 @@ export class SessionController {
     this._post({ type: 'session_cleared' });
     // (3) Ask the server to delete the session's files.
     this._sendStamped(makeRequest('session.delete', { session_id: this.sessionId }));
+  }
+
+  /**
+   * A checkpoint undo/redo/rollback/roll-forward was blocked because the work
+   * tree has edits Kōdo didn't make (it would otherwise silently overwrite
+   * them). Ask the user how to proceed and resubmit the same request with a
+   * `resolution`; the server retries with that decision applied.
+   */
+  private async _confirmCheckpointDirtyTree(env: Envelope): Promise<void> {
+    const requestType = String(env.payload.type ?? '').replace(/\.needs_confirmation$/, '');
+    const root = String(env.payload.root ?? '');
+    const sha = String(env.payload.sha ?? '');
+    const choice = await vscode.window.showWarningMessage(
+      "This project has changes Kōdo didn't make",
+      {
+        modal: true,
+        detail:
+          "There are edits here that weren't made through Kōdo (e.g. typed directly into the " +
+          'editor). Continuing would overwrite them.\n\n' +
+          '"Stash & Continue" keeps those edits — they are re-applied afterwards. "Discard & ' +
+          'Continue" proceeds without keeping them.',
+      },
+      'Stash & Continue',
+      'Discard & Continue',
+    );
+    if (choice !== 'Stash & Continue' && choice !== 'Discard & Continue') {
+      return;
+    }
+    const resolution = choice === 'Stash & Continue' ? 'stash' : 'discard';
+    this._sendStamped(makeRequest(requestType, { root, sha, resolution }));
   }
 
   private _rehydrate(): void {
@@ -1003,6 +1039,9 @@ export class SessionController {
               root: String(rawCheckpoint.root ?? ''),
               sha: String(rawCheckpoint.sha ?? ''),
               parent: String(rawCheckpoint.parent ?? ''),
+              index: typeof rawCheckpoint.index === 'number' ? rawCheckpoint.index : 0,
+              current_index: typeof rawCheckpoint.current_index === 'number' ? rawCheckpoint.current_index : 0,
+              undone: rawCheckpoint.undone === true,
             }
           : null;
       this._post({
@@ -1074,6 +1113,26 @@ export class SessionController {
         tokensBefore: Number(env.payload.tokens_before ?? 0),
         tokensAfter: Number(env.payload.tokens_after ?? 0),
       });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'checkpoint.state') {
+      const rawEntries = Array.isArray(env.payload.entries) ? (env.payload.entries as Record<string, unknown>[]) : [];
+      this._post({
+        type: 'checkpoint_state',
+        root: String(env.payload.root ?? ''),
+        currentIndex: Number(env.payload.current_index ?? -1),
+        entries: rawEntries.map((e) => ({ sha: String(e.sha ?? ''), undone: e.undone === true })),
+      });
+      return;
+    }
+
+    if (
+      env.kind === 'response' &&
+      evtType.startsWith('checkpoint.') &&
+      evtType.endsWith('.needs_confirmation')
+    ) {
+      void this._confirmCheckpointDirtyTree(env);
       return;
     }
 

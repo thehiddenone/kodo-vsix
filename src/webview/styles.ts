@@ -499,13 +499,23 @@ export const styles = {
   undoChangeLink: {
     color: 'var(--vscode-textLink-foreground)',
     fontSize: '11px',
-    marginLeft: '6px',
+    marginLeft: 'auto',
     cursor: 'pointer',
     flexShrink: 0,
   },
   rollbackBox: {
     color: 'var(--vscode-textLink-foreground)',
     fontSize: '12px',
+  },
+  rollbackIcon: {
+    fontSize: '14px',
+    marginRight: '4px',
+  },
+  rollforwardIcon: {
+    fontSize: '14px',
+    marginRight: '4px',
+    display: 'inline-block' as const,
+    transform: 'scaleX(-1)',
   },
   toolCallWarn: {
     color: 'var(--vscode-editorWarning-foreground, #cca700)',

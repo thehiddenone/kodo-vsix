@@ -135,6 +135,9 @@ export function App() {
                   root: String(rawCheckpoint.root ?? ''),
                   sha: String(rawCheckpoint.sha ?? ''),
                   parent: String(rawCheckpoint.parent ?? ''),
+                  index: typeof rawCheckpoint.index === 'number' ? rawCheckpoint.index : 0,
+                  currentIndex: typeof rawCheckpoint.current_index === 'number' ? rawCheckpoint.current_index : 0,
+                  undone: rawCheckpoint.undone === true,
                 }
               : null;
           dispatch({
@@ -178,6 +181,16 @@ export function App() {
             tokensAfter: Number(msg.tokensAfter ?? 0),
           });
           break;
+        case 'checkpoint_state': {
+          const rawEntries = Array.isArray(msg.entries) ? (msg.entries as Record<string, unknown>[]) : [];
+          dispatch({
+            type: 'checkpoint_state',
+            root: String(msg.root ?? ''),
+            currentIndex: typeof msg.currentIndex === 'number' ? msg.currentIndex : -1,
+            entries: rawEntries.map((e) => ({ sha: String(e.sha ?? ''), undone: e.undone === true })),
+          });
+          break;
+        }
         case 'file_change':
           dispatch({
             type: 'file_change',

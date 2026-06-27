@@ -380,6 +380,9 @@ export function reducer(state: State, action: Action): State {
                   root: String(rawCheckpoint.root ?? ''),
                   sha: String(rawCheckpoint.sha ?? ''),
                   parent: String(rawCheckpoint.parent ?? ''),
+                  index: typeof rawCheckpoint.index === 'number' ? rawCheckpoint.index : 0,
+                  currentIndex: typeof rawCheckpoint.current_index === 'number' ? rawCheckpoint.current_index : 0,
+                  undone: rawCheckpoint.undone === true,
                 }
               : null;
           entries.push({
@@ -424,6 +427,32 @@ export function reducer(state: State, action: Action): State {
         }
       }
       return { ...state, session: entries };
+    }
+    case 'checkpoint_state': {
+      // One undo/redo/rollback/roll-forward can change every other checkpoint
+      // entry's eligible action for this root (the current pointer moved), so
+      // refresh every tool_call entry sharing `root` in one pass.
+      let changed = false;
+      const session = state.session.map((e) => {
+        if (e.type !== 'tool_call' || e.checkpoint === null || e.checkpoint.root !== action.root) {
+          return e;
+        }
+        const index = action.entries.findIndex((en) => en.sha === e.checkpoint!.sha);
+        if (index === -1) {
+          return e;
+        }
+        changed = true;
+        return {
+          ...e,
+          checkpoint: {
+            ...e.checkpoint,
+            index,
+            currentIndex: action.currentIndex,
+            undone: action.entries[index].undone,
+          },
+        };
+      });
+      return changed ? { ...state, session } : state;
     }
     default:
       return state;

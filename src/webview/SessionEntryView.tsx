@@ -83,43 +83,82 @@ function DiffLink({ diff }: { diff: DiffLinkData }) {
 }
 
 /**
- * Inline "undo this change" control shown next to a file-mutating tool call's
- * header. Surgically reverts only the files this call touched (and discards any
- * later edits to those same files), leaving everything else untouched. Posts
- * 'checkpoint_undo' so the extension host forwards it to the server.
+ * Inline "undo this change" / "re-do this change" toggle shown at the right
+ * edge of a file-mutating tool call's header. Undo surgically reverts only
+ * the files this call touched (discarding later edits to those same files);
+ * re-do re-applies them. Hidden once the root has rolled back past this
+ * entry (`index > currentIndex`) — its files aren't even checked out right
+ * now, so neither action makes sense. Posts 'checkpoint_undo'/'checkpoint_redo'
+ * so the extension host forwards it to the server.
  */
 function UndoChangeLink({ checkpoint }: { checkpoint: CheckpointData }) {
-  const undo = () => {
-    vscode.postMessage({ type: 'checkpoint_undo', root: checkpoint.root, sha: checkpoint.sha });
+  if (checkpoint.index > checkpoint.currentIndex) {
+    return null;
+  }
+  const post = () => {
+    vscode.postMessage({
+      type: checkpoint.undone ? 'checkpoint_redo' : 'checkpoint_undo',
+      root: checkpoint.root,
+      sha: checkpoint.sha,
+    });
   };
-  return (
+  return checkpoint.undone ? (
     <span
       style={styles.undoChangeLink}
-      onClick={undo}
+      onClick={post}
+      title="Re-do this change — re-applies the files this step touched to their state right after it ran (discarding later edits to those same files)."
+    >
+      ↻ re-do this change
+    </span>
+  ) : (
+    <span
+      style={styles.undoChangeLink}
+      onClick={post}
       title="Undo only this change — restores the files this step touched to their state just before it (discarding any later edits to those same files). Itself undoable, so you can redo it afterwards."
     >
-      ↩ undo this change
+      ↺ undo this change
     </span>
   );
 }
 
 /**
- * "Rollback to this state" box shown below a file-mutating tool call's
- * parameters. Restores the whole project tree to its state right after this
- * call ran; a new checkpoint is recorded so rolling forward stays possible.
- * Posts 'checkpoint_rollback' for the extension host to forward to the server.
+ * "Rollback to this state" / "Roll forward to this state" toggle shown below
+ * a file-mutating tool call's parameters. Moves the whole project tree
+ * directly to this checkpoint (rollback if it's behind the current state,
+ * roll-forward if ahead) by repointing the mirror's branch — never a
+ * detached HEAD, since any orphaned tip is preserved on a `rollback_<ts>`
+ * branch. Hidden when this entry already *is* the current state. Posts
+ * 'checkpoint_rollback'/'checkpoint_roll_forward' for the extension host to
+ * forward to the server.
  */
 function RollbackBox({ checkpoint }: { checkpoint: CheckpointData }) {
-  const rollback = () => {
-    vscode.postMessage({ type: 'checkpoint_rollback', root: checkpoint.root, sha: checkpoint.sha });
+  if (checkpoint.index === checkpoint.currentIndex) {
+    return null;
+  }
+  const isRollback = checkpoint.index < checkpoint.currentIndex;
+  const post = () => {
+    vscode.postMessage({
+      type: isRollback ? 'checkpoint_rollback' : 'checkpoint_roll_forward',
+      root: checkpoint.root,
+      sha: checkpoint.sha,
+    });
   };
   return (
     <div
       style={{ ...styles.toolCallBox, ...styles.toolCallBoxClickable, ...styles.rollbackBox }}
-      onClick={rollback}
-      title="Restore the entire project to its state right after this step ran. A new checkpoint is recorded, so you can still roll forward to a later state afterwards."
+      onClick={post}
+      title={
+        isRollback
+          ? 'Restore the entire project to its state right after this step ran. Nothing is lost — you can roll forward again afterwards.'
+          : 'Move the entire project forward to its state right after this step ran.'
+      }
     >
-      ⟲ Rollback to this state
+      {isRollback ? (
+        <span style={styles.rollbackIcon}>⎌</span>
+      ) : (
+        <span style={styles.rollforwardIcon}>⎌</span>
+      )}
+      {isRollback ? 'Rollback to this state' : 'Roll forward to this state'}
     </div>
   );
 }

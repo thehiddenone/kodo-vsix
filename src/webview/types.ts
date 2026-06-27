@@ -81,13 +81,26 @@ export interface DiffLinkData {
 
 /**
  * The mirror checkpoint commit a file-mutating tool call produced, backing its
- * "Undo this change" / "Rollback to this state" controls. `root` names which
- * per-root `.kodo/checkpoints` mirror the `sha` belongs to.
+ * undo/re-do and rollback/roll-forward controls. `root` names which per-root
+ * `.kodo/checkpoints` mirror the `sha` belongs to.
+ *
+ * `index`/`currentIndex` are this checkpoint's and its root's positions in the
+ * persisted, flat, chronological checkpoint list (`kodo.runtime._checkpoints.
+ * CheckpointState`): `index <= currentIndex` means this entry is at or behind
+ * the work tree's current state (eligible for undo/redo + "Rollback to this
+ * state"); `index > currentIndex` means it's ahead (only "Roll forward to
+ * this state" applies). `undone` toggles this entry's own link between
+ * "undo this change" and "re-do this change". Both denormalized fields are
+ * refreshed in lockstep across every entry sharing `root` whenever a
+ * `checkpoint_state` event arrives (see reducer.ts).
  */
 export interface CheckpointData {
   root: string;
   sha: string;
   parent: string;
+  index: number;
+  currentIndex: number;
+  undone: boolean;
 }
 
 export type SessionEntry =
@@ -282,4 +295,5 @@ export type Action =
   | { type: 'context_stats'; currentTokens: number; limitTokens: number; percent: number; canCompact: boolean }
   | { type: 'context_compacting'; active: boolean }
   | { type: 'context_compacted'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number }
-  | { type: 'session_history'; entries: Record<string, unknown>[] };
+  | { type: 'session_history'; entries: Record<string, unknown>[] }
+  | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] };
