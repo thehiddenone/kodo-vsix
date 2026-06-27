@@ -1070,7 +1070,7 @@ function App() {
           <ThinkingBlock content={state.streamingThinking} isActive={state.thinkingActive} startedAt={state.thinkingStartedAt} />
         )}
         {state.streamingTokens && (
-          <div style={styles.agentTokens}>{state.streamingTokens}</div>
+          <div style={styles.agentTokens}><Markdown content={state.streamingTokens} /></div>
         )}
         {state.toolgenActive && (
           <ToolgenBlock
@@ -1492,6 +1492,305 @@ function DiffLink({ diff }: { diff: DiffLinkData }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Markdown rendering
+//
+// A small, best-effort markdown renderer for agent message text. It is built
+// to cope with *streamed*, partially-complete content: any unterminated
+// block-level construct (a fenced code block or one of the kodo callout tags
+// below) is treated as if it were auto-closed at the end of the text. Inline
+// emphasis (**bold**, *italic*, `code`) is rendered only when properly paired,
+// so transient half-typed markers and incidental characters such as the `*` in
+// `2 * 3` or the `_` in snake_case identifiers are left as literal text rather
+// than being force-closed and mangled.
+//
+// Four special callout tags are recognised on top of markdown:
+//   <kodo_info>…</kodo_info>  ℹ️  blue    — progress / informational notes
+//   <kodo_warn>…</kodo_warn>  ⚠️  yellow  — potential problems / contradictions
+//   <kodo_crit>…</kodo_crit>  💥  red     — errors / blocking failures
+//   <kodo>…</kodo>            ド  green   — good news / solved problems
+// ---------------------------------------------------------------------------
+
+type KodoVariant = 'kodo_info' | 'kodo_warn' | 'kodo_crit' | 'kodo';
+
+const KODO_META = {
+  kodo_info: {
+    symbol: 'ℹ️',
+    block: {
+      margin: '10px 0',
+      border: '1px solid rgba(74, 158, 255, 0.6)',
+      background: 'rgba(74, 158, 255, 0.08)',
+      borderRadius: '8px',
+      padding: '8px 12px',
+      display: 'flex',
+      gap: '10px',
+      alignItems: 'flex-start',
+    },
+    icon: { fontSize: '20px', lineHeight: 1.3, flexShrink: 0 },
+  },
+  kodo_warn: {
+    symbol: '⚠️',
+    block: {
+      margin: '15px 0',
+      border: '1px solid rgba(230, 184, 0, 0.7)',
+      background: 'rgba(230, 184, 0, 0.08)',
+      borderRadius: '8px',
+      padding: '8px 12px',
+      display: 'flex',
+      gap: '10px',
+      alignItems: 'flex-start',
+    },
+    icon: { fontSize: '20px', lineHeight: 1.3, flexShrink: 0 },
+  },
+  kodo_crit: {
+    symbol: '💥',
+    block: {
+      margin: '20px 0',
+      border: '1px solid rgba(255, 92, 92, 0.7)',
+      background: 'rgba(255, 92, 92, 0.08)',
+      borderRadius: '8px',
+      padding: '8px 12px',
+      display: 'flex',
+      gap: '10px',
+      alignItems: 'flex-start',
+    },
+    icon: { fontSize: '20px', lineHeight: 1.3, flexShrink: 0 },
+  },
+  kodo: {
+    symbol: 'ド',
+    block: {
+      margin: '20px 0',
+      border: '1px solid rgba(63, 185, 80, 0.7)',
+      background: 'rgba(63, 185, 80, 0.08)',
+      borderRadius: '8px',
+      padding: '8px 12px',
+      display: 'flex',
+      gap: '10px',
+      alignItems: 'flex-start',
+    },
+    icon: { fontSize: '22px', lineHeight: 1.2, flexShrink: 0, color: '#3fb950', fontWeight: 700 },
+  },
+};
+
+// Opening tag of any kodo callout. More specific names come first so that, e.g.
+// `<kodo_info>` is never mis-read as `<kodo>` followed by stray text.
+const KODO_OPEN_RE = /<(kodo_info|kodo_warn|kodo_crit|kodo)>/;
+
+// Inline patterns, tried in priority order. The earliest match in the text
+// wins; ties are broken by this order (so `**` beats `*` at the same index).
+const INLINE_PATTERNS: { re: RegExp; kind: 'code' | 'bold' | 'italic' | 'link' }[] = [
+  { re: /`([^`]+)`/, kind: 'code' },
+  { re: /\*\*([\s\S]+?)\*\*/, kind: 'bold' },
+  { re: /(?<![A-Za-z0-9])__([\s\S]+?)__(?![A-Za-z0-9])/, kind: 'bold' },
+  { re: /\*([\s\S]+?)\*/, kind: 'italic' },
+  { re: /(?<![A-Za-z0-9])_([\s\S]+?)_(?![A-Za-z0-9])/, kind: 'italic' },
+  { re: /\[([^\]]*)\]\(([^)\s]+)\)/, kind: 'link' },
+];
+
+function headingStyle(level: number): Record<string, unknown> {
+  const sizes = ['1.5em', '1.35em', '1.2em', '1.1em', '1em', '0.95em'];
+  return { ...styles.mdHeadingBase, fontSize: sizes[level - 1] };
+}
+
+// Render inline markdown (emphasis, code spans, links) inside a single span of
+// text. Returns an array of preact children.
+function parseInline(text: string, kp: string): ComponentChildren[] {
+  const nodes: ComponentChildren[] = [];
+  let rest = text;
+  let k = 0;
+  while (rest.length > 0) {
+    let bestStart = Infinity;
+    let bestKind: 'code' | 'bold' | 'italic' | 'link' | null = null;
+    let bestMatch: RegExpExecArray | null = null;
+    for (const p of INLINE_PATTERNS) {
+      const m = p.re.exec(rest);
+      if (m && m.index < bestStart) {
+        bestStart = m.index;
+        bestKind = p.kind;
+        bestMatch = m;
+      }
+    }
+    if (!bestMatch || bestKind === null) {
+      nodes.push(rest);
+      break;
+    }
+    if (bestStart > 0) nodes.push(rest.slice(0, bestStart));
+    const m = bestMatch;
+    const key = `${kp}-${k++}`;
+    switch (bestKind) {
+      case 'code':
+        nodes.push(<code key={key} style={styles.mdCode}>{m[1]}</code>);
+        break;
+      case 'bold':
+        nodes.push(<strong key={key} style={styles.mdBold}>{parseInline(m[1], key)}</strong>);
+        break;
+      case 'italic':
+        nodes.push(<em key={key}>{parseInline(m[1], key)}</em>);
+        break;
+      case 'link':
+        nodes.push(
+          <a key={key} href={m[2]} style={styles.mdLink} target="_blank" rel="noreferrer">
+            {parseInline(m[1], key)}
+          </a>,
+        );
+        break;
+    }
+    rest = rest.slice(bestStart + m[0].length);
+  }
+  return nodes;
+}
+
+// Render block-level markdown (headings, lists, quotes, code fences,
+// paragraphs, rules). Returns an array of preact children.
+function parseBlocks(text: string, kp: string): ComponentChildren[] {
+  const lines = text.split('\n');
+  const blocks: ComponentChildren[] = [];
+  let i = 0;
+  let k = 0;
+  const nextKey = () => `${kp}-${k++}`;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+    // Fenced code block (auto-closes at end of text if the closing fence is
+    // missing — handles content still being streamed).
+    if (/^\s*```/.test(line)) {
+      i++;
+      const code: string[] = [];
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+        code.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++; // consume the closing fence
+      blocks.push(
+        <pre key={nextKey()} style={styles.mdPre}>
+          <code>{code.join('\n')}</code>
+        </pre>,
+      );
+      continue;
+    }
+    // Heading
+    const hm = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (hm) {
+      const level = hm[1].length;
+      blocks.push(h(`h${level}`, { key: nextKey(), style: headingStyle(level) }, parseInline(hm[2], nextKey())));
+      i++;
+      continue;
+    }
+    // Horizontal rule (---, ***, ___, possibly spaced)
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      blocks.push(<hr key={nextKey()} style={styles.mdHr} />);
+      i++;
+      continue;
+    }
+    // Blockquote
+    if (/^\s*>/.test(line)) {
+      const quote: string[] = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      blocks.push(
+        <blockquote key={nextKey()} style={styles.mdQuote}>
+          {parseBlocks(quote.join('\n'), nextKey())}
+        </blockquote>,
+      );
+      continue;
+    }
+    // List (unordered or ordered) — single-level, best-effort.
+    const listM = /^(\s*)([-*+]|\d+\.)\s+/.exec(line);
+    if (listM) {
+      const ordered = /\d+\./.test(listM[2]);
+      const items: ComponentChildren[] = [];
+      while (i < lines.length) {
+        const lm = /^(\s*)([-*+]|\d+\.)\s+(.*)$/.exec(lines[i]);
+        if (!lm) break;
+        const ik = nextKey();
+        items.push(
+          <li key={ik} style={styles.mdLi}>
+            {parseInline(lm[3], ik)}
+          </li>,
+        );
+        i++;
+      }
+      blocks.push(h(ordered ? 'ol' : 'ul', { key: nextKey(), style: ordered ? styles.mdOl : styles.mdUl }, items));
+      continue;
+    }
+    // Paragraph — gather consecutive lines until a blank line or another block.
+    const para: string[] = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !/^\s*```/.test(lines[i]) &&
+      !/^(#{1,6})\s+/.test(lines[i]) &&
+      !/^\s*>/.test(lines[i]) &&
+      !/^(\s*)([-*+]|\d+\.)\s+/.test(lines[i]) &&
+      !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i])
+    ) {
+      para.push(lines[i]);
+      i++;
+    }
+    const pk = nextKey();
+    const inlineNodes: ComponentChildren[] = [];
+    para.forEach((pl, idx) => {
+      if (idx > 0) inlineNodes.push(<br key={`${pk}-br-${idx}`} />);
+      inlineNodes.push(...parseInline(pl, `${pk}-${idx}`));
+    });
+    blocks.push(
+      <p key={pk} style={styles.mdP}>
+        {inlineNodes}
+      </p>,
+    );
+  }
+  return blocks;
+}
+
+function KodoBlock({ variant, inner }: { variant: KodoVariant; inner: string }) {
+  const meta = KODO_META[variant];
+  return (
+    <div style={meta.block}>
+      <span style={meta.icon}>{meta.symbol}</span>
+      <div style={styles.kodoBody}>{parseBlocks(inner.trim(), 'kodo')}</div>
+    </div>
+  );
+}
+
+// Split top-level content into kodo callout blocks and plain markdown spans,
+// then render each. An unterminated kodo tag consumes the rest of the text.
+function renderContent(text: string): ComponentChildren[] {
+  const out: ComponentChildren[] = [];
+  let rest = text;
+  let key = 0;
+  while (rest.length > 0) {
+    const m = KODO_OPEN_RE.exec(rest);
+    if (!m) {
+      out.push(...parseBlocks(rest, `md-${key++}`));
+      break;
+    }
+    const before = rest.slice(0, m.index);
+    if (before.trim() !== '') out.push(...parseBlocks(before, `md-${key++}`));
+    const variant = m[1] as KodoVariant;
+    const afterOpen = rest.slice(m.index + m[0].length);
+    const cm = new RegExp(`</${variant}>`).exec(afterOpen);
+    let inner: string;
+    if (cm) {
+      inner = afterOpen.slice(0, cm.index);
+      rest = afterOpen.slice(cm.index + cm[0].length);
+    } else {
+      inner = afterOpen; // unclosed → take the remainder of the text
+      rest = '';
+    }
+    out.push(<KodoBlock key={`kodo-${key++}`} variant={variant} inner={inner} />);
+  }
+  return out;
+}
+
+function Markdown({ content }: { content: string }) {
+  return <div style={styles.mdRoot}>{renderContent(content)}</div>;
+}
+
 interface SessionEntryViewProps {
   entry: SessionEntry;
 }
@@ -1521,7 +1820,7 @@ function SessionEntryView({ entry }: SessionEntryViewProps) {
         </div>
       );
     case 'assistant_response':
-      return <div style={styles.agentTokens}>{entry.content}</div>;
+      return <div style={styles.agentTokens}><Markdown content={entry.content} /></div>;
     case 'status_response': {
       const mins = Math.floor(entry.durationMs / 60000);
       const secs = Math.round((entry.durationMs % 60000) / 1000);
@@ -2389,6 +2688,69 @@ const styles = {
   agentTokens: {
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
+  },
+  mdRoot: {
+    whiteSpace: 'normal' as const,
+    wordBreak: 'break-word' as const,
+    lineHeight: 1.5,
+  },
+  mdP: {
+    margin: '0.4em 0',
+  },
+  mdHeadingBase: {
+    fontWeight: 600,
+    lineHeight: 1.3,
+    margin: '0.6em 0 0.3em',
+  },
+  mdBold: {
+    fontWeight: 600,
+  },
+  mdCode: {
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+    fontSize: '0.9em',
+    background: 'var(--vscode-textCodeBlock-background, rgba(127,127,127,0.18))',
+    padding: '0.1em 0.3em',
+    borderRadius: '3px',
+  },
+  mdPre: {
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+    fontSize: '0.9em',
+    background: 'var(--vscode-textCodeBlock-background, rgba(127,127,127,0.12))',
+    padding: '8px 10px',
+    borderRadius: '4px',
+    overflowX: 'auto' as const,
+    margin: '0.5em 0',
+    whiteSpace: 'pre' as const,
+  },
+  mdUl: {
+    margin: '0.3em 0',
+    paddingLeft: '1.4em',
+  },
+  mdOl: {
+    margin: '0.3em 0',
+    paddingLeft: '1.4em',
+  },
+  mdLi: {
+    margin: '0.15em 0',
+  },
+  mdQuote: {
+    borderLeft: '3px solid var(--vscode-textBlockQuote-border, rgba(127,127,127,0.4))',
+    margin: '0.5em 0',
+    padding: '0.2em 0 0.2em 0.8em',
+    color: 'var(--vscode-descriptionForeground)',
+  },
+  mdHr: {
+    border: 'none',
+    borderTop: '1px solid var(--vscode-panel-border, rgba(127,127,127,0.3))',
+    margin: '0.8em 0',
+  },
+  mdLink: {
+    color: 'var(--vscode-textLink-foreground)',
+    textDecoration: 'underline' as const,
+  },
+  kodoBody: {
+    flex: 1,
+    minWidth: 0,
   },
   awaitingLine: {
     color: 'var(--vscode-descriptionForeground)',
