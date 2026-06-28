@@ -327,11 +327,6 @@ export function reducer(state: State, action: Action): State {
       return { ...state, resumeSessionId: action.sessionId };
     case 'resume_dismissed':
       return { ...state, resumeSessionId: null };
-    case 'post_update':
-      return {
-        ...state,
-        session: [...state.session, { type: 'post_update', content: action.message, exclude_from_context: true }],
-      };
     case 'session_history': {
       if (state.session.length > 0) {
         return state;

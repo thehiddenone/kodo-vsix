@@ -959,11 +959,6 @@ export class SessionController {
       return;
     }
 
-    if (env.kind === 'event' && evtType === 'post.update') {
-      this._post({ type: 'post_update', message: String(env.payload.message ?? '') });
-      return;
-    }
-
     // The server stored this prompt's attachments and copied them into the
     // session. Hand the absolute stored-copy paths to the webview so the chips
     // on the just-sent bubble open the durable copies (not the originals).

@@ -242,9 +242,6 @@ export function App() {
           // session after a window reload / workspace reopen.
           vscode.setState({ sessionId: String(msg.sessionId ?? '') });
           break;
-        case 'post_update':
-          dispatch({ type: 'post_update', message: String(msg.message ?? '') });
-          break;
         case 'resume_offer':
           dispatch({ type: 'resume_offer', sessionId: String(msg.sessionId ?? '') });
           break;
@@ -284,7 +281,11 @@ export function App() {
     );
   }
 
-  const isRunning = state.stage !== 'IDLE' && state.stage !== 'STOPPED' && state.stage !== 'ERROR';
+  // A turn is in progress iff the server reports phase "running" (forwarded as
+  // `state.running` via the `mode_state` message). The older `state.stage`
+  // signal is dead — the server's `state` event no longer carries a `stage`
+  // field, so it is always 'IDLE' and must not gate the Stop button.
+  const isRunning = state.running;
   const isBlocked = state.pendingGate !== null || state.pendingQuestion !== null;
 
   function handleStop() {

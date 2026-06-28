@@ -137,7 +137,6 @@ export type SessionEntry =
     }
   | { type: 'thinking_block'; content: string; durationMs: number | null; exclude_from_context: true }
   | { type: 'status_response'; durationMs: number; inputTokens: number; outputTokens: number; contextTokens: number; exclude_from_context: true }
-  | { type: 'post_update'; content: string; exclude_from_context: true }
   // Sub-agent takeover dividers. 'start' marks a sub-agent taking over from the
   // main agent; 'end' marks the main agent resuming. Display-only.
   // `failed` is set on the 'end' divider when the sub-agent did not produce a
@@ -283,7 +282,6 @@ export type Action =
     }
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
-  | { type: 'post_update'; message: string }
   | { type: 'session_name'; name: string }
   | { type: 'current_project'; name: string }
   | { type: 'session_naming'; active: boolean }

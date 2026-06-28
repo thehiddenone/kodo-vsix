@@ -242,8 +242,6 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
         </div>
       );
     }
-    case 'post_update':
-      return <div style={styles.postUpdate}>{entry.content}</div>;
     case 'subsession_divider': {
       // Render the takeover/handback notices as kodo callouts so they read like
       // the agent's own one-way notifications: <kodo_info> opening the delegation,

@@ -543,16 +543,6 @@ export const styles = {
     wordBreak: 'break-word' as const,
     padding: '1px 0',
   },
-  postUpdate: {
-    background: 'var(--vscode-editorWidget-background, var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,0.12)))',
-    borderRadius: '6px',
-    padding: '6px 10px',
-    marginTop: '6px',
-    marginBottom: '4px',
-    fontSize: '12px',
-    color: 'var(--vscode-descriptionForeground)',
-    fontStyle: 'italic',
-  },
   // Sub-agent takeover dividers
   // Sub-agent task brief — the structured task handed to a spawned sub-agent.
   // Left-aligned card, deliberately distinct from the user's prompt bubble.
