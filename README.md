@@ -50,7 +50,7 @@ The extension sends `request` frames (`hello`, `ping`, `approval.respond`, `stop
 | Command | Description |
 | --- | --- |
 | `Kodo: Open Panel` | Open (or reveal) the Kodo WebView panel |
-| `Kodo: Init Project` | Scaffold `kodo.md`, `src/`, `gen/`, `.kodo/` in the workspace root *(M2)* |
+| `Kodo: Init Project` | Scaffold `kodo.md`, `specs/`, `src/`, `test/`, `.kodo/` in the workspace root *(M2)* |
 
 ## Development
 

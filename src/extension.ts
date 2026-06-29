@@ -225,6 +225,7 @@ function _sessionDeps(): SessionDeps {
     hasWorkspace: () => hasWorkspace,
     buildFolderMap: _buildFolderMap,
     pickProject,
+    addWorkspaceFolder,
     handleApiKeyRequest: (vendor, requestId, send) => {
       _apiKeyQueue = _apiKeyQueue.then(() => _handleApiKeyRequest(vendor, requestId, send));
     },
@@ -239,6 +240,16 @@ function _sessionDeps(): SessionDeps {
 function _findBySessionId(sessionId: string): SessionController | undefined {
   for (const s of sessions.values()) {
     if (s.sessionId === sessionId) {
+      return s;
+    }
+  }
+  return undefined;
+}
+
+/** Find the foreground session tab with a ready connection, if any. */
+function _findActiveSession(): SessionController | undefined {
+  for (const s of sessions.values()) {
+    if (s.isActiveAndReady) {
       return s;
     }
   }
@@ -299,7 +310,25 @@ function adoptPanel(panel: vscode.WebviewPanel, sessionId: string): void {
 // Create project + Guided project picker
 // ---------------------------------------------------------------------------
 
+/**
+ * Scaffold a new (or existing, picked) folder as a Kōdo project. Delegates the
+ * actual filesystem work to the server's `project.create` message — the same
+ * `WorkflowEngine.__create_project` path backing the LLM-facing
+ * `create_new_project` tool — so the resulting layout (`specs/`, `src/`,
+ * `test/`, `.kodo/kodo.md`) always matches. Requires an open, foreground
+ * session tab to route the request through (the server scaffolds relative to
+ * that session's engine and pushes `workspace.add_folder` back over its
+ * socket).
+ */
 async function createProject(): Promise<string | null> {
+  const active = _findActiveSession();
+  if (!active) {
+    vscode.window.showErrorMessage(
+      'Kōdo: open a session tab before creating a project, then try again.',
+    );
+    return null;
+  }
+
   const picked = await vscode.window.showOpenDialog({
     canSelectFiles: false,
     canSelectFolders: true,
@@ -315,6 +344,7 @@ async function createProject(): Promise<string | null> {
   const root = picked[0].fsPath;
   const kodoMd = path.join(root, '.kodo', 'kodo.md');
 
+  let force = false;
   if (fs.existsSync(kodoMd)) {
     const choice = await vscode.window.showWarningMessage(
       `${kodoMd} already exists. Overwrite?`,
@@ -324,40 +354,15 @@ async function createProject(): Promise<string | null> {
     if (choice !== 'Overwrite') {
       return null;
     }
+    force = true;
   }
 
   try {
-    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
-    fs.mkdirSync(path.join(root, 'gen'), { recursive: true });
-    fs.mkdirSync(path.join(root, '.kodo'), { recursive: true });
-
-    const template = [
-      '# Kodo Project',
-      '',
-      '> Project marker. Required.',
-      '',
-      '## Toolchain',
-      '',
-      '- python',
-      '',
-      '## Components',
-      '',
-      '(empty until Architect runs; agents append entries)',
-      '',
-      '## Settings overrides',
-      '',
-      '(optional inline overrides; structured-but-prose)',
-      '',
-    ].join('\n');
-
-    fs.writeFileSync(kodoMd, template, 'utf8');
-
-    const folderUri = vscode.Uri.file(root);
-    const alreadyInWorkspace =
-      vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === folderUri.fsPath) ?? false;
-    if (!alreadyInWorkspace) {
-      const insertAt = vscode.workspace.workspaceFolders?.length ?? 0;
-      vscode.workspace.updateWorkspaceFolders(insertAt, 0, { uri: folderUri });
+    const resp = await active.createProject({ path: root, force });
+    if (resp.type === 'project.create.error' || resp.type === 'error') {
+      const message = String(resp.message ?? 'unknown error');
+      vscode.window.showErrorMessage(`Kōdo: Init Project failed — ${message}`);
+      return null;
     }
 
     const doc = await vscode.workspace.openTextDocument(kodoMd);
@@ -369,6 +374,29 @@ async function createProject(): Promise<string | null> {
     vscode.window.showErrorMessage(`Kōdo: Init Project failed — ${String(err)}`);
     return null;
   }
+}
+
+/**
+ * Add a directory the server has just scaffolded — via the `create_new_project`
+ * tool or the "Create Project" command's `project.create` message — to the
+ * open workspace. The folder already exists on disk; this only registers it
+ * as a VS Code workspace folder, so the agent's subsequent file edits are
+ * visible and the extension re-pushes `workspace.folders` to the server.
+ * No-op when the folder is already part of the workspace.
+ */
+function addWorkspaceFolder(folderPath: string, name: string): void {
+  const folderUri = vscode.Uri.file(folderPath);
+  const alreadyInWorkspace =
+    vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === folderUri.fsPath) ?? false;
+  if (alreadyInWorkspace) {
+    return;
+  }
+  const insertAt = vscode.workspace.workspaceFolders?.length ?? 0;
+  vscode.workspace.updateWorkspaceFolders(
+    insertAt,
+    0,
+    name ? { uri: folderUri, name } : { uri: folderUri },
+  );
 }
 
 async function pickProject(): Promise<{ root: string; name: string } | null> {

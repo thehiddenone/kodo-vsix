@@ -114,6 +114,12 @@ export interface SessionDeps {
   buildFolderMap: () => Record<string, string>;
   /** Guided project picker (returns {root,name} or null if cancelled). */
   pickProject: () => Promise<{ root: string; name: string } | null>;
+  /**
+   * Add a server-scaffolded project directory to the open workspace (the
+   * `create_new_project` tool). The path already exists on disk; this only
+   * registers it as a VS Code workspace folder (no-op if already present).
+   */
+  addWorkspaceFolder: (folderPath: string, name: string) => void;
   /** Shared SecretStorage-backed API-key prompt; replies on this session's WS. */
   handleApiKeyRequest: (vendor: string, requestId: string, send: (env: Envelope) => void) => void;
   /** Called once the server assigns/confirms this session's id. */
@@ -192,6 +198,8 @@ export class SessionController {
   /** Validated files staged to be prepended to the next prompt, keyed by chip id. */
   private readonly attachedFiles = new Map<string, AttachedFile>();
   private _attachSeq = 0;
+  /** Pending `project.create` requests awaiting a response, keyed by request id. */
+  private readonly _pendingProjectCreate = new Map<string, (payload: Record<string, unknown>) => void>();
 
   constructor(
     private readonly deps: SessionDeps,
@@ -224,6 +232,35 @@ export class SessionController {
   /** Bring this session's tab to the foreground. */
   reveal(): void {
     this.panel.reveal();
+  }
+
+  /** True when this session's tab is the foreground tab and its connection is ready. */
+  get isActiveAndReady(): boolean {
+    return this.panel.active && this.connected && this.sessionId !== '';
+  }
+
+  /**
+   * Send a `project.create` request over this session's connection and await
+   * the server's `project.create.done` / `project.create.error` response.
+   * Backs the "Create Project" command, which already has a concrete folder
+   * from its own picker dialog and so always supplies `path`.
+   */
+  createProject(
+    payload: { path: string; force?: boolean },
+    timeoutMs = 15_000,
+  ): Promise<Record<string, unknown>> {
+    const env = makeRequest('project.create', payload);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._pendingProjectCreate.delete(env.id);
+        reject(new Error('Timed out waiting for project.create response'));
+      }, timeoutMs);
+      this._pendingProjectCreate.set(env.id, (p) => {
+        clearTimeout(timer);
+        resolve(p);
+      });
+      this._sendStamped(env);
+    });
   }
 
   // ------------------------------------------------------------------
@@ -789,6 +826,15 @@ export class SessionController {
       return;
     }
 
+    if (env.kind === 'response' && env.correlation_id) {
+      const resolver = this._pendingProjectCreate.get(env.correlation_id);
+      if (resolver) {
+        this._pendingProjectCreate.delete(env.correlation_id);
+        resolver(env.payload);
+        return;
+      }
+    }
+
     const evtType = String(env.payload.type ?? '');
 
     if (env.kind === 'response' && evtType === 'pong') {
@@ -846,6 +892,15 @@ export class SessionController {
       if (root) {
         this.currentProject = { root, name };
         this._post({ type: 'current_project', root, name });
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'workspace.add_folder') {
+      const folderPath = String(env.payload.path ?? '');
+      const name = String(env.payload.name ?? '');
+      if (folderPath) {
+        this.deps.addWorkspaceFolder(folderPath, name);
       }
       return;
     }

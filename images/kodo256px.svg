@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" baseProfile="full"
+     width="256px" height="256px" viewBox="0 0 256 256"
+     preserveAspectRatio="xMidYMid meet">
+  <title>kodo256px.svg</title>
+
+  <style><![CDATA[
+    /* One quick blink per 10s interval, both eyes together.
+       The wrapping group does the positioning; each eye rect only scales
+       on its own Y axis, so the rotate and the blink don't fight. */
+    .eye {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: blink 10s infinite ease-in-out;
+    }
+    @keyframes blink {
+      0%   { transform: scaleY(1) translateX(0px) translateY(0px) }
+      35%   { transform: scaleY(1) translateX(0px) translateY(0px) }
+      40%  { transform: translateX(10px); }
+      55%  { transform: translateX(10px); }
+      65%  { transform: translateX(0px) translateY(-20px); }
+      80%  { transform: translateX(0px) translateY(0px); }
+      90%  { transform: scaleY(1); }
+      91%  { transform: scaleY(0.2); }
+      92%  { transform: scaleY(1); }
+      95%  { transform: scaleY(1); }
+      96%  { transform: scaleY(0.2); }
+      97%  { transform: scaleY(1); }
+      100% { transform: scaleY(1); }
+    }
+  ]]></style>
+
+  <!-- Transparent background -->
+  <rect x="0" y="0" width="256" height="256" fill="none"/>
+
+  <!-- Base 'to' (ト): the face + nose, in the same serif font/colour as kodo128px.svg -->
+  <text x="0" y="32" xml:space="preserve" text-rendering="geometricPrecision"
+        font-family="serif" font-size="280px" font-weight="900"
+        dominant-baseline="hanging" fill="#107C41">ト</text>
+
+  <!-- Dakuten (゛): the two blinking eyes, same colour, top-right -->
+  <g fill="#107C41">
+    <g transform="rotate(150 176 92)">
+      <rect class="eye" x="148" y="86" width="17" height="42" rx="10"/>
+    </g>
+    <g transform="rotate(150 212 80)">
+      <rect class="eye" x="194" y="74" width="17" height="42" rx="10"/>
+    </g>
+  </g>
+</svg>
