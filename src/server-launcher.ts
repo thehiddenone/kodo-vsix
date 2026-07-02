@@ -22,6 +22,21 @@ export function discoveryPath(): string {
   return path.join(os.homedir(), '.kodo', 'kodo-server');
 }
 
+/**
+ * Path to the file capturing the singleton server's raw stdout/stderr
+ * (`~/.kodo/logs/server.out.log`).
+ *
+ * The server's stdio is redirected here (never piped to this extension host) so
+ * the process is not tethered to the window that spawned it: on a window reload
+ * the fd lives on in the surviving server, and any window's launcher can tail
+ * this file into its "Kodo Server" output channel. This is deliberately a
+ * *different* file from the server's own structured log (`server.log`, written
+ * by its logging FileHandler) so the two never double up on the same records.
+ */
+export function serverStdoutLogPath(): string {
+  return path.join(os.homedir(), '.kodo', 'logs', 'server.out.log');
+}
+
 /** Read `{pid, port}` from the discovery file, or null if absent/unparseable. */
 export function readServerDiscovery(): { pid: number; port: number } | null {
   try {
@@ -67,6 +82,8 @@ export function portBusy(port: number, timeoutMs = 500): Promise<boolean> {
 export class ServerLauncher {
   private proc: ChildProcess | null = null;
   private readonly output: vscode.OutputChannel;
+  private tailTimer: ReturnType<typeof setInterval> | null = null;
+  private tailPos = 0;
 
   constructor() {
     this.output = vscode.window.createOutputChannel('Kodo Server');
@@ -97,6 +114,9 @@ export class ServerLauncher {
     if (disc !== null) {
       if ((await portBusy(disc.port)) || pidAlive(disc.pid)) {
         this.output.appendLine(`[reusing kodo-server pid=${disc.pid} port=${disc.port}]`);
+        // This window did not spawn the server, but it can still surface the
+        // shared singleton's logs: follow the log file from its current end.
+        this.startTailing(serverStdoutLogPath(), false);
         return;
       }
       this.output.appendLine('[removing stale kodo-server discovery file]');
@@ -127,78 +147,136 @@ export class ServerLauncher {
       '--port', String(port),
       '--log-level', 'DEBUG',
     ];
-    // detached=true on POSIX puts the child in its own process group so
-    // dispose() can kill the whole group (see dispose() below).
-    const detached = !IS_WINDOWS;
+
+    // The server is a global singleton that MUST survive this window reloading
+    // or closing (another window may be mid-turn against it, and even this
+    // window reconnects and drains its buffered events on reload). Three things
+    // make the child independent of this extension host:
+    //   1. stdio goes to a log FILE, never a pipe back to us — a piped stdout
+    //      is a lifetime tether: when the ext host dies the pipe breaks and the
+    //      server dies with it.
+    //   2. detached (own process group / setsid on POSIX) + unref() so we hold
+    //      no reference to it.
+    //   3. The server is ORPHANED at birth: it is spawned through a short-lived
+    //      intermediate shell that backgrounds it and exits immediately, so the
+    //      server's parent dies at once and it is reparented to PID 1. This is
+    //      the critical one: VS Code's extension-host teardown kills the host's
+    //      *process tree by walking parent PIDs* (empirically: a detached,
+    //      file-stdio, unref'd child spawned directly still received SIGTERM
+    //      54 ms after a window reload — its own process group did not protect
+    //      it, so the killer follows PPID, and whether the walk sees the child
+    //      is a race against the host's own exit). An orphan has PPID 1 before
+    //      any teardown can walk to it, which removes the race entirely.
+    // The server self-reaps on its own idle timeout once no window is connected,
+    // so nothing here ever needs to kill it.
+    const logPath = serverStdoutLogPath();
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
 
     this.output.appendLine(`$ ${python} ${args.join(' ')}`);
+    this.output.appendLine(`[server stdout/stderr -> ${logPath}]`);
 
-    this.proc = spawn(python, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached,
-      env: process.env,
-    });
-
-    this.proc.stdout?.on('data', (data: Buffer) => {
-      this.output.append(data.toString());
-    });
-
-    this.proc.stderr?.on('data', (data: Buffer) => {
-      this.output.append(data.toString());
-    });
-
-    this.proc.on('exit', (code) => {
-      this.output.appendLine(`[kodo-server exited with code ${String(code)}]`);
+    if (IS_WINDOWS) {
+      // `start "" /b` launches via a transient nested cmd that exits right
+      // away, orphaning the python process; redirection happens in the inner
+      // cmd so the server owns the log handle, not this host.
+      const inner = `""${python}" ${args.join(' ')} > "${logPath}" 2>&1"`;
+      this.proc = spawn('cmd.exe', ['/d', '/s', '/c', `start "" /b cmd /d /s /c ${inner}`], {
+        stdio: 'ignore',
+        detached: false,
+        windowsHide: true,
+        env: process.env,
+      });
+    } else {
+      // sh truncates+redirects to the log, backgrounds the server, and exits;
+      // the server is reparented to PID 1 the moment sh dies. $0 = log path,
+      // "$@" = the python command line.
+      this.proc = spawn(
+        '/bin/sh',
+        ['-c', ': > "$0"; exec < /dev/null >> "$0" 2>&1; "$@" &', logPath, python, ...args],
+        {
+          stdio: 'ignore',
+          detached: true,
+          windowsHide: true,
+          env: process.env,
+        },
+      );
+    }
+    this.proc.unref();
+    this.proc.on('exit', () => {
+      // This is only the short-lived launcher shell exiting (immediately and
+      // always 0) — NOT the server. Server startup failures (including the
+      // expected exit-1 "lost the launch race" case) surface in the tailed log.
       this.proc = null;
-      // Exit code 1 means another window won the launch race and this spawn
-      // refused to start a duplicate (server-side discovery guard). That is
-      // expected: the WebSocket client just connects to the winner. Only alarm
-      // on other non-zero exits.
-      if (code !== 0 && code !== 1 && code !== null) {
-        void vscode.window
-          .showErrorMessage(
-            `Kodo server exited with code ${String(code)}.`,
-            'Show Output',
-          )
-          .then((choice) => {
-            if (choice === 'Show Output') {
-              this.output.show();
-            }
-          });
-      }
     });
+
+    // Mirror the shared log into the output channel for live debugging.
+    this.startTailing(logPath, true);
   }
 
   /**
-   * Kill the server subprocess and any descendants.
+   * Release this window's handle on the server WITHOUT killing it.
    *
-   * - Windows: ``taskkill /PID <pid> /T /F`` walks descendants.
-   * - POSIX: ``process.kill(-pid)`` signals the process group (created by
-   *   ``detached: true`` at spawn time).
+   * The server is a global singleton shared across every VS Code window and is
+   * spawned detached (see {@link launch}); killing it here would break other
+   * windows and defeats the whole point of surviving a reload. Lifecycle is the
+   * server's own job: it self-reaps on its idle timeout once no window is
+   * connected. So we only stop tailing and drop our local reference.
    */
   dispose(): void {
-    if (this.proc === null) {
-      return;
-    }
-    const pid = this.proc.pid;
-    if (pid === undefined) {
-      this.proc.kill();
-      this.proc = null;
-      return;
-    }
-    if (IS_WINDOWS) {
-      spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    } else {
-      try {
-        process.kill(-pid, 'SIGTERM');
-      } catch {
-        // group may already be gone; ignore
-      }
-    }
+    this.stopTailing();
     this.proc = null;
     this.output.dispose();
+  }
+
+  /**
+   * Follow *logPath* and mirror appended bytes into the output channel.
+   *
+   * Polling (rather than ``fs.watch``) keeps this robust across the log file
+   * being truncated/recreated when a new server instance starts. ``fromStart``
+   * replays the whole file first (the window that just spawned the server);
+   * otherwise we begin at the current end (a window reusing an existing server).
+   */
+  private startTailing(logPath: string, fromStart: boolean): void {
+    this.stopTailing();
+    try {
+      this.tailPos = fromStart ? 0 : fs.statSync(logPath).size;
+    } catch {
+      this.tailPos = 0;
+    }
+    const pump = (): void => {
+      let size: number;
+      try {
+        size = fs.statSync(logPath).size;
+      } catch {
+        return; // log not created yet, or momentarily gone
+      }
+      if (size < this.tailPos) {
+        this.tailPos = 0; // file was truncated (new server instance)
+      }
+      if (size <= this.tailPos) {
+        return;
+      }
+      try {
+        const fd = fs.openSync(logPath, 'r');
+        const buf = Buffer.alloc(size - this.tailPos);
+        const read = fs.readSync(fd, buf, 0, buf.length, this.tailPos);
+        fs.closeSync(fd);
+        this.tailPos += read;
+        if (read > 0) {
+          this.output.append(buf.subarray(0, read).toString('utf8'));
+        }
+      } catch {
+        /* transient read race; next tick retries */
+      }
+    };
+    pump();
+    this.tailTimer = setInterval(pump, 500);
+  }
+
+  private stopTailing(): void {
+    if (this.tailTimer !== null) {
+      clearInterval(this.tailTimer);
+      this.tailTimer = null;
+    }
   }
 }

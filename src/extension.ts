@@ -17,6 +17,7 @@
  *      self-reaps once the last window leaves; we never kill it).
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -82,8 +83,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   physicalRoot = projectRoot ? path.dirname(projectRoot) : '';
   hasWorkspace = projectRoot.length > 0;
 
-  windowId = context.workspaceState.get<string>('kodo.windowId') ?? _newId();
-  void context.workspaceState.update('kodo.windowId', windowId);
+  windowId = _stableWindowId(context);
 
   if (hasWorkspace) {
     const port = readServerDiscovery()?.port ?? DEFAULT_PORT;
@@ -229,9 +229,17 @@ function _sessionDeps(): SessionDeps {
     handleApiKeyRequest: (vendor, requestId, send) => {
       _apiKeyQueue = _apiKeyQueue.then(() => _handleApiKeyRequest(vendor, requestId, send));
     },
-    onSessionAssigned: () => undefined,
+    onSessionAssigned: (_c, sessionId) => _rememberOpenSession(sessionId),
     onLlamaState: _applyLlamaState,
-    onClosed: (c) => sessions.delete(c.key),
+    onClosed: (c) => {
+      sessions.delete(c.key);
+      // A real user close (or delete, or a session_in_use bounce) means this
+      // window should NOT auto-reopen the session next activation. On window
+      // reload/teardown `deactivating` is set and the list must survive intact.
+      if (!deactivating && c.sessionId) {
+        _forgetOpenSession(c.sessionId);
+      }
+    },
     isDeactivating: () => deactivating,
   };
 }
@@ -304,6 +312,89 @@ function adoptPanel(panel: vscode.WebviewPanel, sessionId: string): void {
   }
   const controller = new SessionController(_sessionDeps(), panel, sessionId);
   sessions.set(controller.key, controller);
+}
+
+// ---------------------------------------------------------------------------
+// Per-window open-session memory (globalState) + reopen reconciliation
+//
+// The webview-panel serializer is the primary restore path, but its state
+// lives in *workspace* storage — and the `create_new_project` flow reloads the
+// window into a brand-new untitled multi-root workspace whose storage is
+// empty, so the serializer restores nothing and a mid-turn session is
+// stranded on the server (evidenced: after such a reload only the control
+// socket reconnects; no session hello ever arrives). globalState is
+// per-extension (workspace-independent), so a list of this window's open
+// sessions keyed by the stable windowId survives that transition. After the
+// control connection's hello.ack we reconcile: any remembered session that is
+// still on the server, not open here, and not live in another window gets its
+// tab reopened (and reconnects mid-turn via the server's channel replay).
+// ---------------------------------------------------------------------------
+
+function _openSessionsKey(): string {
+  return `kodo.openSessions.${windowId}`;
+}
+
+function _rememberedOpenSessions(): string[] {
+  const raw = extensionContext?.globalState.get<string[]>(_openSessionsKey());
+  return Array.isArray(raw) ? raw.filter((v) => typeof v === 'string' && v !== '') : [];
+}
+
+function _rememberOpenSession(sessionId: string): void {
+  const list = _rememberedOpenSessions();
+  if (!list.includes(sessionId)) {
+    list.push(sessionId);
+    void extensionContext?.globalState.update(_openSessionsKey(), list);
+  }
+}
+
+function _forgetOpenSession(sessionId: string): void {
+  const list = _rememberedOpenSessions();
+  if (list.includes(sessionId)) {
+    void extensionContext?.globalState.update(
+      _openSessionsKey(),
+      list.filter((id) => id !== sessionId),
+    );
+  }
+}
+
+let _reconciledOpenSessions = false;
+
+/**
+ * Reopen this window's remembered sessions that did not come back through the
+ * panel serializer. Runs once, after the control connection is up (so
+ * `session.list` is answerable). Serializer-restored tabs are skipped via
+ * `_findBySessionId`; the reverse race is covered by `adoptPanel`'s duplicate
+ * check. Remembered ids that no longer exist on the server, or that are now
+ * live in another window, are pruned instead of reopened.
+ */
+async function _reconcileOpenSessions(): Promise<void> {
+  if (_reconciledOpenSessions) {
+    return;
+  }
+  _reconciledOpenSessions = true;
+  const remembered = _rememberedOpenSessions();
+  if (remembered.length === 0) {
+    return;
+  }
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('session.list');
+  } catch {
+    return; // server unreachable — leave the list for the next activation
+  }
+  const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
+  const byId = new Map(list.map((s) => [String(s.id ?? ''), s]));
+  for (const id of remembered) {
+    if (_findBySessionId(id)) {
+      continue; // serializer already restored this tab
+    }
+    const info = byId.get(id);
+    if (!info || Boolean(info.taken)) {
+      _forgetOpenSession(id); // deleted, or now owned by a live window
+      continue;
+    }
+    openExistingSession(id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -650,6 +741,10 @@ function handleControlEnvelope(env: Envelope): void {
       llamaRunning: llamaRunningState,
       llamaRunningModel: llamaRunningModelState,
     });
+    // The server is provably reachable now — reopen any of this window's
+    // sessions that the panel serializer could not restore (see the
+    // open-session memory block above).
+    void _reconcileOpenSessions();
     return;
   }
 
@@ -675,6 +770,49 @@ function handleControlEnvelope(env: Envelope): void {
 
 function _newId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+/**
+ * A window id that is STABLE across reloads of the same window — including the
+ * reload caused by the workspace itself changing shape.
+ *
+ * The server uses this id to let a briefly-disconnected window reclaim its
+ * sessions within the 5s grace (SessionManager.open refuses a *different*
+ * window), and per-window session bookkeeping (globalState reopen list,
+ * owner.json) is keyed by it. A reload must therefore present the same id the
+ * window held before.
+ *
+ * The id must be DERIVED, never stored per-workspace: `workspaceState` is
+ * per-workspace storage, and the `create_new_project` flow converts a
+ * single-folder window into an *untitled multi-root workspace* — a brand-new
+ * workspace identity with empty storage (this is exactly how the id used to
+ * change on every such reload, breaking session reclaim). For the same reason
+ * the key must be the FIRST workspace folder, not `workspaceFile` and not the
+ * folder *set*: that transition mints an `untitled:` workspaceFile and appends
+ * the new folder, but folders[0] — the folder the window was opened on —
+ * survives it (both `addWorkspaceFolder` here and VS Code's own "Add Folder to
+ * Workspace" append at the end).
+ *
+ * Trade-off: two windows whose workspaces share the same first folder would
+ * collide (VS Code refuses to open the *same* workspace twice, but a folder
+ * can also appear first in a .code-workspace opened elsewhere). That is far
+ * rarer than the workspace-shape transition this must survive. Only a truly
+ * folder-less window (which cannot host sessions anyway) falls back to a
+ * persisted random id.
+ */
+function _stableWindowId(context: vscode.ExtensionContext): string {
+  const firstFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const key = firstFolder ?? vscode.workspace.workspaceFile?.fsPath;
+  if (key) {
+    return 'w-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+  }
+  const existing = context.workspaceState.get<string>('kodo.windowId');
+  if (existing) {
+    return existing;
+  }
+  const id = _newId();
+  void context.workspaceState.update('kodo.windowId', id);
+  return id;
 }
 
 function _kodoHomeDir(): string {
