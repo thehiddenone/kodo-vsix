@@ -86,6 +86,13 @@ export function reducer(state: State, action: Action): State {
         llmWaiting: action.waiting ? { reason: action.reason, retryIn: action.retryIn } : null,
       };
     case 'tool_call': {
+      // A buffered live 'tool_call' frame can be replayed after session_history
+      // already seeded a (possibly more complete) entry for the same call — a
+      // reconnect redelivering a mid-turn frame, not a genuinely new call. Skip
+      // the duplicate rather than appending a second card for the same id.
+      if (state.session.some((e) => e.type === 'tool_call' && e.toolCallId === action.toolCallId)) {
+        return state;
+      }
       // The tool call is now fully assembled, so any in-progress "Generating…"
       // indicator is done: bake its elapsed time into the entry as
       // "Generated <tool> in Xm Ys" and clear the transient streaming state.
@@ -328,10 +335,8 @@ export function reducer(state: State, action: Action): State {
     case 'resume_dismissed':
       return { ...state, resumeSessionId: null };
     case 'session_history': {
-      if (state.session.length > 0) {
-        return state;
-      }
       const entries: SessionEntry[] = [];
+      const historicalToolCallIds = new Set<string>();
       for (const e of action.entries) {
         const type = String(e.type ?? '');
         if (type === 'user_message') {
@@ -380,11 +385,13 @@ export function reducer(state: State, action: Action): State {
                   undone: rawCheckpoint.undone === true,
                 }
               : null;
+          const toolCallId = String(e.toolCallId ?? '');
+          historicalToolCallIds.add(toolCallId);
           entries.push({
             type: 'tool_call',
             toolName: String(e.toolName ?? ''),
             description: String(e.description ?? ''),
-            toolCallId: String(e.toolCallId ?? ''),
+            toolCallId,
             rows,
             detailFile: typeof e.detailFile === 'string' ? e.detailFile : null,
             schemaCompliance: typeof e.schemaCompliance === 'boolean' ? e.schemaCompliance : null,
@@ -421,7 +428,17 @@ export function reducer(state: State, action: Action): State {
           });
         }
       }
-      return { ...state, session: entries };
+      // session.history is (re-)sent on every reconnect, including one where
+      // the webview never remounted (state.session already reflects the same
+      // history plus more) — so this cannot simply replace state.session,
+      // only reconcile: history is authoritative for anything it can
+      // represent, and whatever it can't (a `tool_call` not yet persisted
+      // when the server read history, or a `status_response`/usage row —
+      // there is no history entry type for those) rides along after it.
+      const liveOnly = state.session.filter(
+        (e) => e.type === 'status_response' || (e.type === 'tool_call' && !historicalToolCallIds.has(e.toolCallId)),
+      );
+      return { ...state, session: [...entries, ...liveOnly] };
     }
     case 'checkpoint_state': {
       // One undo/redo/rollback/roll-forward can change every other checkpoint
