@@ -2,7 +2,7 @@ import { styles } from './styles';
 import { vscode } from './vscode';
 import type { SessionEntry, DiffLinkData, CheckpointData } from './types';
 import { Markdown } from './markdown';
-import { ThinkingBlock, CompactionBlock } from './streaming-blocks';
+import { ThinkingBlock, CompactionBlock } from './StreamingBlocks';
 import { RunCommandProgress } from './indicators';
 import { completionLabel } from './format';
 /** Crop a `visible` parameter value to at most 3 lines / 200 characters. */
@@ -123,13 +123,15 @@ function UndoChangeLink({ checkpoint }: { checkpoint: CheckpointData }) {
 
 /**
  * "Rollback to this state" / "Roll forward to this state" toggle shown below
- * a file-mutating tool call's parameters. Moves the whole project tree
- * directly to this checkpoint (rollback if it's behind the current state,
- * roll-forward if ahead) by repointing the mirror's branch — never a
- * detached HEAD, since any orphaned tip is preserved on a `rollback_<ts>`
- * branch. Hidden when this entry already *is* the current state. Posts
- * 'checkpoint_rollback'/'checkpoint_roll_forward' for the extension host to
- * forward to the server.
+ * a file-mutating tool call's parameters, docked to the right edge (like the
+ * undo/redo link above it) instead of the old full-width box. Moves the whole
+ * project tree directly to this checkpoint (rollback if it's behind the
+ * current state, roll-forward if ahead) by repointing the mirror's branch —
+ * never a detached HEAD, since any orphaned tip is preserved on a
+ * `rollback_<ts>` branch. Hidden when this entry already *is* the current
+ * state. Posts 'checkpoint_rollback'/'checkpoint_roll_forward'; the extension
+ * host asks for confirmation via a native modal before forwarding the
+ * request to the server (see `_confirmCheckpointMove` in session-controller.ts).
  */
 function RollbackBox({ checkpoint }: { checkpoint: CheckpointData }) {
   if (checkpoint.index === checkpoint.currentIndex) {
@@ -144,23 +146,66 @@ function RollbackBox({ checkpoint }: { checkpoint: CheckpointData }) {
     });
   };
   return (
-    <div
-      style={{ ...styles.toolCallBox, ...styles.toolCallBoxClickable, ...styles.rollbackBox }}
-      onClick={post}
-      title={
-        isRollback
-          ? 'Restore the entire project to its state right after this step ran. Nothing is lost — you can roll forward again afterwards.'
-          : 'Move the entire project forward to its state right after this step ran.'
-      }
-    >
-      {isRollback ? (
-        <span style={styles.rollbackIcon}>⎌</span>
-      ) : (
-        <span style={styles.rollforwardIcon}>⎌</span>
-      )}
-      {isRollback ? 'Rollback to this state' : 'Roll forward to this state'}
+    <div style={styles.rollbackRow}>
+      <span
+        style={styles.rollbackLink}
+        onClick={post}
+        title={
+          isRollback
+            ? 'Restore the entire project to its state right after this step ran. Nothing is lost — you can roll forward again afterwards.'
+            : 'Move the entire project forward to its state right after this step ran.'
+        }
+      >
+        {isRollback ? (
+          <span style={styles.rollbackIcon}>⎌</span>
+        ) : (
+          <span style={styles.rollforwardIcon}>⎌</span>
+        )}
+        {isRollback ? 'Rollback to this state' : 'Roll forward to this state'}
+      </span>
     </div>
   );
+}
+
+/**
+ * "open this file" link shown to the left of "undo this change" on a
+ * file-mutating tool call's header row. Only rendered for calls that leave
+ * behind an openable file: `edit_file`, and `filesystem`'s `create_file` /
+ * `copy_file` / `move_file` operations (never its directory ops, which have
+ * nothing an editor tab can open, and never `delete_file`/`delete_dir`, whose
+ * target no longer exists). Posts 'open_file' so the extension host opens it
+ * via `vscode.open`, resolving relative paths against the project root.
+ */
+function OpenFileLink({ path }: { path: string }) {
+  const open = () => vscode.postMessage({ type: 'open_file', path });
+  return (
+    <span style={styles.openFileLink} onClick={open} title="Open this file in the editor">
+      📂 open this file
+    </span>
+  );
+}
+
+/**
+ * Resolves the file path a tool call left behind for {@link OpenFileLink}, or
+ * null if this call has no openable file (still pending, a directory op, or a
+ * delete). Reads projected detail rows rather than raw tool I/O, matching
+ * every other customer-visible rendering in this file.
+ */
+function openablePath(entry: Extract<SessionEntry, { type: 'tool_call' }>): string | null {
+  const outputRow = (name: string) => entry.rows.find((r) => r.source === 'output' && r.name === name)?.value ?? null;
+  if (entry.toolName === 'edit_file') {
+    return outputRow('path');
+  }
+  if (entry.toolName === 'filesystem') {
+    const operation = entry.rows.find((r) => r.name === 'operation')?.value;
+    if (operation === 'create_file') {
+      return outputRow('path');
+    }
+    if (operation === 'copy_file' || operation === 'move_file') {
+      return outputRow('destination');
+    }
+  }
+  return null;
 }
 interface SessionEntryViewProps {
   entry: SessionEntry;
@@ -215,6 +260,7 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
         entry.startedAt !== null &&
         entry.timeoutSeconds !== null &&
         !resultArrived;
+      const openPath = openablePath(entry);
       return (
         <div>
           {entry.toolgenDurationMs !== null && (
@@ -231,7 +277,12 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
             {entry.description && (
               <span style={styles.toolCallDesc}>{' — '}{entry.description}</span>
             )}
-            {entry.checkpoint !== null && <UndoChangeLink checkpoint={entry.checkpoint} />}
+            {(openPath !== null || entry.checkpoint !== null) && (
+              <span style={styles.toolCallActions}>
+                {openPath !== null && <OpenFileLink path={openPath} />}
+                {entry.checkpoint !== null && <UndoChangeLink checkpoint={entry.checkpoint} />}
+              </span>
+            )}
           </div>
           {showProgress && (
             <RunCommandProgress timeoutSeconds={entry.timeoutSeconds!} startedAt={entry.startedAt!} />

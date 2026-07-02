@@ -7,13 +7,14 @@ import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
 import { UsagePanel } from './UsagePanel';
 import { SessionEntryView } from './SessionEntryView';
-import { ThinkingBlock, ToolgenBlock } from './streaming-blocks';
+import { ThinkingBlock, ToolgenBlock } from './StreamingBlocks';
 import { Markdown } from './markdown';
 import { AwaitingIndicator, LlmWaitingIndicator, NamingIndicator, CompactingIndicator } from './indicators';
 import { FileEventList } from './FileEventList';
 import { ApprovalGate, QuestionGate } from './gates';
 import { ModeControls } from './ModeControls';
 import { AttachedFilesArea } from './AttachedFilesArea';
+import { FooterButton } from './FooterButton';
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -433,38 +434,38 @@ export function App() {
           <div style={styles.inputFooter}>
             <AttachedFilesArea files={state.attachedFiles} onRemove={removeAttachment} />
             <div style={styles.footerButtons}>
-              <button
+              <FooterButton
                 style={styles.sendBtn}
                 onClick={sendPrompt}
                 disabled={!state.connected || isRunning || isBlocked}
                 title="Send prompt (Enter)"
               >
                 {isRunning ? '…' : '↑'}
-              </button>
-              <button
+              </FooterButton>
+              <FooterButton
                 style={styles.attachBtn}
                 onClick={handleAttach}
                 disabled={!state.connected || state.attachedFiles.length >= 9}
                 title="Attach text files to the next prompt"
               >
                 +
-              </button>
-              <button
+              </FooterButton>
+              <FooterButton
                 style={styles.globalStopBtn}
                 onClick={handleStop}
                 disabled={!state.connected || !isRunning}
                 title="Stop all running agent work"
               >
                 {'🛑'}
-              </button>
-              <button
+              </FooterButton>
+              <FooterButton
                 style={styles.deleteBtn}
                 onClick={handleDelete}
                 disabled={!state.connected}
                 title="Delete this session (permanently removes all its history)"
               >
                 {'🗑'}
-              </button>
+              </FooterButton>
             </div>
           </div>
         </div>

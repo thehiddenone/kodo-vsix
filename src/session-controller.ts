@@ -450,10 +450,10 @@ export class SessionController {
         this._sendStamped(makeRequest('checkpoint.redo', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
         break;
       case 'checkpoint_rollback':
-        this._sendStamped(makeRequest('checkpoint.rollback', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
+        void this._confirmCheckpointMove('rollback', String(msg.root ?? ''), String(msg.sha ?? ''));
         break;
       case 'checkpoint_roll_forward':
-        this._sendStamped(makeRequest('checkpoint.roll_forward', { root: String(msg.root ?? ''), sha: String(msg.sha ?? '') }));
+        void this._confirmCheckpointMove('roll_forward', String(msg.root ?? ''), String(msg.sha ?? ''));
         break;
       case 'delete_session':
         void this._confirmAndDelete();
@@ -658,6 +658,35 @@ export class SessionController {
       total += f.size;
     }
     return total;
+  }
+
+  /**
+   * Move the entire project's checkpoint state after a yes/no confirmation —
+   * shared by the "Rollback to this state" / "Roll forward to this state"
+   * links in {@link SessionEntryView}. Nothing is sent to the server until the
+   * user confirms the native modal.
+   */
+  private async _confirmCheckpointMove(
+    direction: 'rollback' | 'roll_forward',
+    root: string,
+    sha: string,
+  ): Promise<void> {
+    const isRollback = direction === 'rollback';
+    const choice = await vscode.window.showWarningMessage(
+      isRollback ? 'Rollback the project to this state?' : 'Roll the project forward to this state?',
+      {
+        modal: true,
+        detail: isRollback
+          ? 'This restores the entire project to its state right after this step ran, discarding any ' +
+            'later changes from the working tree. Nothing is lost — you can roll forward again afterwards.'
+          : 'This moves the entire project forward to its state right after this step ran.',
+      },
+      'Yes',
+    );
+    if (choice !== 'Yes') {
+      return;
+    }
+    this._sendStamped(makeRequest(isRollback ? 'checkpoint.rollback' : 'checkpoint.roll_forward', { root, sha }));
   }
 
   /**

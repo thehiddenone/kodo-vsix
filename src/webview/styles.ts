@@ -21,9 +21,9 @@ export const styles = {
     padding: '24px',
   },
   attachBtn: {
-    background: '#c8a400',
-    color: '#000000',
-    border: 'none',
+    background: 'transparent',
+    color: '#c8a400',
+    border: '1px solid #c8a400',
     borderRadius: '2px',
     width: '40px',
     cursor: 'pointer',
@@ -496,16 +496,47 @@ export const styles = {
     color: 'var(--vscode-textLink-foreground)',
     fontSize: '12px',
   },
+  // Right-docked group holding the "open this file" / "undo this change" links
+  // on a tool call's header row. `marginLeft: auto` absorbs the row's slack so
+  // the whole group (and only the group) pins to the right edge, regardless of
+  // which of the two links are actually present.
+  toolCallActions: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+    marginLeft: 'auto',
+    flexShrink: 0,
+  },
+  openFileLink: {
+    color: 'var(--vscode-textLink-foreground)',
+    fontSize: '11px',
+    cursor: 'pointer',
+    flexShrink: 0,
+    marginRight: '16px',
+  },
   undoChangeLink: {
     color: 'var(--vscode-textLink-foreground)',
     fontSize: '11px',
-    marginLeft: 'auto',
     cursor: 'pointer',
     flexShrink: 0,
   },
-  rollbackBox: {
+  // Right-aligned row hosting the "Rollback / Roll forward to this state" link
+  // beneath a tool call's detail box — docked to the right edge like the
+  // undo/redo link above it, rather than the old full-width box.
+  rollbackRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    marginTop: '3px',
+    marginBottom: '4px',
+    marginLeft: '4px',
+  },
+  rollbackLink: {
+    display: 'flex',
+    alignItems: 'center',
     color: 'var(--vscode-textLink-foreground)',
-    fontSize: '12px',
+    fontSize: '11px',
+    cursor: 'pointer',
+    flexShrink: 0,
   },
   rollbackIcon: {
     fontSize: '14px',
@@ -702,7 +733,7 @@ export const styles = {
     fontFamily: 'inherit',
     fontSize: 'inherit',
     resize: 'none',
-    minHeight: '80px',
+    minHeight: '40px',
     maxHeight: '180px',
     overflowY: 'auto',
     boxSizing: 'border-box',
@@ -720,12 +751,24 @@ export const styles = {
     alignItems: 'stretch',
   },
   sendBtn: {
-    background: '#2ea043',
-    color: '#ffffff',
-    border: 'none',
+    background: 'transparent',
+    color: '#2ea043',
+    border: '1px solid #2ea043',
     borderRadius: '2px',
     width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
+  },
+  // Wraps a footer button's glyph so it (not the button itself) can be nudged
+  // on press, giving the four bottom-bar buttons tactile click feedback.
+  footerBtnSymbol: {
+    display: 'inline-block',
+    transform: 'translate(0, 0)',
+    transition: 'transform 0.05s ease-out',
+  },
+  footerBtnSymbolPressed: {
+    display: 'inline-block',
+    transform: 'translate(1px, 2px)',
+    transition: 'transform 0.05s ease-out',
   },
 };
