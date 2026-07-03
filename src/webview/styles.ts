@@ -354,10 +354,34 @@ export const styles = {
   },
   mdOl: {
     margin: '0.3em 0',
-    paddingLeft: '1.4em',
+    // The message font is the (typically monospace) VS Code editor font, whose
+    // digits are wider than a proportional font's — 1.4em clips the "1" down
+    // to just its trailing dot. 2.4em leaves room for two-digit markers too.
+    paddingLeft: '2.4em',
   },
   mdLi: {
     margin: '0.15em 0',
+  },
+  mdTableWrap: {
+    overflowX: 'auto' as const,
+    margin: '0.5em 0',
+  },
+  mdTable: {
+    borderCollapse: 'collapse' as const,
+    borderSpacing: 0,
+    width: 'max-content',
+    maxWidth: '100%',
+  },
+  mdTh: {
+    border: '1px solid var(--vscode-panel-border, rgba(127,127,127,0.4))',
+    padding: '4px 10px',
+    textAlign: 'left' as const,
+    fontWeight: 600,
+    background: 'rgba(127,127,127,0.14)',
+  },
+  mdTd: {
+    border: '1px solid var(--vscode-panel-border, rgba(127,127,127,0.4))',
+    padding: '4px 10px',
   },
   mdQuote: {
     borderLeft: '3px solid var(--vscode-textBlockQuote-border, rgba(127,127,127,0.4))',

@@ -96,6 +96,35 @@ const INLINE_PATTERNS: { re: RegExp; kind: 'code' | 'bold' | 'italic' | 'link' }
   { re: /\[([^\]]*)\]\(([^)\s]+)\)/, kind: 'link' },
 ];
 
+// Split a single GFM table row into its cell texts, tolerating an optional
+// leading/trailing `|` and unescaping `\|`.
+function splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1);
+  return s.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+}
+
+// A table separator row looks like `| --- | :---: | ---: |` (dashes with
+// optional alignment colons in every cell, at least one dash each).
+function isTableSeparatorLine(line: string): boolean {
+  const t = line.trim();
+  if (!t.includes('-') || !t.includes('|')) return false;
+  const cells = splitTableRow(t);
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+}
+
+function tableAlignments(sepLine: string): (string | undefined)[] {
+  return splitTableRow(sepLine).map((c) => {
+    const left = c.startsWith(':');
+    const right = c.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return undefined;
+  });
+}
+
 function headingStyle(level: number): Record<string, unknown> {
   const sizes = ['1.5em', '1.35em', '1.2em', '1.1em', '1em', '0.95em'];
   return { ...styles.mdHeadingBase, fontSize: sizes[level - 1] };
@@ -208,6 +237,45 @@ function parseBlocks(text: string, kp: string): ComponentChildren[] {
       );
       continue;
     }
+    // Table (GFM): a header row immediately followed by a `---|---` divider.
+    if (line.includes('|') && i + 1 < lines.length && isTableSeparatorLine(lines[i + 1])) {
+      const headerCells = splitTableRow(line);
+      const aligns = tableAlignments(lines[i + 1]);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
+        rows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      const tk = nextKey();
+      blocks.push(
+        <div key={tk} style={styles.mdTableWrap}>
+          <table style={styles.mdTable}>
+            <thead>
+              <tr>
+                {headerCells.map((c, ci) => (
+                  <th key={`${tk}-h-${ci}`} style={{ ...styles.mdTh, textAlign: aligns[ci] ?? 'left' }}>
+                    {parseInline(c, `${tk}-h-${ci}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={`${tk}-r-${ri}`}>
+                  {r.map((c, ci) => (
+                    <td key={`${tk}-r-${ri}-${ci}`} style={{ ...styles.mdTd, textAlign: aligns[ci] ?? 'left' }}>
+                      {parseInline(c, `${tk}-r-${ri}-${ci}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
     // List (unordered or ordered) — single-level, best-effort.
     const listM = /^(\s*)([-*+]|\d+\.)\s+/.exec(line);
     if (listM) {
@@ -236,7 +304,8 @@ function parseBlocks(text: string, kp: string): ComponentChildren[] {
       !/^(#{1,6})\s+/.test(lines[i]) &&
       !/^\s*>/.test(lines[i]) &&
       !/^(\s*)([-*+]|\d+\.)\s+/.test(lines[i]) &&
-      !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i])
+      !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) &&
+      !(lines[i].includes('|') && i + 1 < lines.length && isTableSeparatorLine(lines[i + 1]))
     ) {
       para.push(lines[i]);
       i++;
