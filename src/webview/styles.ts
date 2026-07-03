@@ -742,6 +742,65 @@ export const styles = {
     fontSize: '12px',
     alignSelf: 'stretch',
   },
+  // Security permission prompt (replaces the prompt input while pending)
+  permissionCard: {
+    border: '1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-focusBorder))',
+    borderRadius: '4px',
+    padding: '10px',
+    marginBottom: '8px',
+    background: 'var(--vscode-editor-background)',
+  },
+  permissionRiskBadge: {
+    marginLeft: 'auto',
+    background: 'var(--vscode-inputValidation-warningBackground, var(--vscode-badge-background))',
+    color: 'var(--vscode-foreground)',
+    border: '1px solid var(--vscode-inputValidation-warningBorder, transparent)',
+    borderRadius: '3px',
+    padding: '1px 6px',
+    fontSize: '10px',
+    fontWeight: 'bold',
+    whiteSpace: 'nowrap',
+  },
+  permissionReason: {
+    fontSize: '12px',
+    marginBottom: '8px',
+  },
+  permissionIntent: {
+    fontSize: '12px',
+    color: 'var(--vscode-descriptionForeground)',
+    fontStyle: 'italic',
+    marginBottom: '8px',
+  },
+  permissionIntentLabel: {
+    fontStyle: 'normal',
+    fontWeight: 'bold',
+  },
+  permissionParams: {
+    border: '1px solid var(--vscode-panel-border)',
+    borderRadius: '3px',
+    padding: '6px 8px',
+    marginBottom: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+    maxHeight: '140px',
+    overflowY: 'auto',
+  },
+  permissionParamRow: {
+    display: 'flex',
+    gap: '8px',
+    fontSize: '11px',
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+  },
+  permissionParamName: {
+    color: 'var(--vscode-descriptionForeground)',
+    flexShrink: 0,
+    minWidth: '80px',
+  },
+  permissionParamValue: {
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
+  },
   // ask_user question panel (in-feed, interactive until confirmed)
   askUserPanel: {
     border: '1px solid var(--vscode-focusBorder)',

@@ -105,6 +105,19 @@ interface QuestionData {
   questions: AskUserQuestion[];
 }
 
+/** The outstanding `prompt.permission` request — the security layer wants an
+ *  allow/deny for one gated tool call (WS_PROTOCOL.md §6.5). */
+interface PermissionData {
+  requestId: string;
+  toolCallId: string;
+  toolName: string;
+  externalName: string;
+  risk: string;
+  intent: string;
+  reason: string;
+  params: { name: string; value: string }[];
+}
+
 /** Collaborators the controller needs from the window-level host. */
 export interface SessionDeps {
   context: vscode.ExtensionContext;
@@ -170,6 +183,7 @@ export class SessionController {
   private fileEvents: FileEventData[] = [];
   private pendingGate: GateData | null = null;
   private pendingQuestion: QuestionData | null = null;
+  private pendingPermission: PermissionData | null = null;
   private sessionHistory: Record<string, unknown>[] | null = null;
   private sessionName = '';
   // The two *frozen* toggles come in pairs: the user-facing *selected* value
@@ -428,6 +442,16 @@ export class SessionController {
         );
         this.pendingGate = null;
         break;
+      case 'permission_respond':
+        this._sendStamped(
+          makeResponse(String(msg.requestId ?? ''), {
+            type: 'prompt.permission.response',
+            action: String(msg.action ?? 'deny'),
+            feedback: String(msg.feedback ?? '') || null,
+          }),
+        );
+        this.pendingPermission = null;
+        break;
       case 'question_respond': {
         // One entry per question, in order: {selected: string[], free_text: string|null}.
         const rawAnswers = Array.isArray(msg.answers) ? msg.answers : [];
@@ -555,6 +579,7 @@ export class SessionController {
     this.fileEvents = [];
     this.pendingGate = null;
     this.pendingQuestion = null;
+    this.pendingPermission = null;
     this._sendStamped(makeRequest('prompt.submit', { text: this._composePrompt(text) }));
     this._clearAttachments();
   }
@@ -824,6 +849,9 @@ export class SessionController {
     if (this.pendingQuestion !== null) {
       this._post({ type: 'question_request', ...this.pendingQuestion });
     }
+    if (this.pendingPermission !== null) {
+      this._post({ type: 'permission_request', ...this.pendingPermission });
+    }
     if (this.resumeSessionId !== null) {
       this._post({ type: 'resume_offer', sessionId: this.resumeSessionId });
     }
@@ -1014,6 +1042,25 @@ export class SessionController {
         artifactPath: env.payload.artifact_path ? String(env.payload.artifact_path) : null,
       };
       this._post({ type: 'approval_request', ...this.pendingGate });
+      return;
+    }
+
+    if (env.kind === 'request' && evtType === 'prompt.permission') {
+      const rawParams = Array.isArray(env.payload.params) ? env.payload.params : [];
+      this.pendingPermission = {
+        requestId: env.id,
+        toolCallId: String(env.payload.tool_call_id ?? ''),
+        toolName: String(env.payload.tool_name ?? ''),
+        externalName: String(env.payload.external_name ?? ''),
+        risk: String(env.payload.risk ?? ''),
+        intent: String(env.payload.intent ?? ''),
+        reason: String(env.payload.reason ?? ''),
+        params: rawParams.map((p) => {
+          const rec = p as Record<string, unknown>;
+          return { name: String(rec.name ?? ''), value: String(rec.value ?? '') };
+        }),
+      };
+      this._post({ type: 'permission_request', ...this.pendingPermission });
       return;
     }
 

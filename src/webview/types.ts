@@ -57,6 +57,30 @@ export interface QuestionData {
   questions: AskUserQuestion[];
 }
 
+/** One customer-visible parameter row shown in a permission prompt. */
+export interface PermissionParamRow {
+  name: string;
+  value: string;
+}
+
+/** The outstanding prompt.permission request — the security layer wants the
+ *  user to allow or deny one gated tool call. Transient (never a session
+ *  entry): once decided, the tool call's own card/result records the outcome. */
+export interface PermissionData {
+  requestId: string;
+  /** The gated tool_use id (correlates with the tool_call feed entry). */
+  toolCallId: string;
+  toolName: string;
+  externalName: string;
+  /** The tool's SecurityImpact label ("High", …). */
+  risk: string;
+  /** The agent's declared intent ("" when the tool carries none). */
+  intent: string;
+  /** The security layer's one-sentence reason for asking. */
+  reason: string;
+  params: PermissionParamRow[];
+}
+
 /**
  * A session entry is a JSON object in the session array.
  *
@@ -194,6 +218,9 @@ export interface State {
   fileEvents: FileEventData[];
   pendingGate: GateData | null;
   pendingQuestion: QuestionData | null;
+  /** Outstanding security permission prompt, or null. Replaces the prompt
+   *  input (like pendingGate) until the user allows or denies. */
+  pendingPermission: PermissionData | null;
   // The two *frozen* toggles are pairs: the user-facing *selected* value (flips
   // the instant the user clicks) and the per-turn frozen *effective* value the
   // server reports. While a turn runs and the two differ, the toggle is "queued
@@ -288,6 +315,8 @@ export type Action =
   | { type: 'question_request'; requestId: string; toolCallId: string; questions: AskUserQuestion[] }
   | { type: 'question_answered'; toolCallId: string; answers: AskUserAnswer[] }
   | { type: 'question_cleared' }
+  | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[] }
+  | { type: 'permission_cleared' }
   | {
       type: 'mode_state';
       autonomous: boolean;

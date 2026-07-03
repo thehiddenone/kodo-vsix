@@ -43,6 +43,7 @@ export function reducer(state: State, action: Action): State {
         fileEvents: [],
         pendingGate: null,
         pendingQuestion: null,
+        pendingPermission: null,
         namingSession: false,
         attachedFiles: [],
       };
@@ -370,6 +371,27 @@ export function reducer(state: State, action: Action): State {
     }
     case 'question_cleared':
       return { ...state, pendingQuestion: null };
+    case 'permission_request':
+      // The security layer wants an allow/deny for one gated tool call. The
+      // panel is transient (never a session entry): the gated tool_call card
+      // is already in the feed, and its result records the outcome.
+      return {
+        ...state,
+        pendingPermission: {
+          requestId: action.requestId,
+          toolCallId: action.toolCallId,
+          toolName: action.toolName,
+          externalName: action.externalName,
+          risk: action.risk,
+          intent: action.intent,
+          reason: action.reason,
+          params: action.params,
+        },
+        streaming: false,
+        awaitingLlm: false,
+      };
+    case 'permission_cleared':
+      return { ...state, pendingPermission: null };
     case 'mode_state':
       return {
         ...state,
@@ -581,6 +603,7 @@ export const initial: State = {
   fileEvents: [],
   pendingGate: null,
   pendingQuestion: null,
+  pendingPermission: null,
   autonomous: false,
   effectiveAutonomous: false,
   workflowMode: 'problem_solving',

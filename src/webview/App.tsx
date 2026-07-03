@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
-import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer } from './types';
+import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow } from './types';
 import { coerceEditControl, coerceCommandControl } from './types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
@@ -13,6 +13,7 @@ import { AwaitingIndicator, LlmWaitingIndicator, NamingIndicator, CompactingIndi
 import { FileEventList } from './FileEventList';
 import { ApprovalGate } from './gates';
 import { AskUserPanel } from './AskUserPanel';
+import { PermissionPanel } from './PermissionPanel';
 import { ModeControls } from './ModeControls';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { FooterButton } from './FooterButton';
@@ -227,6 +228,25 @@ export function App() {
           });
           break;
         }
+        case 'permission_request': {
+          const rawParams = Array.isArray(msg.params) ? msg.params : [];
+          const params: PermissionParamRow[] = rawParams.map((p) => {
+            const rec = p as Record<string, unknown>;
+            return { name: String(rec.name ?? ''), value: String(rec.value ?? '') };
+          });
+          dispatch({
+            type: 'permission_request',
+            requestId: String(msg.requestId ?? ''),
+            toolCallId: String(msg.toolCallId ?? ''),
+            toolName: String(msg.toolName ?? ''),
+            externalName: String(msg.externalName ?? ''),
+            risk: String(msg.risk ?? ''),
+            intent: String(msg.intent ?? ''),
+            reason: String(msg.reason ?? ''),
+            params,
+          });
+          break;
+        }
         case 'mode_state':
           dispatch({
             type: 'mode_state',
@@ -289,7 +309,8 @@ export function App() {
   // signal is dead — the server's `state` event no longer carries a `stage`
   // field, so it is always 'IDLE' and must not gate the Stop button.
   const isRunning = state.running;
-  const isBlocked = state.pendingGate !== null || state.pendingQuestion !== null;
+  const isBlocked =
+    state.pendingGate !== null || state.pendingQuestion !== null || state.pendingPermission !== null;
 
   function handleStop() {
     vscode.postMessage({ type: 'stop' });
@@ -401,10 +422,23 @@ export function App() {
         <FileEventList events={state.fileEvents} />
       )}
 
-      {/* Approval gate (replaces prompt input when pending). Questions render
-          in-feed as AskUserPanel; while one is pending the prompt input below
-          stays disabled via isBlocked. */}
-      {state.pendingGate !== null ? (
+      {/* Permission prompt / approval gate (replace the prompt input when
+          pending). Questions render in-feed as AskUserPanel; while one is
+          pending the prompt input below stays disabled via isBlocked. */}
+      {state.pendingPermission !== null ? (
+        <PermissionPanel
+          permission={state.pendingPermission}
+          onRespond={(action, feedback) => {
+            vscode.postMessage({
+              type: 'permission_respond',
+              requestId: state.pendingPermission!.requestId,
+              action,
+              feedback,
+            });
+            dispatch({ type: 'permission_cleared' });
+          }}
+        />
+      ) : state.pendingGate !== null ? (
         <ApprovalGate
           gate={state.pendingGate}
           onRespond={(action, feedback) => {
