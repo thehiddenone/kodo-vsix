@@ -321,5 +321,9 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
           tokensAfter={entry.tokensAfter}
         />
       );
+    case 'ask_user':
+      // Rendered by App.tsx as an interactive <AskUserPanel> (it needs the
+      // live pendingQuestion and dispatch); never reached from the feed map.
+      return null;
   }
 }

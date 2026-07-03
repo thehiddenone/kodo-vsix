@@ -91,16 +91,18 @@ interface GateData {
   artifactPath: string | null;
 }
 
-interface QuestionChoice {
-  key: string;
-  label: string;
+interface AskUserQuestion {
+  question: string;
+  kind: string;
+  options: string[];
 }
 
 interface QuestionData {
   requestId: string;
-  question: string;
-  mode: string;
-  choices: QuestionChoice[] | null;
+  /** The ask_user tool_use id backing this batch; correlates the interactive
+   *  panel with the persisted feed entry. Empty for legacy frames. */
+  toolCallId: string;
+  questions: AskUserQuestion[];
 }
 
 /** Collaborators the controller needs from the window-level host. */
@@ -427,13 +429,20 @@ export class SessionController {
         this.pendingGate = null;
         break;
       case 'question_respond': {
-        const payload: Record<string, unknown> = { type: 'prompt.question.response' };
-        if (String(msg.mode ?? 'free_text') === 'choice') {
-          payload.choice_key = String(msg.choiceKey ?? '');
-        } else {
-          payload.answer_text = String(msg.answerText ?? '');
-        }
-        this._sendStamped(makeResponse(String(msg.requestId ?? ''), payload));
+        // One entry per question, in order: {selected: string[], free_text: string|null}.
+        const rawAnswers = Array.isArray(msg.answers) ? msg.answers : [];
+        const answers = rawAnswers.map((a) => {
+          const rec = a as Record<string, unknown>;
+          const selected = Array.isArray(rec.selected) ? rec.selected.map((s) => String(s)) : [];
+          const freeText = typeof rec.free_text === 'string' && rec.free_text.trim() ? rec.free_text : null;
+          return { selected, free_text: freeText };
+        });
+        this._sendStamped(
+          makeResponse(String(msg.requestId ?? ''), {
+            type: 'prompt.question.response',
+            answers,
+          }),
+        );
         this.pendingQuestion = null;
         break;
       }
@@ -1009,18 +1018,19 @@ export class SessionController {
     }
 
     if (env.kind === 'request' && evtType === 'prompt.question') {
-      const rawChoices = env.payload.choices;
-      const choices: QuestionChoice[] | null = Array.isArray(rawChoices)
-        ? rawChoices.map((c) => ({
-            key: String((c as Record<string, unknown>).key ?? ''),
-            label: String((c as Record<string, unknown>).label ?? ''),
-          }))
-        : null;
+      const rawQuestions = Array.isArray(env.payload.questions) ? env.payload.questions : [];
+      const questions: AskUserQuestion[] = rawQuestions.map((q) => {
+        const rec = q as Record<string, unknown>;
+        return {
+          question: String(rec.question ?? ''),
+          kind: rec.kind === 'multi_choice' ? 'multi_choice' : 'single_choice',
+          options: Array.isArray(rec.options) ? rec.options.map((o) => String(o)) : [],
+        };
+      });
       this.pendingQuestion = {
         requestId: env.id,
-        question: String(env.payload.question ?? ''),
-        mode: String(env.payload.mode ?? 'free_text'),
-        choices,
+        toolCallId: String(env.payload.tool_call_id ?? ''),
+        questions,
       };
       this._post({ type: 'question_request', ...this.pendingQuestion });
       return;

@@ -718,6 +718,93 @@ export const styles = {
     fontSize: '12px',
     alignSelf: 'stretch',
   },
+  // ask_user question panel (in-feed, interactive until confirmed)
+  askUserPanel: {
+    border: '1px solid var(--vscode-focusBorder)',
+    borderRadius: '4px',
+    padding: '10px',
+    marginTop: '12px',
+    marginBottom: '12px',
+    background: 'var(--vscode-editor-background)',
+    // scrollIntoView(block:'start') target — keep a little breathing room so
+    // the first question does not sit flush against the panel's top edge.
+    scrollMarginTop: '8px',
+  },
+  askUserPanelFrozen: {
+    border: '1px solid var(--vscode-panel-border)',
+  },
+  askUserQuestionBox: {
+    border: '1px solid var(--vscode-panel-border)',
+    borderRadius: '4px',
+    padding: '8px 10px',
+    marginBottom: '8px',
+  },
+  askUserQuestionText: {
+    fontSize: '13px',
+    fontWeight: 'bold',
+    marginBottom: '2px',
+  },
+  askUserKindHint: {
+    fontSize: '10px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginBottom: '6px',
+  },
+  askUserOption: {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'flex-start',
+    padding: '4px 6px',
+    borderRadius: '3px',
+    cursor: 'pointer',
+    userSelect: 'none' as const,
+  },
+  askUserOptionFrozen: {
+    cursor: 'default',
+  },
+  askUserOptionSelected: {
+    background: 'var(--vscode-list-activeSelectionBackground)',
+    color: 'var(--vscode-list-activeSelectionForeground)',
+  },
+  askUserMark: {
+    flexShrink: 0,
+    width: '16px',
+    textAlign: 'center' as const,
+  },
+  askUserFreeInput: {
+    flex: 1,
+    background: 'var(--vscode-input-background)',
+    color: 'var(--vscode-input-foreground)',
+    border: '1px solid var(--vscode-input-border)',
+    borderRadius: '2px',
+    padding: '4px 6px',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    resize: 'none',
+  },
+  askUserFreeTextFrozen: {
+    flex: 1,
+    fontStyle: 'italic',
+    whiteSpace: 'pre-wrap' as const,
+  },
+  askUserConfirmBtn: {
+    background: 'var(--vscode-button-background)',
+    color: 'var(--vscode-button-foreground)',
+    border: 'none',
+    borderRadius: '2px',
+    padding: '8px 16px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    width: '100%',
+  },
+  askUserConfirmBtnDisabled: {
+    opacity: 0.55,
+    cursor: 'default',
+  },
+  askUserAnsweredNote: {
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+    fontStyle: 'italic',
+  },
   // Prompt input
   inputArea: {
     display: 'flex',

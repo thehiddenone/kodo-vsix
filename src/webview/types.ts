@@ -33,16 +33,28 @@ export interface GateData {
   artifactPath: string | null;
 }
 
-export interface QuestionChoice {
-  key: string;
-  label: string;
+/** One question in an ask_user batch. `options` are plain answer strings, the
+ *  agent's top choice first; the UI always appends a free-text option itself.
+ *  An empty `options` list means free-text-only (escalate_blocker's prompt). */
+export interface AskUserQuestion {
+  question: string;
+  kind: 'single_choice' | 'multi_choice';
+  options: string[];
 }
 
+/** The user's confirmed answer to one question: the selected option texts
+ *  (verbatim) plus their free-text entry, or null when it wasn't used. */
+export interface AskUserAnswer {
+  selected: string[];
+  free_text: string | null;
+}
+
+/** The outstanding prompt.question request (live, interactive). `toolCallId`
+ *  correlates it with the persisted `ask_user` feed entry rebuilt from history. */
 export interface QuestionData {
   requestId: string;
-  question: string;
-  mode: string;
-  choices: QuestionChoice[] | null;
+  toolCallId: string;
+  questions: AskUserQuestion[];
 }
 
 /**
@@ -135,6 +147,12 @@ export type SessionEntry =
       toolgenChars: number | null;
       exclude_from_context: false;
     }
+  // An ask_user question batch rendered as a sequence of question boxes.
+  // Interactive while `answers` is null AND the live pendingQuestion matches
+  // this entry (by toolCallId); frozen (read-only, selections shown) once
+  // answered. Rebuilt after reload purely from the persisted tool call +
+  // result — the questions/answers here mirror the LLM-visible tool I/O.
+  | { type: 'ask_user'; toolCallId: string; questions: AskUserQuestion[]; answers: AskUserAnswer[] | null; exclude_from_context: false }
   | { type: 'thinking_block'; content: string; durationMs: number | null; exclude_from_context: true }
   | { type: 'status_response'; durationMs: number; inputTokens: number; outputTokens: number; contextTokens: number; exclude_from_context: true }
   // Sub-agent takeover dividers. 'start' marks a sub-agent taking over from the
@@ -267,7 +285,8 @@ export type Action =
   | { type: 'file_change'; path: string; kind: string }
   | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
   | { type: 'approval_cleared' }
-  | { type: 'question_request'; requestId: string; question: string; mode: string; choices: QuestionChoice[] | null }
+  | { type: 'question_request'; requestId: string; toolCallId: string; questions: AskUserQuestion[] }
+  | { type: 'question_answered'; toolCallId: string; answers: AskUserAnswer[] }
   | { type: 'question_cleared' }
   | {
       type: 'mode_state';

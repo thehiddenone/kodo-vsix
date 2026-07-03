@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
-import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, QuestionChoice } from './types';
+import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer } from './types';
 import { coerceEditControl, coerceCommandControl } from './types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
@@ -11,7 +11,8 @@ import { ThinkingBlock, ToolgenBlock } from './StreamingBlocks';
 import { Markdown } from './markdown';
 import { AwaitingIndicator, LlmWaitingIndicator, NamingIndicator, CompactingIndicator } from './indicators';
 import { FileEventList } from './FileEventList';
-import { ApprovalGate, QuestionGate } from './gates';
+import { ApprovalGate } from './gates';
+import { AskUserPanel } from './AskUserPanel';
 import { ModeControls } from './ModeControls';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { FooterButton } from './FooterButton';
@@ -209,19 +210,20 @@ export function App() {
           });
           break;
         case 'question_request': {
-          const rawChoices = msg.choices;
-          const choices: QuestionChoice[] | null = Array.isArray(rawChoices)
-            ? rawChoices.map((c) => ({
-                key: String((c as Record<string, unknown>).key ?? ''),
-                label: String((c as Record<string, unknown>).label ?? ''),
-              }))
-            : null;
+          const rawQuestions = Array.isArray(msg.questions) ? msg.questions : [];
+          const questions: AskUserQuestion[] = rawQuestions.map((q) => {
+            const rec = q as Record<string, unknown>;
+            return {
+              question: String(rec.question ?? ''),
+              kind: rec.kind === 'multi_choice' ? 'multi_choice' : 'single_choice',
+              options: Array.isArray(rec.options) ? rec.options.map((o) => String(o)) : [],
+            };
+          });
           dispatch({
             type: 'question_request',
             requestId: String(msg.requestId ?? ''),
-            question: String(msg.question ?? ''),
-            mode: String(msg.mode ?? 'free_text'),
-            choices,
+            toolCallId: String(msg.toolCallId ?? ''),
+            questions,
           });
           break;
         }
@@ -351,9 +353,27 @@ export function App() {
 
       {/* Session feed */}
       <div style={styles.stream}>
-        {state.session.map((entry, i) => (
-          <SessionEntryView key={i} entry={entry} />
-        ))}
+        {state.session.map((entry, i) =>
+          entry.type === 'ask_user' ? (
+            // Keyed by toolCallId so local selections and the mount-only
+            // auto-scroll survive history reconciliation reordering indexes.
+            <AskUserPanel
+              key={entry.toolCallId}
+              entry={entry}
+              requestId={
+                state.pendingQuestion !== null && state.pendingQuestion.toolCallId === entry.toolCallId
+                  ? state.pendingQuestion.requestId
+                  : null
+              }
+              onRespond={(requestId: string, answers: AskUserAnswer[]) => {
+                vscode.postMessage({ type: 'question_respond', requestId, answers });
+                dispatch({ type: 'question_answered', toolCallId: entry.toolCallId, answers });
+              }}
+            />
+          ) : (
+            <SessionEntryView key={i} entry={entry} />
+          ),
+        )}
         {state.streamingThinking && (
           <ThinkingBlock content={state.streamingThinking} isActive={state.thinkingActive} startedAt={state.thinkingStartedAt} />
         )}
@@ -381,7 +401,9 @@ export function App() {
         <FileEventList events={state.fileEvents} />
       )}
 
-      {/* Approval gate / question prompt (replaces prompt input when pending) */}
+      {/* Approval gate (replaces prompt input when pending). Questions render
+          in-feed as AskUserPanel; while one is pending the prompt input below
+          stays disabled via isBlocked. */}
       {state.pendingGate !== null ? (
         <ApprovalGate
           gate={state.pendingGate}
@@ -395,26 +417,16 @@ export function App() {
             dispatch({ type: 'approval_cleared' });
           }}
         />
-      ) : state.pendingQuestion !== null ? (
-        <QuestionGate
-          question={state.pendingQuestion}
-          onRespond={(answerText, choiceKey) => {
-            vscode.postMessage({
-              type: 'question_respond',
-              requestId: state.pendingQuestion!.requestId,
-              mode: state.pendingQuestion!.mode,
-              answerText,
-              choiceKey,
-            });
-            dispatch({ type: 'question_cleared' });
-          }}
-        />
       ) : (
         <div style={styles.inputArea}>
           <textarea
             ref={inputRef}
             style={styles.input}
-            placeholder="Type a prompt and press Enter…"
+            placeholder={
+              state.pendingQuestion !== null
+                ? 'Answer the questions above, then Confirm and Send…'
+                : 'Type a prompt and press Enter…'
+            }
             disabled={!state.connected || isRunning || isBlocked}
             onKeyDown={handleKeyDown}
             onInput={handleInput}

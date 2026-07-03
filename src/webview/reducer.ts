@@ -1,4 +1,4 @@
-import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData } from './types';
+import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer } from './types';
 export function commitStreaming(state: State): SessionEntry[] {
   let session = state.session;
   if (state.streamingThinking) {
@@ -305,17 +305,69 @@ export function reducer(state: State, action: Action): State {
       };
     case 'approval_cleared':
       return { ...state, pendingGate: null };
-    case 'question_request':
+    case 'question_request': {
+      // An ask_user batch arrived. The panel entry may already exist in the
+      // feed — rebuilt from history (the tool_use is flushed before dispatch),
+      // or from an earlier delivery of this same request — so reconcile
+      // rather than blindly append. The server is authoritative about
+      // pending-ness: a request for an entry the webview considers answered
+      // re-opens it (the response never reached the server).
+      const base = commitStreaming(state);
+      let entryId = action.toolCallId;
+      let found = false;
+      let session = base.map((e) => {
+        if (e.type !== 'ask_user' || found) {
+          return e;
+        }
+        const matches = action.toolCallId
+          ? e.toolCallId === action.toolCallId
+          : e.answers === null;
+        if (!matches) {
+          return e;
+        }
+        found = true;
+        entryId = e.toolCallId;
+        return {
+          ...e,
+          questions: action.questions.length > 0 ? action.questions : e.questions,
+          answers: null,
+        };
+      });
+      if (!found) {
+        entryId = action.toolCallId || action.requestId;
+        session = [
+          ...session,
+          { type: 'ask_user', toolCallId: entryId, questions: action.questions, answers: null, exclude_from_context: false },
+        ];
+      }
       return {
         ...state,
-        pendingQuestion: {
-          requestId: action.requestId,
-          question: action.question,
-          mode: action.mode,
-          choices: action.choices,
-        },
+        session,
+        pendingQuestion: { requestId: action.requestId, toolCallId: entryId, questions: action.questions },
         streaming: false,
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        awaitingLlm: false,
+        // The ask_user arguments streamed as a toolgen block; the panel now
+        // replaces it (there is no tool_call card for ask_user).
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
       };
+    }
+    case 'question_answered': {
+      // Freeze the matching panel with the confirmed answers; it stays
+      // visible but read-only from here on (history rebuilds it the same way).
+      const session = state.session.map((e) =>
+        e.type === 'ask_user' && e.toolCallId === action.toolCallId
+          ? { ...e, answers: action.answers }
+          : e,
+      );
+      return { ...state, session, pendingQuestion: null };
+    }
     case 'question_cleared':
       return { ...state, pendingQuestion: null };
     case 'mode_state':
@@ -337,6 +389,17 @@ export function reducer(state: State, action: Action): State {
     case 'session_history': {
       const entries: SessionEntry[] = [];
       const historicalToolCallIds = new Set<string>();
+      const historicalAskUserIds = new Set<string>();
+      // Answers the webview already holds locally (confirmed, response still
+      // in flight to the server when it rebuilt history). History is
+      // authoritative for everything else, but a null-answered historical
+      // panel keeps the local answers unless the server actively re-asks
+      // (a replayed prompt.question re-opens it — see question_request).
+      const localAnswers = new Map(
+        state.session.flatMap((e) =>
+          e.type === 'ask_user' && e.answers !== null ? [[e.toolCallId, e.answers] as const] : [],
+        ),
+      );
       for (const e of action.entries) {
         const type = String(e.type ?? '');
         if (type === 'user_message') {
@@ -406,6 +469,28 @@ export function reducer(state: State, action: Action): State {
             toolgenChars: null,
             exclude_from_context: false,
           });
+        } else if (type === 'ask_user') {
+          const toolCallId = String(e.toolCallId ?? '');
+          historicalAskUserIds.add(toolCallId);
+          const rawQuestions = Array.isArray(e.questions) ? e.questions : [];
+          const questions: AskUserQuestion[] = rawQuestions.map((q) => {
+            const rec = q as Record<string, unknown>;
+            return {
+              question: String(rec.question ?? ''),
+              kind: rec.kind === 'multi_choice' ? 'multi_choice' : 'single_choice',
+              options: Array.isArray(rec.options) ? rec.options.map((o) => String(o)) : [],
+            };
+          });
+          const rawAnswers = Array.isArray(e.answers) ? e.answers : null;
+          const answers: AskUserAnswer[] | null =
+            rawAnswers?.map((a) => {
+              const rec = a as Record<string, unknown>;
+              return {
+                selected: Array.isArray(rec.selected) ? rec.selected.map((s) => String(s)) : [],
+                free_text: typeof rec.free_text === 'string' ? rec.free_text : null,
+              };
+            }) ?? localAnswers.get(toolCallId) ?? null;
+          entries.push({ type: 'ask_user', toolCallId, questions, answers, exclude_from_context: false });
         } else if (type === 'subagent_task') {
           entries.push({ type: 'subagent_task', content: String(e.content ?? ''), exclude_from_context: true });
         } else if (type === 'subsession_start' || type === 'subsession_end') {
@@ -436,7 +521,12 @@ export function reducer(state: State, action: Action): State {
       // when the server read history, or a `status_response`/usage row —
       // there is no history entry type for those) rides along after it.
       const liveOnly = state.session.filter(
-        (e) => e.type === 'status_response' || (e.type === 'tool_call' && !historicalToolCallIds.has(e.toolCallId)),
+        (e) =>
+          e.type === 'status_response' ||
+          (e.type === 'tool_call' && !historicalToolCallIds.has(e.toolCallId)) ||
+          // A live ask_user panel not yet in history (a subsession's batch —
+          // subsession turns only persist after they complete) rides along.
+          (e.type === 'ask_user' && !historicalAskUserIds.has(e.toolCallId)),
       );
       return { ...state, session: [...entries, ...liveOnly] };
     }
