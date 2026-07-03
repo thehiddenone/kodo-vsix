@@ -360,12 +360,47 @@ function _forgetOpenSession(sessionId: string): void {
 let _reconciledOpenSessions = false;
 
 /**
+ * Count native `kodoPanel` tabs in this window, including ones VS Code has not
+ * deserialized yet. Per the `WebviewPanelSerializer` docs, `deserializeWebviewPanel`
+ * fires only when "a serialized webview first becomes visible" — at startup that
+ * means the foreground tab is revived immediately but background sticky tabs sit
+ * as inert placeholders (already showing their cached title/icon) until clicked.
+ * `tabGroups.all` reflects those placeholders too, since the tab strip is
+ * layout state independent of the extension host's webview objects — so this
+ * count can exceed `sessions.size` even though no duplicate exists yet.
+ */
+function _kodoPanelTabCount(): number {
+  let count = 0;
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (tab.input instanceof vscode.TabInputWebview && tab.input.viewType.includes('kodoPanel')) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+/**
  * Reopen this window's remembered sessions that did not come back through the
  * panel serializer. Runs once, after the control connection is up (so
  * `session.list` is answerable). Serializer-restored tabs are skipped via
  * `_findBySessionId`; the reverse race is covered by `adoptPanel`'s duplicate
  * check. Remembered ids that no longer exist on the server, or that are now
  * live in another window, are pruned instead of reopened.
+ *
+ * Guard: a background sticky tab that VS Code hasn't revived yet (see
+ * `_kodoPanelTabCount`) looks identical to a genuinely lost tab — `sessions`
+ * has no controller for it either way. Racing ahead and opening a new tab for
+ * it creates a real duplicate: the reconcile-made tab wins the connection, and
+ * the original tab, once the user finally clicks it, deserializes, loses the
+ * `_findBySessionId` duplicate check in `adoptPanel`, and disposes itself —
+ * which reads to the user as "a duplicate tab that vanishes when clicked."
+ * So when there are more native `kodoPanel` tabs than adopted sessions, some
+ * remembered ids are presumably still-pending placeholders; skip reconciling
+ * this round rather than guess which ones are real vs. actually lost (the
+ * `create_new_project` reload this exists for leaves zero native tabs behind,
+ * so it is unaffected by this guard).
  */
 async function _reconcileOpenSessions(): Promise<void> {
   if (_reconciledOpenSessions) {
@@ -376,6 +411,13 @@ async function _reconcileOpenSessions(): Promise<void> {
   if (remembered.length === 0) {
     return;
   }
+  const notYetAdopted = remembered.filter((id) => !_findBySessionId(id));
+  if (notYetAdopted.length === 0) {
+    return;
+  }
+  if (_kodoPanelTabCount() > sessions.size) {
+    return; // some native tabs are still un-revived placeholders — don't guess
+  }
   let resp: Record<string, unknown>;
   try {
     resp = await sendControlAwait('session.list');
@@ -384,9 +426,9 @@ async function _reconcileOpenSessions(): Promise<void> {
   }
   const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
   const byId = new Map(list.map((s) => [String(s.id ?? ''), s]));
-  for (const id of remembered) {
+  for (const id of notYetAdopted) {
     if (_findBySessionId(id)) {
-      continue; // serializer already restored this tab
+      continue; // serializer restored this tab while session.list was in flight
     }
     const info = byId.get(id);
     if (!info || Boolean(info.taken)) {
