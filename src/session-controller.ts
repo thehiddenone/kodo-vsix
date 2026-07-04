@@ -930,10 +930,19 @@ export class SessionController {
       this.stage = String(env.payload.stage ?? 'IDLE');
       this.agent = env.payload.agent ? String(env.payload.agent) : null;
       this._post({ type: 'stage', stage: this.stage, agent: this.agent });
+      const phase = String(env.payload.phase ?? '');
+      // "stopped" only ever follows an explicit user Stop (FR-LLM-07) — unlike
+      // a normal turn ending (which lands on "awaiting_user"/"done"/"error"),
+      // so it's the one unambiguous signal to tell the webview to silence every
+      // "waiting" indicator (thinking/toolgen/awaiting-LLM/run_command progress)
+      // and drop an "Interrupted by user" callout into the feed.
+      if (phase === 'stopped') {
+        this._post({ type: 'interrupted' });
+      }
       // A turn is in progress iff the server reports phase "running"; this is the
       // authoritative signal the Edit/Command lock and the frozen-toggle "queued"
       // status hang off (the legacy `stage` field above is vestigial/always IDLE).
-      this.running = String(env.payload.phase ?? '') === 'running';
+      this.running = phase === 'running';
       // Adopt the server's authoritative snapshot for the two *frozen* toggles —
       // both the selected values and the per-turn frozen effective values it just
       // froze/reported. Edit/Command are host-owned (never adopted from the
@@ -990,6 +999,11 @@ export class SessionController {
 
     if (env.kind === 'event' && evtType === 'session.naming') {
       this._post({ type: 'session_naming', active: Boolean(env.payload.active) });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'security.judging') {
+      this._post({ type: 'security_judging', active: Boolean(env.payload.active) });
       return;
     }
 

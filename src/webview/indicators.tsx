@@ -75,6 +75,14 @@ export function NamingIndicator() {
   );
 }
 
+export function SecurityJudgingIndicator() {
+  return (
+    <div style={styles.awaitingLine}>
+      {"Evaluating Kōdo's action "}<BouncingDots />
+    </div>
+  );
+}
+
 export function CompactingIndicator() {
   return (
     <div style={styles.awaitingLine}>

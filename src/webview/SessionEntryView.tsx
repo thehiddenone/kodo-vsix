@@ -325,5 +325,9 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
       // Rendered by App.tsx as an interactive <AskUserPanel> (it needs the
       // live pendingQuestion and dispatch); never reached from the feed map.
       return null;
+    case 'interrupted':
+      return (
+        <Markdown content="<kodo_crit>Interrupted by user — this turn was stopped before it finished, so any in-progress response or tool call may be incomplete.</kodo_crit>" />
+      );
   }
 }

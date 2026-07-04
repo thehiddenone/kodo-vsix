@@ -189,7 +189,11 @@ export type SessionEntry =
   | { type: 'subagent_task'; content: string; exclude_from_context: true }
   // Context-compaction divider: marks where the prior conversation was summarised
   // and the live LLM context reset. Everything above stays visible as history.
-  | { type: 'compaction_divider'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number; exclude_from_context: true };
+  | { type: 'compaction_divider'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number; exclude_from_context: true }
+  // Dropped into the feed when the user clicks Stop mid-turn. Display-only
+  // marker (never sent to the LLM) — the actual cancellation already happened
+  // server-side (see 'interrupted' action).
+  | { type: 'interrupted'; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -199,6 +203,9 @@ export interface State {
   currentProject: string;
   /** True while the silent session-titler call is running (shows a naming indicator). */
   namingSession: boolean;
+  /** True while the security layer's silent SMART-mode intent-judge LLM call is running
+   *  (shows an "Evaluating…" indicator so a long judge round doesn't look like a stall). */
+  securityJudging: boolean;
   stage: string;
   agent: string | null;
   /** Committed session entries. Rendered in order; exclude_from_context entries excluded from LLM context. */
@@ -333,6 +340,7 @@ export type Action =
   | { type: 'session_name'; name: string }
   | { type: 'current_project'; name: string }
   | { type: 'session_naming'; active: boolean }
+  | { type: 'security_judging'; active: boolean }
   | { type: 'session_cleared' }
   | { type: 'attachment_added'; id: string; name: string; path: string }
   | { type: 'attachment_removed'; id: string }
@@ -342,4 +350,5 @@ export type Action =
   | { type: 'context_compacting'; active: boolean }
   | { type: 'context_compacted'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number }
   | { type: 'session_history'; entries: Record<string, unknown>[] }
-  | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] };
+  | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] }
+  | { type: 'interrupted' };

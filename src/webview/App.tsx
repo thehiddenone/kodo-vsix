@@ -9,7 +9,7 @@ import { UsagePanel } from './UsagePanel';
 import { SessionEntryView } from './SessionEntryView';
 import { ThinkingBlock, ToolgenBlock } from './StreamingBlocks';
 import { Markdown } from './markdown';
-import { AwaitingIndicator, LlmWaitingIndicator, NamingIndicator, CompactingIndicator } from './indicators';
+import { AwaitingIndicator, LlmWaitingIndicator, NamingIndicator, SecurityJudgingIndicator, CompactingIndicator } from './indicators';
 import { FileEventList } from './FileEventList';
 import { ApprovalGate } from './gates';
 import { AskUserPanel } from './AskUserPanel';
@@ -40,6 +40,9 @@ export function App() {
         case 'session_naming':
           dispatch({ type: 'session_naming', active: Boolean(msg.active) });
           break;
+        case 'security_judging':
+          dispatch({ type: 'security_judging', active: Boolean(msg.active) });
+          break;
         case 'session_cleared':
           dispatch({ type: 'session_cleared' });
           break;
@@ -69,6 +72,9 @@ export function App() {
           break;
         case 'stream_end':
           dispatch({ type: 'stream_end' });
+          break;
+        case 'interrupted':
+          dispatch({ type: 'interrupted' });
           break;
         case 'pong':
           dispatch({ type: 'pong' });
@@ -348,7 +354,7 @@ export function App() {
     dispatch({ type: 'resume_dismissed' });
   }
 
-  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.llmWaiting && !state.namingSession && !state.toolgenActive && !state.compacting;
+  const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.llmWaiting && !state.namingSession && !state.securityJudging && !state.toolgenActive && !state.compacting;
 
   return (
     <div style={styles.root}>
@@ -409,6 +415,7 @@ export function App() {
           />
         )}
         {state.namingSession && <NamingIndicator />}
+        {state.securityJudging && <SecurityJudgingIndicator />}
         {state.compacting && <CompactingIndicator />}
         {state.llmWaiting && <LlmWaitingIndicator waiting={state.llmWaiting} />}
         {state.awaitingLlm && !state.llmWaiting && <AwaitingIndicator />}

@@ -23,6 +23,8 @@ export function reducer(state: State, action: Action): State {
       return { ...state, currentProject: action.name };
     case 'session_naming':
       return { ...state, namingSession: action.active };
+    case 'security_judging':
+      return { ...state, securityJudging: action.active };
     case 'session_cleared':
       // Wipe the visible feed + all transient streaming state (the session is
       // being deleted). Connection/mode/header fields are left as-is.
@@ -45,6 +47,7 @@ export function reducer(state: State, action: Action): State {
         pendingQuestion: null,
         pendingPermission: null,
         namingSession: false,
+        securityJudging: false,
         attachedFiles: [],
       };
     case 'attachment_added':
@@ -389,6 +392,7 @@ export function reducer(state: State, action: Action): State {
         },
         streaming: false,
         awaitingLlm: false,
+        securityJudging: false,
       };
     case 'permission_cleared':
       return { ...state, pendingPermission: null };
@@ -515,6 +519,12 @@ export function reducer(state: State, action: Action): State {
           entries.push({ type: 'ask_user', toolCallId, questions, answers, exclude_from_context: false });
         } else if (type === 'subagent_task') {
           entries.push({ type: 'subagent_task', content: String(e.content ?? ''), exclude_from_context: true });
+        } else if (type === 'interrupted') {
+          // Replay of the server's stopped-turn notice (see
+          // WorkflowEngine.__persist_interrupted_turn) — same callout the
+          // live 'interrupted' action renders, so a reload shows it exactly
+          // where the Stop happened instead of dropping it from history.
+          entries.push({ type: 'interrupted', exclude_from_context: true });
         } else if (type === 'subsession_start' || type === 'subsession_end') {
           entries.push({
             type: 'subsession_divider',
@@ -551,6 +561,32 @@ export function reducer(state: State, action: Action): State {
           (e.type === 'ask_user' && !historicalAskUserIds.has(e.toolCallId)),
       );
       return { ...state, session: [...entries, ...liveOnly] };
+    }
+    case 'interrupted': {
+      // The user clicked Stop mid-turn (server phase -> "stopped"). Commit any
+      // partial streaming text, mark whatever tool call was still in flight
+      // (success === null) as not completed so its run_command progress bar
+      // and pending badge disappear, silence every other "waiting" indicator,
+      // and drop a callout into the feed.
+      const baseSession = commitStreaming(state).map((e) =>
+        e.type === 'tool_call' && e.success === null ? { ...e, success: false, startedAt: null } : e,
+      );
+      return {
+        ...state,
+        session: [...baseSession, { type: 'interrupted', exclude_from_context: true }],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        streaming: false,
+        awaitingLlm: false,
+        llmWaiting: null,
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
+        compacting: false,
+      };
     }
     case 'checkpoint_state': {
       // One undo/redo/rollback/roll-forward can change every other checkpoint
@@ -589,6 +625,7 @@ export const initial: State = {
   sessionName: '',
   currentProject: '',
   namingSession: false,
+  securityJudging: false,
   stage: 'IDLE',
   agent: null,
   session: [],
