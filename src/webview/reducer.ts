@@ -105,12 +105,29 @@ export function reducer(state: State, action: Action): State {
       const toolgenChars = state.toolgenActive ? state.streamingToolgen.length : null;
       return {
         ...state,
-        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: Date.now(), diff: null, checkpoint: null, toolgenDurationMs, toolgenChars, exclude_from_context: false }],
+        // startedAt stays null until 'tool_call_in_progress' arrives — the
+        // progress bar must not tick through a judging round or permission
+        // wait that precedes real execution (see indicators.tsx).
+        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: null, diff: null, checkpoint: null, toolgenDurationMs, toolgenChars, exclude_from_context: false }],
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
         toolgenStartedAt: null,
       };
+    }
+    case 'tool_call_in_progress': {
+      // Security gate cleared (allowed outright, or the user granted
+      // permission) and the tool handler is actually running now — start the
+      // run_command timeout clock from here, not from card creation.
+      const session = [...state.session];
+      for (let i = session.length - 1; i >= 0; i--) {
+        const e = session[i];
+        if (e.type === 'tool_call' && e.toolCallId === action.toolCallId) {
+          session[i] = { ...e, startedAt: Date.now() };
+          break;
+        }
+      }
+      return { ...state, session };
     }
     case 'tool_call_detail': {
       // Attach the detail to the matching tool_call entry (most recent match).

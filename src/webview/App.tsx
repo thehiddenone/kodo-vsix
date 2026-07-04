@@ -120,6 +120,9 @@ export function App() {
         case 'tool_call':
           dispatch({ type: 'tool_call', toolName: String(msg.toolName ?? ''), description: String(msg.description ?? ''), toolCallId: String(msg.toolCallId ?? ''), timeoutSeconds: typeof msg.timeoutSeconds === 'number' ? msg.timeoutSeconds : null });
           break;
+        case 'tool_call_in_progress':
+          dispatch({ type: 'tool_call_in_progress', toolCallId: String(msg.toolCallId ?? '') });
+          break;
         case 'tool_call_detail': {
           const rawRows = Array.isArray(msg.rows) ? (msg.rows as Record<string, unknown>[]) : [];
           const rows: ToolCallDetailRow[] = rawRows.map((row) => ({

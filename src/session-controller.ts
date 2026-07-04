@@ -1161,7 +1161,7 @@ export class SessionController {
       return;
     }
 
-    if (env.kind === 'event' && evtType === 'agent.tool_call') {
+    if (env.kind === 'event' && evtType === 'agent.tool_call_prep') {
       this._post({
         type: 'tool_call',
         toolName: String(env.payload.tool_name ?? ''),
@@ -1169,6 +1169,15 @@ export class SessionController {
         toolCallId: String(env.payload.tool_call_id ?? ''),
         timeoutSeconds: typeof env.payload.timeout_seconds === 'number' ? env.payload.timeout_seconds : null,
       });
+      return;
+    }
+
+    // Fired once the security gate clears (allowed outright, or the user
+    // granted permission) and the tool is genuinely about to run — tells the
+    // webview to start the run_command timeout bar's clock now, not at
+    // agent.tool_call_prep time (see doc/SECURITY.md §6).
+    if (env.kind === 'event' && evtType === 'agent.tool_call_in_progress') {
+      this._post({ type: 'tool_call_in_progress', toolCallId: String(env.payload.tool_call_id ?? '') });
       return;
     }
 

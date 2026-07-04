@@ -158,7 +158,9 @@ export type SessionEntry =
       success: boolean | null;
       /** run_command's mandatory timeout (seconds); null for other tools / history. */
       timeoutSeconds: number | null;
-      /** Client clock (ms) when this call started; drives the progress bar. null for history. */
+      /** Client clock (ms) when execution actually began (set on 'tool_call_in_progress',
+       *  not at card creation, so the bar excludes any judging/permission wait); drives
+       *  the progress bar. null until execution starts, and for history. */
       startedAt: number | null;
       /** Before/after file pair for this call (e.g. edit_file), or null if none was captured. */
       diff: DiffLinkData | null;
@@ -302,6 +304,7 @@ export type Action =
   | { type: 'llm_turn_start' }
   | { type: 'llm_waiting'; waiting: boolean; reason: string; retryIn: number | null }
   | { type: 'tool_call'; toolName: string; description: string; toolCallId: string; timeoutSeconds: number | null }
+  | { type: 'tool_call_in_progress'; toolCallId: string }
   | { type: 'tool_call_detail'; toolCallId: string; rows: ToolCallDetailRow[]; detailFile: string | null; schemaCompliance: boolean | null; success: boolean | null; diff: DiffLinkData | null; checkpoint: CheckpointData | null }
   | { type: 'token'; text: string }
   | { type: 'thinking_token'; text: string }
