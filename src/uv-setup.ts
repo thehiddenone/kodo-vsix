@@ -109,6 +109,26 @@ export function kodoVenvDir(): string {
   return path.join(kodoDir(), 'venv');
 }
 
+/**
+ * Deletes the shared venv so the next {@link ensureKodoEnvironment} call
+ * recreates it from scratch.
+ *
+ * Used as startup-failure remediation (see ``server-launcher.ts``): a corrupt
+ * or partially-installed venv is a plausible reason the server process never
+ * comes up, and rebuilding is cheap relative to leaving the user stuck.
+ */
+export function rebuildKodoVenv(out: vscode.OutputChannel): void {
+  const venv = kodoVenvDir();
+  out.appendLine(`[uv] Rebuilding venv: removing ${venv}`);
+  try {
+    fs.rmSync(venv, { recursive: true, force: true });
+  } catch (e) {
+    out.appendLine(
+      `[uv] Warning: failed to remove venv directory — ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Platform → release target
 // ---------------------------------------------------------------------------
@@ -371,9 +391,9 @@ async function installKodo(uvExec: string, venv: string, out: vscode.OutputChann
   // TODO: replace the args below with ['pip', 'install', 'kodo'] after publish.
   const kodoSrc = process.env['KODO_DEV_PATH'];
   if (!kodoSrc) {
-    const msg = 'Kodo: KODO_DEV_PATH environment variable is not set. Cannot install kodo in dev mode.';
-    void vscode.window.showErrorMessage(msg);
-    throw new Error(msg);
+    throw new Error(
+      'Kodo: KODO_DEV_PATH environment variable is not set. Cannot install kodo in dev mode.',
+    );
   }
   out.appendLine(`[uv] Installing kodo from ${kodoSrc} (dev stub)`);
   await runProcess(uvExec, ['pip', 'install', '-e', kodoSrc], { VIRTUAL_ENV: venv }, out);
@@ -394,16 +414,18 @@ async function installKodo(uvExec: string, venv: string, out: vscode.OutputChann
  * extension.
  *
  * Each step is idempotent — repeated calls are fast no-ops when everything is
- * already in place.  On any failure, shows an error notification and rethrows
- * so the caller can abort server launch.
+ * already in place.  On any failure, logs to `out` and rethrows; this function
+ * never shows a user-facing notification itself — the caller (`server-launcher.ts`)
+ * owns that, and only after its own rebuild-venv-and-retry remediation has also
+ * failed, so the user isn't shown an error for a problem that fixed itself.
  */
 export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<string> {
   let uvExec: string;
   try {
     uvExec = await ensureUtil(UV_SPEC, out);
   } catch (e) {
-    void vscode.window.showErrorMessage(
-      `Kodo: failed to install uv ${UV_SPEC.version} — ${e instanceof Error ? e.message : String(e)}`,
+    out.appendLine(
+      `[uv] ERROR: failed to install uv ${UV_SPEC.version} — ${e instanceof Error ? e.message : String(e)}`,
     );
     throw e;
   }
@@ -412,8 +434,8 @@ export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<
   try {
     venv = await ensureVenv(uvExec, out);
   } catch (e) {
-    void vscode.window.showErrorMessage(
-      `Kodo: failed to create Python virtual environment — ${e instanceof Error ? e.message : String(e)}`,
+    out.appendLine(
+      `[uv] ERROR: failed to create Python virtual environment — ${e instanceof Error ? e.message : String(e)}`,
     );
     throw e;
   }
@@ -423,8 +445,8 @@ export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<
       await installKodo(uvExec, venv, out);
     }
   } catch (e) {
-    void vscode.window.showErrorMessage(
-      `Kodo: failed to install kodo server — ${e instanceof Error ? e.message : String(e)}`,
+    out.appendLine(
+      `[uv] ERROR: failed to install kodo server — ${e instanceof Error ? e.message : String(e)}`,
     );
     throw e;
   }

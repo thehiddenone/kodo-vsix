@@ -123,6 +123,13 @@ export function App() {
         case 'tool_call_in_progress':
           dispatch({ type: 'tool_call_in_progress', toolCallId: String(msg.toolCallId ?? '') });
           break;
+        case 'web_search_note':
+          dispatch({
+            type: 'web_search_note',
+            toolCallId: String(msg.toolCallId ?? ''),
+            text: String(msg.text ?? ''),
+          });
+          break;
         case 'tool_call_detail': {
           const rawRows = Array.isArray(msg.rows) ? (msg.rows as Record<string, unknown>[]) : [];
           const rows: ToolCallDetailRow[] = rawRows.map((row) => ({

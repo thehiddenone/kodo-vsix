@@ -52,6 +52,18 @@ let deactivating = false;
 // Open session tabs in this window, keyed by the controller's internal key.
 const sessions = new Map<string, SessionController>();
 
+// Startup-failure remediation (rebuild ~/.kodo/venv and retry once) has
+// already been attempted for this window's server launch.
+let serverStartRemediationAttempted = false;
+
+// "Starting the local Kōdo server…" progress notification, shown from the
+// first launch attempt in `activate()` until the control connection either
+// connects for the first time or exhausts remediation — see
+// `_beginServerStartupProgress`/`_endServerStartupProgress`.
+let _serverStartProgressResolve: (() => void) | null = null;
+let _serverStartProgressReporter: vscode.Progress<{ message?: string }> | null = null;
+let serverStartupConnected = false;
+
 let projectRoot = '';
 let physicalRoot = '';
 let hasWorkspace = false;
@@ -77,6 +89,89 @@ let llamaStoppingState = false;
 let _llamaStartProgressResolve: (() => void) | null = null;
 let installingModelsState: string[] = [];
 
+/**
+ * Show the "Starting the local Kōdo server…" progress notification, if not
+ * already showing. Spans the whole startup sequence — environment bootstrap,
+ * spawn, and the WebSocket connect (including a remediation retry) — as a
+ * single indicator rather than one toast per phase.
+ */
+function _beginServerStartupProgress(): void {
+  if (_serverStartProgressResolve !== null) {
+    return;
+  }
+  vscode.window
+    .withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Starting the local Kōdo server…', cancellable: false },
+      (progress) =>
+        new Promise<void>((resolve) => {
+          _serverStartProgressReporter = progress;
+          _serverStartProgressResolve = resolve;
+        }),
+    )
+    .then(undefined, () => undefined);
+}
+
+function _endServerStartupProgress(): void {
+  _serverStartProgressResolve?.();
+  _serverStartProgressResolve = null;
+  _serverStartProgressReporter = null;
+}
+
+/**
+ * Show an info-style toast that dismisses itself after 5 seconds, instead of
+ * `showInformationMessage`'s notification which stays until the user closes
+ * it. A progress notification with no buttons has no such requirement.
+ */
+function _showTransientNotification(message: string): void {
+  void vscode.window
+    .withProgress(
+      { location: vscode.ProgressLocation.Notification, title: message, cancellable: false },
+      () => new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+    )
+    .then(undefined, () => undefined);
+}
+
+/**
+ * Launch the singleton server and, once spawned, connect the control
+ * WebSocket. Failure at either step (environment bootstrap throwing, or the
+ * server never accepting a connection) routes to {@link handleServerStartFailure}.
+ */
+function launchKodoServer(port: number, rebuildVenv = false): void {
+  launcher!
+    .launch(port, { rebuildVenv })
+    .then(() => {
+      setTimeout(() => controlClient?.connect(), SERVER_STARTUP_DELAY_MS);
+    })
+    .catch((e: unknown) => {
+      handleServerStartFailure(port, e instanceof Error ? e.message : String(e));
+    });
+}
+
+/**
+ * The server failed to start (either `ensureKodoEnvironment` threw, or the
+ * control WebSocket exhausted its reconnect attempts without ever
+ * connecting — see `WsClient`'s `onNeverConnected`).
+ *
+ * First failure: rebuild `~/.kodo/venv` and retry the whole launch once —
+ * a corrupt or partially-installed venv is a plausible root cause and is
+ * cheap to rule out. Only if that retry also fails do we surface anything
+ * to the user; a transient first failure that self-heals should stay quiet.
+ */
+function handleServerStartFailure(port: number, reason: string): void {
+  if (serverStartRemediationAttempted) {
+    _endServerStartupProgress();
+    void vscode.window.showErrorMessage(
+      `Kōdo can't work without the local server. Startup failed even after rebuilding the Python environment (~/.kodo/venv) — ${reason}. See the "Kodo Server" output channel for details.`,
+      { modal: true },
+    );
+    return;
+  }
+  serverStartRemediationAttempted = true;
+  _serverStartProgressReporter?.report({ message: 'Rebuilding the Python environment and retrying…' });
+  controlClient?.resetAttempts();
+  launchKodoServer(port, true);
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionContext = context;
   projectRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -98,18 +193,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         sidebarProvider?.update({ connected });
         if (connected) {
           sendControlHello();
+          if (!serverStartupConnected) {
+            serverStartupConnected = true;
+            _endServerStartupProgress();
+            _showTransientNotification('Kōdo: server is connected.');
+          }
         }
       },
+      () => handleServerStartFailure(port, 'the server did not respond'),
     );
 
-    launcher
-      .launch(port)
-      .then(() => {
-        setTimeout(() => controlClient?.connect(), SERVER_STARTUP_DELAY_MS);
-      })
-      .catch(() => {
-        // ensureKodoEnvironment already showed an error notification.
-      });
+    _beginServerStartupProgress();
+    launchKodoServer(port);
   }
 
   context.subscriptions.push(

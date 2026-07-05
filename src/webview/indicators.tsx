@@ -38,14 +38,24 @@ export function LlmWaitingIndicator({ waiting }: { waiting: { reason: string; re
 }
 
 /**
- * Progress bar shown under a live `run_command` call while it runs. The filled
- * `===>` segment advances from empty toward full over the command's timeout
- * window (`|======>.......|`), so it reaches the right edge exactly when the
- * command would be killed. Removed once the tool's detail (result) arrives.
+ * Progress bar shown under a live `run_command`/`web_search` call while it
+ * runs. The filled `===>` segment advances from empty toward full over the
+ * call's timeout window (`|======>.......|`), so it reaches the right edge
+ * exactly when the call would be killed. Removed once the tool's detail
+ * (result) arrives. `label` distinguishes the two callers ("Waiting for tool
+ * output" for run_command, "Running web search" for web_search).
  */
 const RUN_COMMAND_BAR_WIDTH = 24;
 
-export function RunCommandProgress({ timeoutSeconds, startedAt }: { timeoutSeconds: number; startedAt: number }) {
+export function RunCommandProgress({
+  timeoutSeconds,
+  startedAt,
+  label = 'Waiting for tool output',
+}: {
+  timeoutSeconds: number;
+  startedAt: number;
+  label?: string;
+}) {
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 200);
@@ -60,7 +70,7 @@ export function RunCommandProgress({ timeoutSeconds, startedAt }: { timeoutSecon
   const shown = Math.min(Math.floor(elapsed), Math.floor(timeoutSeconds));
   return (
     <div style={styles.runCommandProgress}>
-      {'Waiting for tool output '}
+      {`${label} `}
       <span style={styles.runCommandBar}>{`|${bar}|`}</span>
       {` ${shown}s / ${Math.floor(timeoutSeconds)}s`}
     </div>

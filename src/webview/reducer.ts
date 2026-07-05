@@ -108,7 +108,7 @@ export function reducer(state: State, action: Action): State {
         // startedAt stays null until 'tool_call_in_progress' arrives — the
         // progress bar must not tick through a judging round or permission
         // wait that precedes real execution (see indicators.tsx).
-        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: null, diff: null, checkpoint: null, toolgenDurationMs, toolgenChars, exclude_from_context: false }],
+        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: null, diff: null, checkpoint: null, toolgenDurationMs, toolgenChars, webSearchNotes: [], exclude_from_context: false }],
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -128,6 +128,21 @@ export function reducer(state: State, action: Action): State {
         }
       }
       return { ...state, session };
+    }
+    case 'web_search_note': {
+      // Append to the matching web_search entry's live narration log
+      // (most recent match, mirroring tool_call_in_progress/tool_call_detail).
+      let patched = false;
+      const session = [...state.session];
+      for (let i = session.length - 1; i >= 0; i--) {
+        const e = session[i];
+        if (e.type === 'tool_call' && e.toolCallId === action.toolCallId) {
+          session[i] = { ...e, webSearchNotes: [...e.webSearchNotes, action.text] };
+          patched = true;
+          break;
+        }
+      }
+      return patched ? { ...state, session } : state;
     }
     case 'tool_call_detail': {
       // Attach the detail to the matching tool_call entry (most recent match).
@@ -493,6 +508,7 @@ export function reducer(state: State, action: Action): State {
               : null;
           const toolCallId = String(e.toolCallId ?? '');
           historicalToolCallIds.add(toolCallId);
+          const rawNotes = Array.isArray(e.webSearchNotes) ? e.webSearchNotes : [];
           entries.push({
             type: 'tool_call',
             toolName: String(e.toolName ?? ''),
@@ -510,6 +526,7 @@ export function reducer(state: State, action: Action): State {
             // Generation timing is a live-only nicety; not persisted to history.
             toolgenDurationMs: null,
             toolgenChars: null,
+            webSearchNotes: rawNotes.map(String),
             exclude_from_context: false,
           });
         } else if (type === 'ask_user') {

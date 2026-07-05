@@ -504,6 +504,23 @@ export const styles = {
   runCommandBar: {
     color: 'var(--vscode-charts-blue, var(--vscode-textLink-foreground))',
   },
+  webSearchNote: {
+    padding: '1px 0',
+  },
+  webSearchReport: {
+    marginTop: '8px',
+    paddingTop: '6px',
+    borderTop: '1px solid var(--vscode-panel-border)',
+  },
+  webSearchReportHeading: {
+    fontWeight: 'bold' as const,
+    marginBottom: '4px',
+  },
+  webSearchReportRow: {
+    marginBottom: '4px',
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+  },
   toolCallBox: {
     border: '1px solid var(--vscode-widget-border, rgba(128,128,128,0.25))',
     borderRadius: '6px',

@@ -19,11 +19,19 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempts = 0;
   private disposed = false;
+  private everConnected = false;
 
   constructor(
     private readonly url: string,
     private readonly onEnvelope: EnvelopeListener,
     private readonly onStatus: StatusListener,
+    /**
+     * Fires once, at most, when the reconnect loop exhausts its attempts
+     * without ever having connected — the signal that the server likely
+     * failed to start (as opposed to a connection dropping mid-session).
+     * Not called for drops after a successful initial connect.
+     */
+    private readonly onNeverConnected?: () => void,
   ) {}
 
   /** Open the connection (or start reconnect loop). */
@@ -37,6 +45,7 @@ export class WsClient {
 
     ws.on('open', () => {
       this.attempts = 0;
+      this.everConnected = true;
       this.onStatus(true);
     });
 
@@ -78,8 +87,25 @@ export class WsClient {
     this.ws = null;
   }
 
+  /**
+   * Give the next {@link connect} call a fresh reconnect budget and re-arm
+   * {@link onNeverConnected}. Used by a caller retrying after remediation
+   * (e.g. a venv rebuild) so the retry gets the full attempt count rather
+   * than immediately re-exhausting whatever was left over.
+   */
+  resetAttempts(): void {
+    this.attempts = 0;
+    this.everConnected = false;
+  }
+
   private scheduleReconnect(): void {
-    if (this.disposed || this.attempts >= MAX_RECONNECT_ATTEMPTS) {
+    if (this.disposed) {
+      return;
+    }
+    if (this.attempts >= MAX_RECONNECT_ATTEMPTS) {
+      if (!this.everConnected) {
+        this.onNeverConnected?.();
+      }
       return;
     }
     this.reconnectTimer = setTimeout(() => {

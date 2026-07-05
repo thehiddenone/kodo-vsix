@@ -11,7 +11,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ensureKodoEnvironment } from './uv-setup';
+import { ensureKodoEnvironment, rebuildKodoVenv } from './uv-setup';
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -100,8 +100,12 @@ export class ServerLauncher {
    * API keys are delivered at runtime over the WebSocket via
    * ``api_key.request`` / ``api_key.response`` — never via environment
    * variables.
+   *
+   * ``rebuildVenv`` forces a fresh ``~/.kodo/venv`` before setup — used by the
+   * caller as startup-failure remediation (a retry after the first attempt to
+   * reach the server failed). See ``extension.ts``'s activation flow.
    */
-  async launch(port = DEFAULT_PORT): Promise<void> {
+  async launch(port = DEFAULT_PORT, opts: { rebuildVenv?: boolean } = {}): Promise<void> {
     if (this.proc !== null) {
       return; // we already spawned the singleton from this window
     }
@@ -127,14 +131,15 @@ export class ServerLauncher {
       }
     }
 
-    const venv = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: 'Kodo initialization is in progress...',
-        cancellable: false,
-      },
-      () => ensureKodoEnvironment(this.output),
-    );
+    if (opts.rebuildVenv) {
+      this.output.appendLine('[remediation] previous attempt failed — rebuilding kodo venv and retrying');
+      rebuildKodoVenv(this.output);
+    }
+
+    // The caller (`extension.ts`) owns the single user-facing progress
+    // notification spanning the whole startup sequence; this only logs to
+    // the output channel.
+    const venv = await ensureKodoEnvironment(this.output);
 
     // Spawn the venv Python directly (no shell wrapper). The server is a global
     // singleton rooted at ~/.kodo — no per-workspace argument.

@@ -2,7 +2,7 @@ import { styles } from './styles';
 import { vscode } from './vscode';
 import type { SessionEntry, DiffLinkData, CheckpointData } from './types';
 import { Markdown } from './markdown';
-import { ThinkingBlock, CompactionBlock } from './StreamingBlocks';
+import { ThinkingBlock, CompactionBlock, WebSearchBlock } from './StreamingBlocks';
 import { RunCommandProgress } from './indicators';
 import { completionLabel } from './format';
 /** Crop a `visible` parameter value to at most 3 lines / 200 characters. */
@@ -256,7 +256,7 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
       const resultArrived =
         entry.rows.length > 0 || entry.detailFile !== null || entry.schemaCompliance !== null;
       const showProgress =
-        entry.toolName === 'run_command' &&
+        (entry.toolName === 'run_command' || entry.toolName === 'web_search') &&
         entry.startedAt !== null &&
         entry.timeoutSeconds !== null &&
         !resultArrived;
@@ -284,8 +284,13 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
               </span>
             )}
           </div>
+          {entry.toolName === 'web_search' && <WebSearchBlock entry={entry} />}
           {showProgress && (
-            <RunCommandProgress timeoutSeconds={entry.timeoutSeconds!} startedAt={entry.startedAt!} />
+            <RunCommandProgress
+              timeoutSeconds={entry.timeoutSeconds!}
+              startedAt={entry.startedAt!}
+              label={entry.toolName === 'web_search' ? 'Running web search' : undefined}
+            />
           )}
           {entry.diff !== null && <DiffLink diff={entry.diff} />}
           <ToolCallDetail entry={entry} />

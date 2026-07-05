@@ -171,6 +171,11 @@ export type SessionEntry =
       toolgenDurationMs: number | null;
       /** How many characters the model streamed for this call's arguments. null when unknown. */
       toolgenChars: number | null;
+      /** Live narration the `web_search` agent produced while researching (doc/WEB_SEARCH.md §6),
+       *  in order. Drives the "Web Search is in progress"/"Web Search Completed" collapsible block;
+       *  always [] for every other tool. Replayed from a best-effort sidecar file on reload — may be
+       *  incomplete if the run was aborted mid-flight. */
+      webSearchNotes: string[];
       exclude_from_context: false;
     }
   // An ask_user question batch rendered as a sequence of question boxes.
@@ -305,6 +310,7 @@ export type Action =
   | { type: 'llm_waiting'; waiting: boolean; reason: string; retryIn: number | null }
   | { type: 'tool_call'; toolName: string; description: string; toolCallId: string; timeoutSeconds: number | null }
   | { type: 'tool_call_in_progress'; toolCallId: string }
+  | { type: 'web_search_note'; toolCallId: string; text: string }
   | { type: 'tool_call_detail'; toolCallId: string; rows: ToolCallDetailRow[]; detailFile: string | null; schemaCompliance: boolean | null; success: boolean | null; diff: DiffLinkData | null; checkpoint: CheckpointData | null }
   | { type: 'token'; text: string }
   | { type: 'thinking_token'; text: string }

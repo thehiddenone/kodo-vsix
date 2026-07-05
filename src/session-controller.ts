@@ -1174,10 +1174,21 @@ export class SessionController {
 
     // Fired once the security gate clears (allowed outright, or the user
     // granted permission) and the tool is genuinely about to run — tells the
-    // webview to start the run_command timeout bar's clock now, not at
-    // agent.tool_call_prep time (see doc/SECURITY.md §6).
+    // webview to start the run_command/web_search timeout bar's clock now,
+    // not at agent.tool_call_prep time (see doc/SECURITY.md §6).
     if (env.kind === 'event' && evtType === 'agent.tool_call_in_progress') {
       this._post({ type: 'tool_call_in_progress', toolCallId: String(env.payload.tool_call_id ?? '') });
+      return;
+    }
+
+    // Live narration from the web_search agent's tool loop (doc/WEB_SEARCH.md
+    // §6) — appended to the "Web Search is in progress" collapsible block.
+    if (env.kind === 'event' && evtType === 'web_search.note') {
+      this._post({
+        type: 'web_search_note',
+        toolCallId: String(env.payload.tool_call_id ?? ''),
+        text: String(env.payload.text ?? ''),
+      });
       return;
     }
 
