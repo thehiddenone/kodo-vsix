@@ -22,10 +22,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import * as cloudCredentials from './cloud-credentials';
+import { CloudAiSettingsPanel } from './cloud-ai-settings-panel';
+import type { CloudAiSettingsMessage } from './cloud-ai-settings-panel';
 import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
+import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
+import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
+import type { CloudRegistry, EffortLevel, LocalRegistryEntry } from './llm-registry-types';
 import { SidebarProvider } from './sidebar-provider';
-import type { ModelInfo } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
 import { SessionController } from './session-controller';
@@ -33,7 +38,8 @@ import type { SessionDeps } from './session-controller';
 
 const SERVER_STARTUP_DELAY_MS = 1_500;
 // Mirrors _DEFAULT_USER_SETTINGS["models"]["local"] in kodo/server/_config.py.
-const _DEFAULT_LOCAL_MODEL = 'llamacpp-qwen36-27b';
+const _DEFAULT_LOCAL_MODEL = 'llamacpp-qwen36-27b-q4-k-xl';
+const _DEFAULT_CLOUD_VENDOR = 'anthropic';
 
 let extensionContext: vscode.ExtensionContext | null = null;
 // Serial queue for api_key.request handling — at most one "enter key" dialog at
@@ -73,10 +79,11 @@ let modeState: 'local' | 'cloud' = 'local';
 let windowId = '';
 
 // ---------------------------------------------------------------------------
-// Window-global control/LLM state (sidebar mirror)
+// Window-global control/LLM state (sidebar + settings-panel mirror)
 // ---------------------------------------------------------------------------
-let modelsState: ModelInfo[] = [];
-let installedModelsState: string[] = [];
+let cloudRegistryState: CloudRegistry = {};
+let activeCloudVendorState = _DEFAULT_CLOUD_VENDOR;
+let localRegistryState: LocalRegistryEntry[] = [];
 let activeLocalModelState = '';
 let effectiveLocalModelState = '';
 let llamaInstalledState = false;
@@ -86,8 +93,34 @@ let llamaRunningState = false;
 let llamaRunningModelState = '';
 let llamaStartingState = false;
 let llamaStoppingState = false;
+let llamaServerOverridePathState: string | null = null;
 let _llamaStartProgressResolve: (() => void) | null = null;
-let installingModelsState: string[] = [];
+let installingLocalLlmsState: string[] = [];
+
+// custom_file entries' installed state is resolved ONCE per entry, the first
+// time this window's extension host sees that entry (activation for entries
+// that already existed, or the moment a new one arrives via hello.ack/
+// registry_state) — never re-checked afterward, per doc/LLM_REGISTRY.md §4.
+const _customFileInstalledCache = new Map<string, boolean>();
+
+/** Merge server-reported local_registry entries with the client-authoritative
+ * custom_file installed-state cache (see doc/LLM_REGISTRY.md §4). */
+function _mergeLocalRegistry(raw: unknown): LocalRegistryEntry[] {
+  if (!Array.isArray(raw)) {
+    return localRegistryState;
+  }
+  return (raw as LocalRegistryEntry[]).map((entry) => {
+    if (entry.kind !== 'custom_file') {
+      return entry;
+    }
+    let installed = _customFileInstalledCache.get(entry.name);
+    if (installed === undefined) {
+      installed = fs.existsSync(entry.path);
+      _customFileInstalledCache.set(entry.name, installed);
+    }
+    return { ...entry, installed };
+  });
+}
 
 /**
  * Show the "Starting the local Kōdo server…" progress notification, if not
@@ -224,8 +257,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   modeState = _readMode();
+  activeCloudVendorState = _readActiveCloudVendor();
   activeLocalModelState = _readActiveLocalModel();
-  installedModelsState = _readInstalledModels();
 
   sidebarProvider = new SidebarProvider(
     {
@@ -233,8 +266,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       hasWorkspace,
       stage: 'IDLE',
       mode: modeState,
-      models: modelsState,
-      installedModels: installedModelsState,
+      cloudRegistry: cloudRegistryState,
+      activeCloudVendor: activeCloudVendorState,
+      localRegistry: localRegistryState,
       activeLocalModel: activeLocalModelState,
       effectiveLocalModel: effectiveLocalModelState,
       llamaInstalled: llamaInstalledState,
@@ -244,7 +278,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaRunningModel: llamaRunningModelState,
       llamaStarting: llamaStartingState,
       llamaStopping: llamaStoppingState,
-      installingModels: installingModelsState,
     },
     (msg) => {
       if (msg.type === 'list_sessions') {
@@ -255,6 +288,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _setMode(msg.mode);
       } else if (msg.type === 'set_active_model') {
         _setActiveLocalModel(msg.name);
+      } else if (msg.type === 'set_cloud_vendor') {
+        _setActiveCloudVendor(msg.vendor);
+      } else if (msg.type === 'open_local_inference_settings') {
+        _openLocalInferenceSettings();
+      } else if (msg.type === 'open_cloud_ai_settings') {
+        _openCloudAiSettings();
       } else if (msg.type === 'start_llamacpp') {
         _startLlamaCpp();
       } else if (msg.type === 'stop_llamacpp') {
@@ -263,8 +302,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _sendControl(makeRequest('llama.stop'));
       } else if (msg.type === 'install_llamacpp') {
         _installLlamaCpp();
-      } else if (msg.type === 'install_model') {
-        _installModel(msg.name);
       }
     },
   );
@@ -323,6 +360,9 @@ function _sessionDeps(): SessionDeps {
     addWorkspaceFolder,
     handleApiKeyRequest: (vendor, requestId, send) => {
       _apiKeyQueue = _apiKeyQueue.then(() => _handleApiKeyRequest(vendor, requestId, send));
+    },
+    revokeApiKey: (vendor) => {
+      void cloudCredentials.revokeActiveKey(extensionContext!, vendor).then(() => _pushCloudAiSettingsState());
     },
     onSessionAssigned: (_c, sessionId) => _rememberOpenSession(sessionId),
     onLlamaState: _applyLlamaState,
@@ -860,24 +900,32 @@ function handleControlEnvelope(env: Envelope): void {
   const evtType = String(env.payload.type ?? '');
 
   if (env.kind === 'response' && evtType === 'hello.ack') {
-    const raw = env.payload.models;
-    if (Array.isArray(raw)) {
-      modelsState = raw as ModelInfo[];
+    if (env.payload.cloud_registry && typeof env.payload.cloud_registry === 'object') {
+      cloudRegistryState = env.payload.cloud_registry as CloudRegistry;
     }
+    if (typeof env.payload.active_cloud_vendor === 'string') {
+      activeCloudVendorState = env.payload.active_cloud_vendor;
+    }
+    localRegistryState = _mergeLocalRegistry(env.payload.local_registry);
+    llamaServerOverridePathState =
+      typeof env.payload.llama_server_override_path === 'string' ? env.payload.llama_server_override_path : null;
     llamaInstalledState = Boolean(env.payload.llama_installed);
     llamaVersionState = typeof env.payload.llama_version === 'string' ? env.payload.llama_version : '';
     llamaRunningState = Boolean(env.payload.llama_running);
     llamaRunningModelState =
       llamaRunningState && typeof env.payload.llama_model === 'string' ? env.payload.llama_model : '';
     sidebarProvider?.update({
-      models: modelsState,
-      installedModels: installedModelsState,
+      cloudRegistry: cloudRegistryState,
+      activeCloudVendor: activeCloudVendorState,
+      localRegistry: localRegistryState,
       effectiveLocalModel: effectiveLocalModelState,
       llamaInstalled: llamaInstalledState,
       llamaVersion: llamaVersionState,
       llamaRunning: llamaRunningState,
       llamaRunningModel: llamaRunningModelState,
     });
+    _pushLocalInferenceSettingsState();
+    _pushCloudAiSettingsState();
     // The server is provably reachable now — reopen any of this window's
     // sessions that the panel serializer could not restore (see the
     // open-session memory block above).
@@ -890,13 +938,30 @@ function handleControlEnvelope(env: Envelope): void {
     return;
   }
 
-  if (env.kind === 'event' && evtType === 'model.install.progress') {
-    _onModelInstallProgress(String(env.payload.name ?? ''), Number(env.payload.percent ?? 0), String(env.payload.message ?? ''));
+  if (env.kind === 'event' && evtType === 'local_llm.install.progress') {
+    _onLocalLlmInstallProgress(
+      String(env.payload.name ?? ''),
+      Number(env.payload.percent ?? 0),
+      String(env.payload.message ?? ''),
+    );
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'local_llm.registry_state') {
+    _onLocalLlmRegistryState(env.payload);
     return;
   }
 
   if (env.kind === 'event' && evtType === 'llamacpp.install.progress') {
     _onLlamaProgress(Number(env.payload.percent ?? 0), String(env.payload.message ?? ''));
+    return;
+  }
+
+  if (env.kind === 'event' && evtType === 'error') {
+    const message = typeof env.payload.message === 'string' ? env.payload.message : 'Unknown error';
+    if (env.payload.code === 'local_llm_error') {
+      vscode.window.showErrorMessage(`Kōdo: ${message}`);
+    }
     return;
   }
 }
@@ -957,7 +1022,7 @@ function _kodoHomeDir(): string {
 }
 
 function _settingsPath(): string {
-  return path.join(_kodoHomeDir(), 'settings.json');
+  return path.join(_kodoHomeDir(), 'etc', 'settings.json');
 }
 
 function _readSettings(): Record<string, unknown> {
@@ -968,11 +1033,11 @@ function _readSettings(): Record<string, unknown> {
   }
 }
 
-/** Merge a patch into the global ~/.kodo/settings.json, preserving other keys. */
+/** Merge a patch into the global ~/.kodo/etc/settings.json, preserving other keys. */
 function _writeSettings(patch: Record<string, unknown>): void {
   const settings = _readSettings();
   Object.assign(settings, patch);
-  fs.mkdirSync(_kodoHomeDir(), { recursive: true });
+  fs.mkdirSync(path.dirname(_settingsPath()), { recursive: true });
   fs.writeFileSync(_settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
 }
 
@@ -1008,14 +1073,31 @@ function _readActiveLocalModel(): string {
   return typeof models?.['local'] === 'string' ? models['local'] : _DEFAULT_LOCAL_MODEL;
 }
 
-function _readInstalledModels(): string[] {
-  try {
-    const indexPath = path.join(os.homedir(), '.kodo', 'local-llm-index.json');
-    const parsed = JSON.parse(fs.readFileSync(indexPath, 'utf8')) as Record<string, unknown>;
-    return Object.keys(parsed).filter((k) => typeof parsed[k] === 'string' && parsed[k] !== '');
-  } catch {
-    return [];
+function _readActiveCloudVendor(): string {
+  const value = _readSettings()['active_cloud_vendor'];
+  return typeof value === 'string' && value ? value : _DEFAULT_CLOUD_VENDOR;
+}
+
+/** vendor -> effort -> model_id, mirrors settings.json's `models.cloud`. */
+function _readCloudModels(): Record<string, Record<string, string>> {
+  const models = _readSettings()['models'] as Record<string, unknown> | undefined;
+  const cloud = models?.['cloud'];
+  if (!cloud || typeof cloud !== 'object') {
+    return {};
   }
+  const result: Record<string, Record<string, string>> = {};
+  for (const [vendor, effortMap] of Object.entries(cloud as Record<string, unknown>)) {
+    if (effortMap && typeof effortMap === 'object') {
+      const clean: Record<string, string> = {};
+      for (const [effort, modelId] of Object.entries(effortMap as Record<string, unknown>)) {
+        if (typeof modelId === 'string') {
+          clean[effort] = modelId;
+        }
+      }
+      result[vendor] = clean;
+    }
+  }
+  return result;
 }
 
 let _llamaProgressReporter: vscode.Progress<{ message?: string; increment?: number }> | null = null;
@@ -1091,11 +1173,200 @@ function _startLlamaCpp(): void {
 
 const _modelProgressResolvers = new Map<string, () => void>();
 
-function _installModel(name: string): void {
-  if (installingModelsState.includes(name)) { return; }
-  installingModelsState = [...installingModelsState, name];
-  sidebarProvider?.update({ installingModels: installingModelsState });
-  _sendControl(makeRequest('model.install', { name }));
+function _pushLocalInferenceSettingsState(): void {
+  LocalInferenceSettingsPanel.instance?.update({
+    localRegistry: localRegistryState,
+    llamaServerOverridePath: llamaServerOverridePathState,
+    installingModels: installingLocalLlmsState,
+  });
+}
+
+function _pushCloudAiSettingsState(): void {
+  const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
+  for (const vendor of Object.keys(cloudRegistryState)) {
+    keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
+  }
+  CloudAiSettingsPanel.instance?.update({
+    cloudRegistry: cloudRegistryState,
+    modelsByVendor: _readCloudModels(),
+    keysByVendor,
+  });
+}
+
+function _openLocalInferenceSettings(): void {
+  const panel = LocalInferenceSettingsPanel.createOrShow(
+    {
+      localRegistry: localRegistryState,
+      llamaServerOverridePath: llamaServerOverridePathState,
+      installingModels: installingLocalLlmsState,
+    },
+    (msg: LocalInferenceSettingsMessage) => void _onLocalInferenceSettingsMessage(msg),
+  );
+  void panel;
+}
+
+function _openCloudAiSettings(): void {
+  const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
+  for (const vendor of Object.keys(cloudRegistryState)) {
+    keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
+  }
+  CloudAiSettingsPanel.createOrShow(
+    { cloudRegistry: cloudRegistryState, modelsByVendor: _readCloudModels(), keysByVendor },
+    (msg: CloudAiSettingsMessage) => void _onCloudAiSettingsMessage(msg),
+  );
+}
+
+async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessage): Promise<void> {
+  if (msg.type === 'add_huggingface') {
+    await _addLocalLlmHuggingface();
+  } else if (msg.type === 'add_file') {
+    await _addLocalLlmFile();
+  } else if (msg.type === 'add_server_url') {
+    await _addLocalLlmServerUrl();
+  } else if (msg.type === 'install') {
+    _installLocalLlm(msg.name);
+  } else if (msg.type === 'uninstall') {
+    _sendControl(makeRequest('local_llm.uninstall', { name: msg.name }));
+  } else if (msg.type === 'remove') {
+    _sendControl(makeRequest('local_llm.remove', { name: msg.name }));
+  } else if (msg.type === 'set_override') {
+    await _setLlamaServerOverride();
+  } else if (msg.type === 'remove_override') {
+    _sendControl(makeRequest('llama_server_override.remove'));
+  }
+}
+
+async function _onCloudAiSettingsMessage(msg: CloudAiSettingsMessage): Promise<void> {
+  if (msg.type === 'set_cloud_model') {
+    _setCloudModel(msg.vendor, msg.effort, msg.model_id);
+  } else if (msg.type === 'add_key') {
+    if (!extensionContext) { return; }
+    await cloudCredentials.addKeyInteractive(extensionContext, msg.vendor);
+    _pushCloudAiSettingsState();
+  } else if (msg.type === 'forget_key') {
+    const confirm = await vscode.window.showWarningMessage(
+      'Forget this API key? This cannot be undone.',
+      { modal: true },
+      'Forget key',
+    );
+    if (confirm === 'Forget key' && extensionContext) {
+      await cloudCredentials.forgetKey(extensionContext, msg.vendor, msg.uuid);
+      _pushCloudAiSettingsState();
+    }
+  } else if (msg.type === 'make_active') {
+    cloudCredentials.makeActive(msg.vendor, msg.uuid);
+    _pushCloudAiSettingsState();
+  }
+}
+
+async function _addLocalLlmHuggingface(): Promise<void> {
+  const name = await vscode.window.showInputBox({
+    title: 'Kōdo: Add local LLM from huggingface.com',
+    prompt: 'Name this model',
+    ignoreFocusOut: true,
+  });
+  if (!name?.trim()) { return; }
+  const repoId = await vscode.window.showInputBox({
+    title: 'Kōdo: Add local LLM from huggingface.com',
+    prompt: 'HuggingFace repository ID (e.g. "unsloth/Qwen3.6-27B-MTP-GGUF")',
+    ignoreFocusOut: true,
+  });
+  if (!repoId?.trim()) { return; }
+  const filename = await vscode.window.showInputBox({
+    title: 'Kōdo: Add local LLM from huggingface.com',
+    prompt: 'GGUF filename inside that repository',
+    ignoreFocusOut: true,
+  });
+  if (!filename?.trim()) { return; }
+  const description = await vscode.window.showInputBox({
+    title: 'Kōdo: Add local LLM from huggingface.com',
+    prompt: 'Description (optional)',
+    ignoreFocusOut: true,
+  });
+  _sendControl(
+    makeRequest('local_llm.add_huggingface', {
+      name: name.trim(),
+      repo_id: repoId.trim(),
+      filename: filename.trim(),
+      description: description?.trim() ?? '',
+    }),
+  );
+}
+
+async function _addLocalLlmFile(): Promise<void> {
+  const picked = await vscode.window.showOpenDialog({
+    title: 'Kōdo: Add local LLM from file',
+    canSelectMany: false,
+    filters: { 'GGUF model': ['gguf'] },
+  });
+  const filePath = picked?.[0]?.fsPath;
+  if (!filePath) { return; }
+  const name = await vscode.window.showInputBox({
+    title: 'Kōdo: Add local LLM from file',
+    prompt: 'Name this model',
+    ignoreFocusOut: true,
+  });
+  if (!name?.trim()) { return; }
+  const description = await vscode.window.showInputBox({
+    title: 'Kōdo: Add local LLM from file',
+    prompt: 'Description (optional)',
+    ignoreFocusOut: true,
+  });
+  // A file the user just picked from disk exists by construction — mark it
+  // installed immediately rather than waiting for the next extension
+  // restart's startup-time check (see doc/LLM_REGISTRY.md §4).
+  _customFileInstalledCache.set(name.trim(), true);
+  _sendControl(
+    makeRequest('local_llm.add_file', {
+      name: name.trim(),
+      path: filePath,
+      description: description?.trim() ?? '',
+    }),
+  );
+}
+
+async function _addLocalLlmServerUrl(): Promise<void> {
+  const name = await vscode.window.showInputBox({
+    title: 'Kōdo: Add a link to local llama-server',
+    prompt: 'Name this model',
+    ignoreFocusOut: true,
+  });
+  if (!name?.trim()) { return; }
+  const url = await vscode.window.showInputBox({
+    title: 'Kōdo: Add a link to local llama-server',
+    prompt: 'Base URL of the running llama-server (e.g. "http://192.168.1.50:8042")',
+    ignoreFocusOut: true,
+  });
+  if (!url?.trim()) { return; }
+  const description = await vscode.window.showInputBox({
+    title: 'Kōdo: Add a link to local llama-server',
+    prompt: 'Description (optional)',
+    ignoreFocusOut: true,
+  });
+  _sendControl(
+    makeRequest('local_llm.add_server_url', {
+      name: name.trim(),
+      url: url.trim(),
+      description: description?.trim() ?? '',
+    }),
+  );
+}
+
+async function _setLlamaServerOverride(): Promise<void> {
+  const picked = await vscode.window.showOpenDialog({
+    title: 'Kōdo: Set llama.cpp override',
+    canSelectMany: false,
+  });
+  const filePath = picked?.[0]?.fsPath;
+  if (!filePath) { return; }
+  _sendControl(makeRequest('llama_server_override.set', { path: filePath }));
+}
+
+function _installLocalLlm(name: string): void {
+  if (installingLocalLlmsState.includes(name)) { return; }
+  installingLocalLlmsState = [...installingLocalLlmsState, name];
+  _pushLocalInferenceSettingsState();
+  _sendControl(makeRequest('local_llm.install', { name }));
 
   vscode.window
     .withProgress(
@@ -1105,23 +1376,30 @@ function _installModel(name: string): void {
     .then(undefined, () => undefined);
 }
 
-function _onModelInstallProgress(name: string, pct: number, msg: string): void {
+function _onLocalLlmInstallProgress(name: string, pct: number, msg: string): void {
   if (pct === 100) {
-    installingModelsState = installingModelsState.filter((n) => n !== name);
-    installedModelsState = _readInstalledModels();
-    sidebarProvider?.update({ installingModels: installingModelsState, installedModels: installedModelsState });
+    installingLocalLlmsState = installingLocalLlmsState.filter((n) => n !== name);
+    _pushLocalInferenceSettingsState();
     setTimeout(() => {
       _modelProgressResolvers.get(name)?.();
       _modelProgressResolvers.delete(name);
       vscode.window.showInformationMessage(`Kōdo: ${name} downloaded and ready.`);
     }, 1000);
   } else if (pct < 0) {
-    installingModelsState = installingModelsState.filter((n) => n !== name);
-    sidebarProvider?.update({ installingModels: installingModelsState });
+    installingLocalLlmsState = installingLocalLlmsState.filter((n) => n !== name);
+    _pushLocalInferenceSettingsState();
     _modelProgressResolvers.get(name)?.();
     _modelProgressResolvers.delete(name);
     vscode.window.showErrorMessage(`Kōdo: model installation failed — ${msg}`);
   }
+}
+
+function _onLocalLlmRegistryState(payload: Record<string, unknown>): void {
+  localRegistryState = _mergeLocalRegistry(payload.local_registry);
+  llamaServerOverridePathState =
+    typeof payload.llama_server_override_path === 'string' ? payload.llama_server_override_path : null;
+  sidebarProvider?.update({ localRegistry: localRegistryState });
+  _pushLocalInferenceSettingsState();
 }
 
 function _setActiveLocalModel(name: string): void {
@@ -1133,17 +1411,39 @@ function _setActiveLocalModel(name: string): void {
   sidebarProvider?.update({ activeLocalModel: name });
 }
 
+function _setActiveCloudVendor(vendor: string): void {
+  _writeSettings({ active_cloud_vendor: vendor });
+  _sendControl(makeRequest('config.reload'));
+  activeCloudVendorState = vendor;
+  sidebarProvider?.update({ activeCloudVendor: vendor });
+}
+
+function _setCloudModel(vendor: string, effort: EffortLevel, modelId: string): void {
+  const models = (_readSettings()['models'] as Record<string, unknown> | undefined) ?? {};
+  const cloud = (models['cloud'] as Record<string, unknown> | undefined) ?? {};
+  const vendorMap = (cloud[vendor] as Record<string, string> | undefined) ?? {};
+  vendorMap[effort] = modelId;
+  cloud[vendor] = vendorMap;
+  models['cloud'] = cloud;
+  _writeSettings({ models });
+  _sendControl(makeRequest('config.reload'));
+  _pushCloudAiSettingsState();
+}
+
 function _setMode(mode: 'cloud' | 'local'): void {
   _writeSettings({ mode });
   _sendControl(makeRequest('config.reload'));
   modeState = mode;
   sidebarProvider?.update({ mode });
   const label = mode === 'cloud' ? 'cloud AI (API key required)' : 'local AI via llama.cpp';
-  vscode.window.showInformationMessage(`Kōdo: switched to ${label}.`);
+  _showTransientNotification(`Kōdo: switched to ${label}.`);
 }
 
 // ---------------------------------------------------------------------------
-// SecretStorage: per-vendor API key management (shared across sessions)
+// Cloud API keys: named/multi-key management lives in cloud-credentials.ts
+// (kodo/doc/LLM_REGISTRY.md §6) — this just answers the server's pull
+// requests from whichever key is active, falling back to the reactive
+// add-a-key flow when the vendor has none configured yet.
 // ---------------------------------------------------------------------------
 
 async function _handleApiKeyRequest(
@@ -1154,31 +1454,17 @@ async function _handleApiKeyRequest(
   if (!extensionContext) {
     return;
   }
-  const secretKey = `kodo.apiKey.${vendor}`;
 
-  const stored = await extensionContext.secrets.get(secretKey);
-  if (stored) {
-    send(makeResponse(requestId, { api_key: stored }));
+  const key = await cloudCredentials.resolveApiKey(extensionContext, vendor);
+  _pushCloudAiSettingsState();
+  if (key) {
+    send(makeResponse(requestId, { api_key: key }));
     return;
   }
 
-  const entered = await vscode.window.showInputBox({
-    title: `Kōdo: API key required`,
-    prompt: `Enter the API key for ${vendor}`,
-    password: true,
-    placeHolder: `${vendor} API key`,
-    ignoreFocusOut: true,
-  });
-
-  if (!entered?.trim()) {
-    vscode.window.showErrorMessage(
-      `Kōdo: prompt not sent. A ${vendor} API key is required to use cloud-based LLM. ` +
-        'Alternatively, you can configure Kōdo to use a local model running on your machine (e.g., llama.cpp).',
-    );
-    send(makeResponse(requestId, { error: 'cancelled' }));
-    return;
-  }
-
-  await extensionContext.secrets.store(secretKey, entered.trim());
-  send(makeResponse(requestId, { api_key: entered.trim() }));
+  vscode.window.showErrorMessage(
+    `Kōdo: prompt not sent. A ${vendor} API key is required to use cloud-based LLM. ` +
+      'Alternatively, you can configure Kōdo to use a local model running on your machine (e.g., llama.cpp).',
+  );
+  send(makeResponse(requestId, { error: 'cancelled' }));
 }

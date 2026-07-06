@@ -137,6 +137,8 @@ export interface SessionDeps {
   addWorkspaceFolder: (folderPath: string, name: string) => void;
   /** Shared SecretStorage-backed API-key prompt; replies on this session's WS. */
   handleApiKeyRequest: (vendor: string, requestId: string, send: (env: Envelope) => void) => void;
+  /** Forget whichever key is currently active for `vendor` (server-initiated revoke). */
+  revokeApiKey: (vendor: string) => void;
   /** Called once the server assigns/confirms this session's id. */
   onSessionAssigned: (c: SessionController, sessionId: string) => void;
   /**
@@ -1332,7 +1334,7 @@ export class SessionController {
     if (env.kind === 'event' && evtType === 'api_key.revoke') {
       const vendor = String(env.payload.vendor ?? '');
       if (vendor) {
-        void this.deps.context.secrets.delete(`kodo.apiKey.${vendor}`).then(undefined, () => undefined);
+        this.deps.revokeApiKey(vendor);
       }
       return;
     }
