@@ -426,6 +426,7 @@ export function reducer(state: State, action: Action): State {
           intent: action.intent,
           reason: action.reason,
           params: action.params,
+          recovered: action.recovered,
         },
         streaming: false,
         awaitingLlm: false,

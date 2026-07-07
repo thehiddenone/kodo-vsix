@@ -202,7 +202,7 @@ export const styles = {
     color: 'var(--vscode-button-secondaryForeground, var(--vscode-button-foreground))',
   },
   // Greyed-out look applied when a toggle is disabled — most notably when Edit/
-  // Command Control are auto-locked to their forced posture under Autonomous —
+  // Tool Control are auto-locked to their forced posture under Autonomous —
   // so the user gets a visual cue that the state is fixed and not clickable.
   modeBtnDisabled: {
     opacity: 0.5,
@@ -232,7 +232,9 @@ export const styles = {
     padding: '6px 9px',
     fontSize: '12px',
     lineHeight: 1.4,
-    whiteSpace: 'normal' as const,
+    // pre-line (not normal) so the status line's embedded '\n' always starts
+    // on its own line, while ordinary spaces still wrap normally.
+    whiteSpace: 'pre-line' as const,
     textAlign: 'left' as const,
     background: 'var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background))',
     color: 'var(--vscode-editorHoverWidget-foreground, var(--vscode-editorWidget-foreground))',
@@ -777,6 +779,16 @@ export const styles = {
     fontSize: '10px',
     fontWeight: 'bold',
     whiteSpace: 'nowrap',
+  },
+  permissionRecoveredBanner: {
+    fontSize: '12px',
+    lineHeight: '1.4',
+    background: 'var(--vscode-inputValidation-warningBackground)',
+    color: 'var(--vscode-inputValidation-warningForeground, var(--vscode-foreground))',
+    border: '1px solid var(--vscode-inputValidation-warningBorder, transparent)',
+    borderRadius: '3px',
+    padding: '6px 8px',
+    marginBottom: '8px',
   },
   permissionReason: {
     fontSize: '12px',

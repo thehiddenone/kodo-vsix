@@ -25,7 +25,7 @@ const TOKEN_BUFFER_MAX = 64 * 1024;
 
 /** Edit Control posture. `smart` is the default. */
 type EditControl = 'review_all' | 'allow_all' | 'smart';
-/** Command Control posture. `smart` is the default. */
+/** Tool Control posture. `smart` is the default. */
 type CommandControl = 'defensive' | 'permissive' | 'smart';
 
 /** Coerce an untyped wire value into a valid {@link EditControl} (default smart). */
@@ -116,6 +116,9 @@ interface PermissionData {
   intent: string;
   reason: string;
   params: { name: string; value: string }[];
+  /** True when the gated call was salvaged from a malformed (plain-text) tool
+   *  call — the panel shows a distinct "recovered" banner. */
+  recovered: boolean;
 }
 
 /** Collaborators the controller needs from the window-level host. */
@@ -197,7 +200,7 @@ export class SessionController {
   private effectiveAutonomous = false;
   private workflowMode: 'guided' | 'problem_solving' = 'problem_solving';
   private effectiveWorkflowMode: 'guided' | 'problem_solving' = 'problem_solving';
-  // Edit/Command Control are NEVER frozen. The host owns them: it keeps the
+  // Edit/Tool Control are NEVER frozen. The host owns them: it keeps the
   // user's *selected* posture, and derives the *shown* value — which equals the
   // selection unless Autonomous mode is currently in effect, in which case it is
   // forced to Allow All / Permissive (the toggles also lock in the UI). `running`
@@ -325,7 +328,7 @@ export class SessionController {
     return this._autonomousInEffect() ? _AUTONOMOUS_EDIT : this.editControl;
   }
 
-  /** Command Control value the UI shows — forced to Permissive under Autonomous. */
+  /** Tool Control value the UI shows — forced to Permissive under Autonomous. */
   private _commandShown(): CommandControl {
     return this._autonomousInEffect() ? _AUTONOMOUS_COMMAND : this.commandControl;
   }
@@ -1085,6 +1088,7 @@ export class SessionController {
           const rec = p as Record<string, unknown>;
           return { name: String(rec.name ?? ''), value: String(rec.value ?? '') };
         }),
+        recovered: env.payload.recovered === true,
       };
       this._post({ type: 'permission_request', ...this.pendingPermission });
       return;

@@ -5,16 +5,28 @@ import { vscode } from './vscode';
 import type { EditControl, CommandControl } from './types';
 // Base, status-free description of what each toggle controls. The dynamic
 // status line ("in effect" / "queued for the next prompt" / "locked by
-// Autonomous") is appended at render time by the build*Tooltip helpers.
+// Autonomous") is appended on its own line at render time by the
+// build*Tooltip helpers.
 const _MODE_DESC = {
   interactive: 'Interactive — agents work alongside you, asking questions before key decisions.',
   autonomous: 'Autonomous — agents work on their own, making reasonable assumptions instead of pausing.',
   problem_solving: 'Problem Solving — one generalist agent tackles your request end to end.',
   guided: 'Guided Development — Kōdo walks through design, tests and implementation phases.',
-  editControl:
-    'Edit Control — how Kōdo handles file edits. Review All pauses for your sign-off on every edit; Allow All applies edits without pausing; Smart lets Kōdo decide per edit.',
-  commandControl:
-    'Command Control — how much Kōdo restricts potentially risky commands. Defensive blocks risky commands; Permissive allows them; Smart decides per command.',
+};
+
+/** Status-free description of Edit Control, one per posture. */
+const _EDIT_DESC: Record<EditControl, string> = {
+  smart: 'Edit Control — Smart. Kōdo decides per edit whether to pause for your sign-off or apply it automatically.',
+  review_all: 'Edit Control — Review All. Kōdo pauses for your sign-off on every edit.',
+  allow_all: 'Edit Control — Allow All. Kōdo applies edits without pausing.',
+};
+
+/** Status-free description of Tool Control, one per posture. */
+const _TOOL_DESC: Record<CommandControl, string> = {
+  smart: 'Tool Control — Smart. Kōdo decides per tool action or shell command whether to ask for your approval or proceed automatically.',
+  defensive:
+    'Tool Control — Defensive. Kōdo asks you to review and approve all potentially unsafe tool actions and shell commands.',
+  permissive: 'Tool Control — Permissive. Kōdo allows tool actions and shell commands without asking.',
 };
 
 /** Button label per Edit Control posture. */
@@ -38,11 +50,11 @@ const _EDIT_NEXT: Record<EditControl, EditControl> = {
   allow_all: 'smart',
 };
 
-/** Button label per Command Control posture. */
+/** Button label per Tool Control posture. */
 const _COMMAND_LABEL: Record<CommandControl, string> = {
-  smart: '🧠 Command Control: Smart',
-  defensive: '🛡️ Command Control: Defensive',
-  permissive: '🔓 Command Control: Permissive',
+  smart: '🧠 Tool Control: Smart',
+  defensive: '🛡️ Tool Control: Defensive',
+  permissive: '🔓 Tool Control: Permissive',
 };
 
 /** Short posture name used inside tooltips. */
@@ -73,23 +85,23 @@ const _COMMAND_NEXT: Record<CommandControl, CommandControl> = {
  */
 function buildModeTooltip(desc: string, effectiveName: string, pending: boolean): string {
   return pending
-    ? `${desc} Will be applied to the next prompt, current mode: ${effectiveName}.`
-    : `${desc} This mode is in effect.`;
+    ? `${desc}\nWill be applied to the next prompt, current mode: ${effectiveName}.`
+    : `${desc}\nThis mode is in effect.`;
 }
 
 /**
- * Tooltip for the two *never-frozen* toggles (Edit/Command Control). They are
- * locked to a forced posture while Autonomous mode is in effect; otherwise they
- * apply immediately (no per-turn freeze).
+ * Tooltip for the two *never-frozen* toggles (Edit Control/Tool Control). They
+ * are locked to a forced posture while Autonomous mode is in effect; otherwise
+ * they apply immediately (no per-turn freeze).
  *
- * @param desc Status-free description of the toggle.
+ * @param desc Status-free description of the selected posture.
  * @param locked True while Autonomous mode is in effect.
  * @param lockedName The forced posture name shown when locked.
  */
 function buildLockTooltip(desc: string, locked: boolean, lockedName: string): string {
   return locked
-    ? `${desc} Locked to ${lockedName} while Autonomous mode is in effect.`
-    : `${desc} This setting is in effect.`;
+    ? `${desc}\nLocked to ${lockedName} while Autonomous mode is in effect.`
+    : `${desc}\nThis setting is in effect.`;
 }
 
 /**
@@ -203,9 +215,9 @@ export function ModeControls({
     effectiveAutonomous ? 'Autonomous' : 'Interactive',
     running && autonomous !== effectiveAutonomous,
   );
-  const editTip = buildLockTooltip(_MODE_DESC.editControl, editCommandLocked, _EDIT_NAME.allow_all);
+  const editTip = buildLockTooltip(_EDIT_DESC[editControl], editCommandLocked, _EDIT_NAME.allow_all);
   const commandTip = buildLockTooltip(
-    _MODE_DESC.commandControl,
+    _TOOL_DESC[commandControl],
     editCommandLocked,
     _COMMAND_NAME.permissive,
   );

@@ -1,7 +1,7 @@
 // Shared data, state, and action types for the Kōdo WebView.
 /** Edit Control posture the Edit toggle cycles through. `smart` is the default. */
 export type EditControl = 'review_all' | 'allow_all' | 'smart';
-/** Command Control posture the Command toggle cycles through. `smart` is the default. */
+/** Tool Control posture the Tool Control toggle cycles through. `smart` is the default. */
 export type CommandControl = 'defensive' | 'permissive' | 'smart';
 
 /** Coerce an untyped wire value into a valid {@link EditControl} (default smart). */
@@ -79,6 +79,10 @@ export interface PermissionData {
   /** The security layer's one-sentence reason for asking. */
   reason: string;
   params: PermissionParamRow[];
+  /** True when the gated call was salvaged from a malformed (plain-text) tool
+   *  call the model emitted instead of a proper tool call. The panel renders a
+   *  distinct "recovered" banner so the user reviews the inferred tool. */
+  recovered: boolean;
 }
 
 /**
@@ -249,7 +253,7 @@ export interface State {
   /** Per-session workflow mode; toggled in this tab's header. */
   workflowMode: 'guided' | 'problem_solving';
   effectiveWorkflowMode: 'guided' | 'problem_solving';
-  // Edit/Command Control are never frozen. The host owns them and sends the
+  // Edit/Tool Control are never frozen. The host owns them and sends the
   // *shown* value (forced to Allow All / Permissive while Autonomous is in
   // effect) plus `editCommandLocked`, which disables both toggles in the UI.
   editControl: EditControl;
@@ -336,7 +340,7 @@ export type Action =
   | { type: 'question_request'; requestId: string; toolCallId: string; questions: AskUserQuestion[] }
   | { type: 'question_answered'; toolCallId: string; answers: AskUserAnswer[] }
   | { type: 'question_cleared' }
-  | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[] }
+  | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[]; recovered: boolean }
   | { type: 'permission_cleared' }
   | {
       type: 'mode_state';

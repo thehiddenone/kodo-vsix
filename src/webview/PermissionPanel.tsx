@@ -11,6 +11,13 @@ import type { PermissionData } from './types';
  * for asking, and the call's customer-visible parameters. The optional
  * feedback text rides along with either decision — on Deny it is returned
  * to the agent verbatim.
+ *
+ * When `permission.recovered` is set, the gated call was salvaged from a
+ * malformed (plain-text) tool call the model emitted instead of a proper tool
+ * call — Kōdo inferred the tool from the arguments and needs the user to
+ * confirm the guess before running it. A distinct banner flags that (only ever
+ * shown outside autonomous mode; the server auto-runs recovered calls when
+ * autonomous).
  */
 
 interface PermissionPanelProps {
@@ -32,6 +39,12 @@ export function PermissionPanel({ permission, onRespond }: PermissionPanelProps)
         <span style={styles.gateTitle}>Kōdo requests permission: {permission.externalName}</span>
         <span style={styles.permissionRiskBadge}>{permission.risk} impact</span>
       </div>
+      {permission.recovered && (
+        <div style={styles.permissionRecoveredBanner}>
+          ⚠ The agent produced a malformed tool call, which Kōdo recovered. The tool below was
+          inferred from its arguments — confirm it looks right before allowing it to run.
+        </div>
+      )}
       <div style={styles.permissionReason}>{permission.reason}</div>
       {permission.intent && (
         <div style={styles.permissionIntent}>

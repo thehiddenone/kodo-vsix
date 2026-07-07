@@ -263,6 +263,7 @@ export function App() {
             intent: String(msg.intent ?? ''),
             reason: String(msg.reason ?? ''),
             params,
+            recovered: msg.recovered === true,
           });
           break;
         }
