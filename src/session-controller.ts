@@ -546,6 +546,16 @@ export class SessionController {
         }
         break;
       }
+      case 'open_file_preview': {
+        const filePath = String(msg.path ?? '');
+        if (filePath) {
+          void vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(filePath)).then(
+            () => undefined,
+            (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`),
+          );
+        }
+        break;
+      }
       case 'open_diff': {
         const prevPath = String(msg.prevPath ?? '');
         const newPath = String(msg.newPath ?? '');
@@ -1310,7 +1320,15 @@ export class SessionController {
 
     if (env.kind === 'event' && evtType === 'error') {
       const message = String(env.payload.message ?? 'Unknown server error');
-      if (!Boolean(env.payload.recoverable ?? true)) {
+      const recoverable = Boolean(env.payload.recoverable ?? true);
+      // Anchor the failure in the feed as an error card (survives, tied to where
+      // it happened) AND raise a toast. Previously a recoverable error was
+      // dropped entirely — no toast, nothing in the feed — so an aborted turn
+      // (e.g. an LLM 404) failed completely silently.
+      this._post({ type: 'runtime_error', message, recoverable });
+      if (recoverable) {
+        void vscode.window.showWarningMessage(`Kōdo: ${message}`);
+      } else {
         void vscode.window.showErrorMessage(
           `Kōdo: an error occurred and the workflow cannot proceed — ${message}`,
         );

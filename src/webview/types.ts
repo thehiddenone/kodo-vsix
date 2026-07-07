@@ -200,7 +200,12 @@ export type SessionEntry =
   // Dropped into the feed when the user clicks Stop mid-turn. Display-only
   // marker (never sent to the LLM) — the actual cancellation already happened
   // server-side (see 'interrupted' action).
-  | { type: 'interrupted'; exclude_from_context: true };
+  | { type: 'interrupted'; exclude_from_context: true }
+  // A runtime error surfaced from the server (EVT_ERROR) — e.g. an LLM API
+  // failure that aborted the turn. Display-only; anchors the failure in the
+  // feed so it is never silent. Persisted as an "error" marker in
+  // session.jsonl and replayed via session_history on reload.
+  | { type: 'error_notice'; message: string; recoverable: boolean; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -360,4 +365,5 @@ export type Action =
   | { type: 'context_compacted'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number }
   | { type: 'session_history'; entries: Record<string, unknown>[] }
   | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] }
-  | { type: 'interrupted' };
+  | { type: 'interrupted' }
+  | { type: 'runtime_error'; message: string; recoverable: boolean };

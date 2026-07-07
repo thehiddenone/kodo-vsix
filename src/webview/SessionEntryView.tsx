@@ -22,7 +22,8 @@ function cropVisibleValue(value: string): string {
  * The clickable detail box shown beneath a tool-call one-liner. Renders the
  * customer-visible parameters as a two-column table (`always` in full,
  * `visible` cropped); clicking opens the persisted Markdown doc with the full
- * input and output.
+ * input and output as a rendered Markdown preview (never plain text, since
+ * this doc is read-only by nature).
  */
 function ToolCallDetail({ entry }: { entry: Extract<SessionEntry, { type: 'tool_call' }> }) {
   if (entry.rows.length === 0) {
@@ -31,7 +32,7 @@ function ToolCallDetail({ entry }: { entry: Extract<SessionEntry, { type: 'tool_
   const clickable = entry.detailFile !== null;
   const openDoc = () => {
     if (entry.detailFile !== null) {
-      vscode.postMessage({ type: 'open_file', path: entry.detailFile });
+      vscode.postMessage({ type: 'open_file_preview', path: entry.detailFile });
     }
   };
   return (
@@ -331,5 +332,11 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
       return (
         <Markdown content="<kodo_crit>Interrupted by user — this turn was stopped before it finished, so any in-progress response or tool call may be incomplete.</kodo_crit>" />
       );
+    case 'error_notice': {
+      const tail = entry.recoverable
+        ? ' You can adjust settings and try again.'
+        : ' The workflow cannot proceed.';
+      return <Markdown content={`<kodo_crit>Error — ${entry.message}${tail}</kodo_crit>`} />;
+    }
   }
 }

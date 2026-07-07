@@ -76,6 +76,9 @@ export function App() {
         case 'interrupted':
           dispatch({ type: 'interrupted' });
           break;
+        case 'runtime_error':
+          dispatch({ type: 'runtime_error', message: String(msg.message ?? 'Unknown server error'), recoverable: Boolean(msg.recoverable ?? true) });
+          break;
         case 'pong':
           dispatch({ type: 'pong' });
           break;

@@ -192,6 +192,11 @@ export function reducer(state: State, action: Action): State {
         thinkingStartedAt: null,
         streaming: false,
         llmWaiting: null,
+        // Clear the "Awaiting response" spinner too. It's normally cleared by the
+        // first token/thinking delta, but a turn that ends with zero output (e.g.
+        // an immediate LLM error) reaches stream_end with it still set — leaving
+        // the indicator spinning forever if we don't reset it here.
+        awaitingLlm: false,
       };
     case 'pong':
       return { ...state, lastPong: new Date().toLocaleTimeString() };
@@ -577,6 +582,16 @@ export function reducer(state: State, action: Action): State {
             tokensAfter: typeof e.tokensAfter === 'number' ? e.tokensAfter : 0,
             exclude_from_context: true,
           });
+        } else if (type === 'runtime_error') {
+          // Replay of the server's persisted "error" marker (see
+          // EngineEmitters.emit_error) — same card the live 'runtime_error'
+          // action renders, so a reload doesn't lose the failure notice.
+          entries.push({
+            type: 'error_notice',
+            message: String(e.message ?? ''),
+            recoverable: e.recoverable !== false,
+            exclude_from_context: true,
+          });
         }
       }
       // session.history is (re-)sent on every reconnect, including one where
@@ -608,6 +623,35 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         session: [...baseSession, { type: 'interrupted', exclude_from_context: true }],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        streaming: false,
+        awaitingLlm: false,
+        llmWaiting: null,
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
+        compacting: false,
+      };
+    }
+    case 'runtime_error': {
+      // A server-side runtime error (EVT_ERROR) aborted the turn. Mirror the
+      // 'interrupted' handling: commit any partial streaming text, mark a tool
+      // call still in flight as failed, silence every "waiting" indicator (so
+      // the "Awaiting response" spinner and progress bars stop), and anchor the
+      // failure in the feed as an error card so it is never silent.
+      const baseSession = commitStreaming(state).map((e) =>
+        e.type === 'tool_call' && e.success === null ? { ...e, success: false, startedAt: null } : e,
+      );
+      return {
+        ...state,
+        session: [
+          ...baseSession,
+          { type: 'error_notice', message: action.message, recoverable: action.recoverable, exclude_from_context: true },
+        ],
         streamingTokens: '',
         streamingThinking: '',
         thinkingActive: false,
