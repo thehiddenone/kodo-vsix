@@ -11,6 +11,8 @@ export interface CloudModelInfo {
   name: string;
   description: string;
   context_window: number;
+  /** One-line "when to pick this" blurb shown in Cloud AI Settings. */
+  recommendation: string;
 }
 
 export interface CloudVendorInfo {
@@ -39,10 +41,10 @@ export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
 export const EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'max'];
 
 export const EFFORT_LABELS: Record<EffortLevel, string> = {
-  low: 'Low effort',
-  medium: 'Medium effort',
-  high: 'High effort',
-  max: 'Max effort',
+  low: 'Low effort subagents for easy tasks',
+  medium: 'Medium effort subagents for everyday work',
+  high: 'High effort subagents for demanding tasks',
+  max: 'Max effort subagents for the hardest problems',
 };
 
 /** True for entry kinds the "Add local LLM" flows can add/remove (never `hardcoded_hf`). */

@@ -76,6 +76,24 @@ export async function getActiveKey(
   return context.secrets.get(vendorMap.active);
 }
 
+/** Store a new named key for *vendor* and mark it active. */
+export async function addKey(
+  context: vscode.ExtensionContext,
+  vendor: string,
+  name: string,
+  secret: string,
+): Promise<void> {
+  const uuid = crypto.randomUUID();
+  await context.secrets.store(uuid, secret.trim());
+
+  const settings = _readCloudSettings();
+  const vendorMap = _vendorMap(settings, vendor);
+  vendorMap.keys[name.trim()] = uuid;
+  vendorMap.active = uuid;
+  settings[vendor] = vendorMap;
+  _writeCloudSettings(settings);
+}
+
 /**
  * Prompt for a friendly name and the secret, store both, and mark the new key
  * active. Returns `true` on success, `false` if the user cancelled either
@@ -106,15 +124,7 @@ export async function addKeyInteractive(
     return false;
   }
 
-  const uuid = crypto.randomUUID();
-  await context.secrets.store(uuid, secret.trim());
-
-  const settings = _readCloudSettings();
-  const vendorMap = _vendorMap(settings, vendor);
-  vendorMap.keys[name.trim()] = uuid;
-  vendorMap.active = uuid;
-  settings[vendor] = vendorMap;
-  _writeCloudSettings(settings);
+  await addKey(context, vendor, name, secret);
   return true;
 }
 

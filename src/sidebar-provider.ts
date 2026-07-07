@@ -340,6 +340,7 @@ function buildHtml(): string {
       const actionBtn = document.createElement('button');
       actionBtn.id = 'restart-btn';
       actionBtn.textContent = btnText;
+      actionBtn.style.height = '35px';
       actionBtn.disabled = btnDisabled;
       if (btnType) {
         actionBtn.addEventListener('click', () => { vsc.postMessage({ type: btnType }); });
@@ -349,6 +350,7 @@ function buildHtml(): string {
       const settingsBtn = document.createElement('button');
       settingsBtn.id = 'settings-btn';
       settingsBtn.style.marginBottom = '8px';
+      settingsBtn.style.height = '35px';
       settingsBtn.textContent = '🔧 Local inference settings';
       settingsBtn.addEventListener('click', () => {
         vsc.postMessage({ type: 'open_local_inference_settings' });
@@ -419,6 +421,7 @@ function buildHtml(): string {
       const settingsBtn = document.createElement('button');
       settingsBtn.id = 'settings-btn';
       settingsBtn.style.marginBottom = '8px';
+      settingsBtn.style.height = '35px';
       settingsBtn.textContent = 'Cloud AI settings';
       settingsBtn.addEventListener('click', () => {
         vsc.postMessage({ type: 'open_cloud_ai_settings' });

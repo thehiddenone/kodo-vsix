@@ -1078,23 +1078,43 @@ function _readActiveCloudVendor(): string {
   return typeof value === 'string' && value ? value : _DEFAULT_CLOUD_VENDOR;
 }
 
-/** vendor -> effort -> model_id, mirrors settings.json's `models.cloud`. */
+/**
+ * Display-only fallback for vendors/efforts not yet present in
+ * ~/.kodo/etc/settings.json — mirrors the kodo server's own
+ * `_DEFAULT_USER_SETTINGS["models"]["cloud"]` (kodo/src/kodo/server/_config.py).
+ * The server is the sole writer of that file's defaults (`_ensure_user_settings`,
+ * run at server startup); this just keeps the webview's radios from rendering
+ * unselected in the window before that has happened, or before the user has
+ * changed anything for a given vendor. Never written to disk from here.
+ */
+const _DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
+  anthropic: {
+    low: 'claude-haiku-4-5-20251001',
+    medium: 'claude-sonnet-5',
+    high: 'claude-opus-4-8',
+    max: 'claude-fable-5',
+  },
+};
+
+/** vendor -> effort -> model_id, mirrors settings.json's `models.cloud`, filled in with defaults. */
 function _readCloudModels(): Record<string, Record<string, string>> {
+  const result: Record<string, Record<string, string>> = {};
+  for (const [vendor, defaults] of Object.entries(_DEFAULT_CLOUD_MODELS)) {
+    result[vendor] = { ...defaults };
+  }
   const models = _readSettings()['models'] as Record<string, unknown> | undefined;
   const cloud = models?.['cloud'];
-  if (!cloud || typeof cloud !== 'object') {
-    return {};
-  }
-  const result: Record<string, Record<string, string>> = {};
-  for (const [vendor, effortMap] of Object.entries(cloud as Record<string, unknown>)) {
-    if (effortMap && typeof effortMap === 'object') {
-      const clean: Record<string, string> = {};
-      for (const [effort, modelId] of Object.entries(effortMap as Record<string, unknown>)) {
-        if (typeof modelId === 'string') {
-          clean[effort] = modelId;
+  if (cloud && typeof cloud === 'object') {
+    for (const [vendor, effortMap] of Object.entries(cloud as Record<string, unknown>)) {
+      if (effortMap && typeof effortMap === 'object') {
+        const clean: Record<string, string> = { ...result[vendor] };
+        for (const [effort, modelId] of Object.entries(effortMap as Record<string, unknown>)) {
+          if (typeof modelId === 'string') {
+            clean[effort] = modelId;
+          }
         }
+        result[vendor] = clean;
       }
-      result[vendor] = clean;
     }
   }
   return result;
@@ -1218,11 +1238,40 @@ function _openCloudAiSettings(): void {
 
 async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessage): Promise<void> {
   if (msg.type === 'add_huggingface') {
-    await _addLocalLlmHuggingface();
+    _sendControl(
+      makeRequest('local_llm.add_huggingface', {
+        name: msg.name,
+        description: msg.description,
+        repo_id: msg.repo_id,
+        filename: msg.filename,
+        llama_args: msg.llama_args,
+        context_window: msg.context_window,
+      }),
+    );
   } else if (msg.type === 'add_file') {
-    await _addLocalLlmFile();
+    // A file the user just picked from disk exists by construction — mark it
+    // installed immediately rather than waiting for the next extension
+    // restart's startup-time check (see doc/LLM_REGISTRY.md §4).
+    _customFileInstalledCache.set(msg.name, true);
+    _sendControl(
+      makeRequest('local_llm.add_file', {
+        name: msg.name,
+        description: msg.description,
+        path: msg.path,
+        llama_args: msg.llama_args,
+        context_window: msg.context_window,
+      }),
+    );
   } else if (msg.type === 'add_server_url') {
-    await _addLocalLlmServerUrl();
+    _sendControl(
+      makeRequest('local_llm.add_server_url', {
+        name: msg.name,
+        description: msg.description,
+        url: msg.url,
+      }),
+    );
+  } else if (msg.type === 'pick_gguf_file') {
+    await _pickGgufFile();
   } else if (msg.type === 'install') {
     _installLocalLlm(msg.name);
   } else if (msg.type === 'uninstall') {
@@ -1241,7 +1290,7 @@ async function _onCloudAiSettingsMessage(msg: CloudAiSettingsMessage): Promise<v
     _setCloudModel(msg.vendor, msg.effort, msg.model_id);
   } else if (msg.type === 'add_key') {
     if (!extensionContext) { return; }
-    await cloudCredentials.addKeyInteractive(extensionContext, msg.vendor);
+    await cloudCredentials.addKey(extensionContext, msg.vendor, msg.name, msg.secret);
     _pushCloudAiSettingsState();
   } else if (msg.type === 'forget_key') {
     const confirm = await vscode.window.showWarningMessage(
@@ -1259,97 +1308,13 @@ async function _onCloudAiSettingsMessage(msg: CloudAiSettingsMessage): Promise<v
   }
 }
 
-async function _addLocalLlmHuggingface(): Promise<void> {
-  const name = await vscode.window.showInputBox({
-    title: 'Kōdo: Add local LLM from huggingface.com',
-    prompt: 'Name this model',
-    ignoreFocusOut: true,
-  });
-  if (!name?.trim()) { return; }
-  const repoId = await vscode.window.showInputBox({
-    title: 'Kōdo: Add local LLM from huggingface.com',
-    prompt: 'HuggingFace repository ID (e.g. "unsloth/Qwen3.6-27B-MTP-GGUF")',
-    ignoreFocusOut: true,
-  });
-  if (!repoId?.trim()) { return; }
-  const filename = await vscode.window.showInputBox({
-    title: 'Kōdo: Add local LLM from huggingface.com',
-    prompt: 'GGUF filename inside that repository',
-    ignoreFocusOut: true,
-  });
-  if (!filename?.trim()) { return; }
-  const description = await vscode.window.showInputBox({
-    title: 'Kōdo: Add local LLM from huggingface.com',
-    prompt: 'Description (optional)',
-    ignoreFocusOut: true,
-  });
-  _sendControl(
-    makeRequest('local_llm.add_huggingface', {
-      name: name.trim(),
-      repo_id: repoId.trim(),
-      filename: filename.trim(),
-      description: description?.trim() ?? '',
-    }),
-  );
-}
-
-async function _addLocalLlmFile(): Promise<void> {
+async function _pickGgufFile(): Promise<void> {
   const picked = await vscode.window.showOpenDialog({
-    title: 'Kōdo: Add local LLM from file',
+    title: 'Kōdo: Select a GGUF file',
     canSelectMany: false,
     filters: { 'GGUF model': ['gguf'] },
   });
-  const filePath = picked?.[0]?.fsPath;
-  if (!filePath) { return; }
-  const name = await vscode.window.showInputBox({
-    title: 'Kōdo: Add local LLM from file',
-    prompt: 'Name this model',
-    ignoreFocusOut: true,
-  });
-  if (!name?.trim()) { return; }
-  const description = await vscode.window.showInputBox({
-    title: 'Kōdo: Add local LLM from file',
-    prompt: 'Description (optional)',
-    ignoreFocusOut: true,
-  });
-  // A file the user just picked from disk exists by construction — mark it
-  // installed immediately rather than waiting for the next extension
-  // restart's startup-time check (see doc/LLM_REGISTRY.md §4).
-  _customFileInstalledCache.set(name.trim(), true);
-  _sendControl(
-    makeRequest('local_llm.add_file', {
-      name: name.trim(),
-      path: filePath,
-      description: description?.trim() ?? '',
-    }),
-  );
-}
-
-async function _addLocalLlmServerUrl(): Promise<void> {
-  const name = await vscode.window.showInputBox({
-    title: 'Kōdo: Add a link to local llama-server',
-    prompt: 'Name this model',
-    ignoreFocusOut: true,
-  });
-  if (!name?.trim()) { return; }
-  const url = await vscode.window.showInputBox({
-    title: 'Kōdo: Add a link to local llama-server',
-    prompt: 'Base URL of the running llama-server (e.g. "http://192.168.1.50:8042")',
-    ignoreFocusOut: true,
-  });
-  if (!url?.trim()) { return; }
-  const description = await vscode.window.showInputBox({
-    title: 'Kōdo: Add a link to local llama-server',
-    prompt: 'Description (optional)',
-    ignoreFocusOut: true,
-  });
-  _sendControl(
-    makeRequest('local_llm.add_server_url', {
-      name: name.trim(),
-      url: url.trim(),
-      description: description?.trim() ?? '',
-    }),
-  );
+  LocalInferenceSettingsPanel.instance?.postGgufFilePicked(picked?.[0]?.fsPath ?? null);
 }
 
 async function _setLlamaServerOverride(): Promise<void> {
