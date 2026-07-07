@@ -198,9 +198,6 @@ function openablePath(entry: Extract<SessionEntry, { type: 'tool_call' }>): stri
   }
   if (entry.toolName === 'filesystem') {
     const operation = entry.rows.find((r) => r.name === 'operation')?.value;
-    if (operation === 'create_file') {
-      return outputRow('path');
-    }
     if (operation === 'copy_file' || operation === 'move_file') {
       return outputRow('destination');
     }
