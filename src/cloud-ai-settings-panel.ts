@@ -218,7 +218,7 @@ function buildHtml(): string {
     #no-keys-msg { color: var(--vscode-descriptionForeground); font-size: 0.9em; padding: 6px 0; }
     .coming-soon {
       max-width: 480px;
-      padding: 24px 0;
+      padding: 0px 0;
     }
     .coming-soon .icon { font-size: 2.4em; margin-bottom: 6px; }
     .coming-soon h2 { margin-bottom: 6px; }
@@ -332,20 +332,25 @@ function buildHtml(): string {
     };
 
     const VENDOR_NAV = [
-      { key: 'anthropic', label: 'Anthropic' },
-      { key: 'openai', label: 'OpenAI' },
-      { key: 'meta', label: 'Meta' },
-      { key: 'deepseek', label: 'DeepSeek' },
-      { key: 'kimi', label: 'Kimi' },
-      { key: 'openrouter', label: 'OpenRouter' },
+      { key: 'anthropic', label: '⚛️ Anthropic' },
+      { key: 'openai', label: '🧠 OpenAI' },
+      { key: 'google', label: '✨ Google' },
+      { key: 'meta', label: '🦙 Meta' },
+      { key: 'alibaba', label: '🧞 Alibaba' },
+      { key: 'deepseek', label: '🐋 DeepSeek' },
+      { key: 'kimi', label: '🌙 Kimi' },
+      { key: 'openrouter', label: '🔀 OpenRouter' },
     ];
 
-    const COMING_SOON = {
-      openai: { icon: '🧠', text: "GPT models are being wired up next. Once ready, you'll be able to add OpenAI API keys and assign GPT models to each effort level right here." },
-      meta: { icon: '🦙', text: "Llama model support is on the way. This page will let you manage Meta API access and pick a Llama model per effort level." },
-      deepseek: { icon: '🌊', text: "DeepSeek's reasoning models are being integrated. Check back soon to configure DeepSeek access and effort-level assignments." },
-      kimi: { icon: '🌙', text: "Kimi support is in the pipeline. Soon you'll be able to bring your own Kimi API key and route work to its models here." },
-      openrouter: { icon: '🔀', text: "OpenRouter will let you tap into many vendors through a single key. We're building the plumbing — this page will host that configuration." },
+    const LLM_VENDORS = {
+      anthropic: { icon: '⚛️', coming_soon_text: "" },
+      openai: { icon: '🧠', coming_soon_text: "GPT models are being wired up next. Once ready, you'll be able to add OpenAI API keys and assign GPT models to each effort level right here." },
+      google: { icon: '✨', coming_soon_text: "Gemini is next on the roadmap. When it ships, a Google API key here will route each effort level straight to a Gemini model." },
+      meta: { icon: '🦙', coming_soon_text: "Llama model support is on the way. This page will let you manage Meta API access and pick a Llama model per effort level." },
+      alibaba: { icon: '🧞', coming_soon_text: "Qwen support is queued up behind the scenes. Drop in an Alibaba API key once it lands, and pick a Qwen model for each effort level." },
+      deepseek: { icon: '🐋', coming_soon_text: "DeepSeek's reasoning models are being integrated. Check back soon to configure DeepSeek access and effort-level assignments." },
+      kimi: { icon: '🌙', coming_soon_text: "Kimi support is in the pipeline. Soon you'll be able to bring your own Kimi API key and route work to its models here." },
+      openrouter: { icon: '🔀', coming_soon_text: "OpenRouter will let you tap into many vendors through a single key. We're building the plumbing — this page will host that configuration." },
     };
 
     let _state = { cloudRegistry: {}, modelsByVendor: {}, keysByVendor: {} };
@@ -490,7 +495,8 @@ function buildHtml(): string {
       const wrap = document.createElement('div');
 
       const heading = document.createElement('h2');
-      heading.textContent = info.display_name + ' LLMs';
+      const icon = LLM_VENDORS['anthropic'].icon;
+      heading.textContent = icon + ' ' + info.display_name + ' LLMs';
       wrap.appendChild(heading);
 
       const intro = document.createElement('p');
@@ -511,19 +517,19 @@ function buildHtml(): string {
       const wrap = document.createElement('div');
       wrap.className = 'coming-soon';
 
-      const info = COMING_SOON[vendorKey] || { icon: '✨', text: 'Support for this vendor is on the way.' };
+      const info = LLM_VENDORS[vendorKey] || { icon: '🧩', coming_soon_text: 'Support for this vendor is on the way.' };
 
-      const icon = document.createElement('div');
-      icon.className = 'icon';
-      icon.textContent = info.icon;
-      wrap.appendChild(icon);
+      // const icon = document.createElement('div');
+      // icon.className = 'icon';
+      // icon.textContent = info.icon;
+      // wrap.appendChild(icon);
 
       const heading = document.createElement('h2');
       heading.textContent = label;
       wrap.appendChild(heading);
 
       const text = document.createElement('p');
-      text.textContent = info.text;
+      text.textContent = info.coming_soon_text;
       wrap.appendChild(text);
 
       const badge = document.createElement('span');

@@ -34,6 +34,38 @@ export interface LocalRegistryEntry {
   path: string;
   url: string;
   installed: boolean;
+  /** Absolute path to the installed file(s) on disk, or `null` if not installed. */
+  installed_path: string | null;
+  /** Original (unquantized) model slug, e.g. "qwen36-27b". `hardcoded_hf` only — "" otherwise. */
+  base_llm: string;
+  /** Team/person who produced the quant, e.g. "Unsloth". `hardcoded_hf` only — "" otherwise. */
+  quant_author: string;
+  /** Quant spec, e.g. "UD_Q4_K_XL". `hardcoded_hf` only — "" otherwise. */
+  quant_type: string;
+  /** Human-readable GGUF size, e.g. "28.6 GB". `hardcoded_hf` only — "" otherwise. */
+  size_hint: string;
+  /** Discrete-GPU hardware recommendation. `hardcoded_hf` only — "" otherwise. */
+  gpu_tip: string;
+  /** MacBook Pro (Apple Silicon) hardware recommendation. `hardcoded_hf` only — "" otherwise. */
+  mac_tip: string;
+  /** Absolute minimum VRAM (GB) to load at all; 0 = no known minimum. */
+  min_memory: number;
+  /** Recommended VRAM (GB) for large contexts; 0 = no known recommendation. */
+  memory: number;
+}
+
+export type DownloadStatus = 'downloading' | 'paused' | 'failed';
+
+/** One entry's live download state, read by kodo-vsix straight off
+ * `manager-state.json` (see kodo/doc/LOCAL_MODEL_MANAGER.md §11) — never
+ * pushed over the WS wire. Keyed by registry entry name (== model_id). */
+export interface LocalDownloadState {
+  name: string;
+  repo_id: string;
+  status: DownloadStatus;
+  bytes_downloaded: number;
+  bytes_total: number | null;
+  error: string;
 }
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max';

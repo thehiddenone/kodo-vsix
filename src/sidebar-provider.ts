@@ -18,6 +18,7 @@ export interface SidebarState {
   llamaRunningModel: string;
   llamaStarting: boolean;
   llamaStopping: boolean;
+  detectedVramGb: number | null;
 }
 
 export type SidebarMessage =
@@ -219,6 +220,42 @@ function buildHtml(): string {
       padding: 16px 4px;
       line-height: 1.5;
     }
+    .cloud-disclaimer {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      background: var(--vscode-inputValidation-warningBackground, #5f3d00);
+      border: 1px solid var(--vscode-inputValidation-warningBorder, #cca700);
+      color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+      border-radius: 3px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      font-size: 0.85em;
+      line-height: 1.45;
+    }
+    .cloud-disclaimer .icon {
+      flex-shrink: 0;
+      font-size: 1.1em;
+    }
+    .cloud-disclaimer ul {
+      margin: 4px 0 0;
+      padding-left: 16px;
+    }
+    .cloud-disclaimer li { margin-bottom: 2px; }
+    .provider-heading {
+      font-size: 0.85em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      color: var(--vscode-descriptionForeground);
+      margin: 2px 0 8px;
+    }
+    .card.disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .card.disabled .card-name { cursor: default; }
+    .card.disabled label { cursor: default; }
   </style>
 </head>
 <body>
@@ -417,7 +454,41 @@ function buildHtml(): string {
     // ----------------------------------------------------------------
     // Cloud mode: vendor list + "Cloud AI settings"
     // ----------------------------------------------------------------
+    const DISABLED_VENDORS = ['OpenAI', 'Google', 'Meta', 'Alibaba', 'DeepSeek', 'Kimi', 'OpenRouter'];
+
+    function renderCloudDisclaimer(section) {
+      const banner = document.createElement('div');
+      banner.className = 'cloud-disclaimer';
+
+      const icon = document.createElement('span');
+      icon.className = 'icon';
+      icon.textContent = '⚠️';
+      banner.appendChild(icon);
+
+      const textWrap = document.createElement('div');
+      const strong = document.createElement('strong');
+      strong.textContent = 'Heads up before you switch to cloud AI:';
+      textWrap.appendChild(strong);
+
+      const list = document.createElement('ul');
+      [
+        "Kōdo's prompts were not optimized for cloud-hosted LLMs.",
+        'Kōdo may drain an excessive amount of tokens while working on your prompts.',
+        "Kōdo hasn't been tested with cloud-hosted LLMs as thoroughly as it has with local LLMs.",
+      ].forEach(text => {
+        const li = document.createElement('li');
+        li.textContent = text;
+        list.appendChild(li);
+      });
+      textWrap.appendChild(list);
+      banner.appendChild(textWrap);
+
+      section.appendChild(banner);
+    }
+
     function renderCloudControls(section) {
+      renderCloudDisclaimer(section);
+
       const settingsBtn = document.createElement('button');
       settingsBtn.id = 'settings-btn';
       settingsBtn.style.marginBottom = '8px';
@@ -428,14 +499,15 @@ function buildHtml(): string {
       });
       section.appendChild(settingsBtn);
 
+      const hr = document.createElement('hr');
+      section.appendChild(hr);
+
+      const heading = document.createElement('div');
+      heading.className = 'provider-heading';
+      heading.textContent = 'Select LLM provider';
+      section.appendChild(heading);
+
       const vendors = Object.keys(_state.cloudRegistry);
-      if (vendors.length === 0) {
-        const msg = document.createElement('div');
-        msg.id = 'empty-msg';
-        msg.textContent = 'No cloud vendors configured.';
-        section.appendChild(msg);
-        return;
-      }
 
       vendors.forEach(vendor => {
         const info = _state.cloudRegistry[vendor];
@@ -462,6 +534,28 @@ function buildHtml(): string {
         const nameEl = document.createElement('span');
         nameEl.className = 'card-name';
         nameEl.textContent = info.display_name;
+        header.appendChild(nameEl);
+
+        card.appendChild(header);
+        section.appendChild(card);
+      });
+
+      DISABLED_VENDORS.forEach(label => {
+        const card = document.createElement('div');
+        card.className = 'card disabled';
+
+        const header = document.createElement('div');
+        header.className = 'card-header';
+
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'active-vendor';
+        radio.disabled = true;
+        header.appendChild(radio);
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'card-name';
+        nameEl.textContent = label;
         header.appendChild(nameEl);
 
         card.appendChild(header);

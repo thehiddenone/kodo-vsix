@@ -29,7 +29,8 @@ import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
-import type { CloudRegistry, EffortLevel, LocalRegistryEntry } from './llm-registry-types';
+import type { CloudRegistry, EffortLevel, LocalDownloadState, LocalRegistryEntry } from './llm-registry-types';
+import { startLocalDownloadPolling } from './local-model-downloads';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
@@ -95,7 +96,11 @@ let llamaStartingState = false;
 let llamaStoppingState = false;
 let llamaServerOverridePathState: string | null = null;
 let _llamaStartProgressResolve: (() => void) | null = null;
-let installingLocalLlmsState: string[] = [];
+let detectedVramGbState: number | null = null;
+// Live download progress, read off manager-state.json on disk rather than
+// pushed over the WS wire (see local-model-downloads.ts and
+// doc/LOCAL_MODEL_MANAGER.md §11) — keyed by registry entry name.
+let localDownloadsState: LocalDownloadState[] = [];
 
 // custom_file entries' installed state is resolved ONCE per entry, the first
 // time this window's extension host sees that entry (activation for entries
@@ -213,6 +218,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   windowId = _stableWindowId(context);
 
+  // Window-global, independent of the WS connection/session model — polls
+  // manager-state.json directly off disk (see local-model-downloads.ts) so a
+  // download started before this window opened, or left running after a
+  // previous window closed, shows up correctly as soon as this one starts.
+  const _downloadPolling = startLocalDownloadPolling((states) => {
+    localDownloadsState = Array.from(states.values());
+    _pushLocalInferenceSettingsState();
+  });
+  context.subscriptions.push({ dispose: () => _downloadPolling.dispose() });
+
   if (hasWorkspace) {
     const port = readServerDiscovery()?.port ?? DEFAULT_PORT;
     wsUrl = `ws://127.0.0.1:${port}/ws`;
@@ -278,6 +293,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaRunningModel: llamaRunningModelState,
       llamaStarting: llamaStartingState,
       llamaStopping: llamaStoppingState,
+      detectedVramGb: detectedVramGbState,
     },
     (msg) => {
       if (msg.type === 'list_sessions') {
@@ -914,6 +930,8 @@ function handleControlEnvelope(env: Envelope): void {
     llamaRunningState = Boolean(env.payload.llama_running);
     llamaRunningModelState =
       llamaRunningState && typeof env.payload.llama_model === 'string' ? env.payload.llama_model : '';
+    detectedVramGbState =
+      typeof env.payload.detected_vram_gb === 'number' ? env.payload.detected_vram_gb : null;
     sidebarProvider?.update({
       cloudRegistry: cloudRegistryState,
       activeCloudVendor: activeCloudVendorState,
@@ -923,6 +941,7 @@ function handleControlEnvelope(env: Envelope): void {
       llamaVersion: llamaVersionState,
       llamaRunning: llamaRunningState,
       llamaRunningModel: llamaRunningModelState,
+      detectedVramGb: detectedVramGbState,
     });
     _pushLocalInferenceSettingsState();
     _pushCloudAiSettingsState();
@@ -935,15 +954,6 @@ function handleControlEnvelope(env: Envelope): void {
 
   if (env.kind === 'event' && evtType === 'llama.state') {
     _applyLlamaState(env.payload);
-    return;
-  }
-
-  if (env.kind === 'event' && evtType === 'local_llm.install.progress') {
-    _onLocalLlmInstallProgress(
-      String(env.payload.name ?? ''),
-      Number(env.payload.percent ?? 0),
-      String(env.payload.message ?? ''),
-    );
     return;
   }
 
@@ -1191,13 +1201,13 @@ function _startLlamaCpp(): void {
     .then(undefined, () => undefined);
 }
 
-const _modelProgressResolvers = new Map<string, () => void>();
-
 function _pushLocalInferenceSettingsState(): void {
   LocalInferenceSettingsPanel.instance?.update({
     localRegistry: localRegistryState,
     llamaServerOverridePath: llamaServerOverridePathState,
-    installingModels: installingLocalLlmsState,
+    detectedVramGb: detectedVramGbState,
+    downloads: localDownloadsState,
+    isMac: process.platform === 'darwin',
   });
 }
 
@@ -1218,7 +1228,9 @@ function _openLocalInferenceSettings(): void {
     {
       localRegistry: localRegistryState,
       llamaServerOverridePath: llamaServerOverridePathState,
-      installingModels: installingLocalLlmsState,
+      detectedVramGb: detectedVramGbState,
+      downloads: localDownloadsState,
+      isMac: process.platform === 'darwin',
     },
     (msg: LocalInferenceSettingsMessage) => void _onLocalInferenceSettingsMessage(msg),
   );
@@ -1273,11 +1285,21 @@ async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessa
   } else if (msg.type === 'pick_gguf_file') {
     await _pickGgufFile();
   } else if (msg.type === 'install') {
-    _installLocalLlm(msg.name);
+    _sendControl(makeRequest('local_llm.install', { name: msg.name }));
+  } else if (msg.type === 'resume') {
+    _sendControl(makeRequest('local_llm.resume', { name: msg.name }));
+  } else if (msg.type === 'pause') {
+    _sendControl(makeRequest('local_llm.pause', { name: msg.name }));
+  } else if (msg.type === 'cancel') {
+    // A download-in-progress has no registry-removal step — cancelling it is
+    // exactly "free the partial GGUF", same as uninstalling a finished one.
+    _sendControl(makeRequest('local_llm.uninstall', { name: msg.name }));
   } else if (msg.type === 'uninstall') {
     _sendControl(makeRequest('local_llm.uninstall', { name: msg.name }));
   } else if (msg.type === 'remove') {
     _sendControl(makeRequest('local_llm.remove', { name: msg.name }));
+  } else if (msg.type === 'reveal') {
+    _revealLocalLlmFiles(msg.name);
   } else if (msg.type === 'set_override') {
     await _setLlamaServerOverride();
   } else if (msg.type === 'remove_override') {
@@ -1327,36 +1349,13 @@ async function _setLlamaServerOverride(): Promise<void> {
   _sendControl(makeRequest('llama_server_override.set', { path: filePath }));
 }
 
-function _installLocalLlm(name: string): void {
-  if (installingLocalLlmsState.includes(name)) { return; }
-  installingLocalLlmsState = [...installingLocalLlmsState, name];
-  _pushLocalInferenceSettingsState();
-  _sendControl(makeRequest('local_llm.install', { name }));
-
-  vscode.window
-    .withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Downloading ${name}…`, cancellable: false },
-      () => new Promise<void>((resolve) => { _modelProgressResolvers.set(name, resolve); }),
-    )
-    .then(undefined, () => undefined);
-}
-
-function _onLocalLlmInstallProgress(name: string, pct: number, msg: string): void {
-  if (pct === 100) {
-    installingLocalLlmsState = installingLocalLlmsState.filter((n) => n !== name);
-    _pushLocalInferenceSettingsState();
-    setTimeout(() => {
-      _modelProgressResolvers.get(name)?.();
-      _modelProgressResolvers.delete(name);
-      vscode.window.showInformationMessage(`Kōdo: ${name} downloaded and ready.`);
-    }, 1000);
-  } else if (pct < 0) {
-    installingLocalLlmsState = installingLocalLlmsState.filter((n) => n !== name);
-    _pushLocalInferenceSettingsState();
-    _modelProgressResolvers.get(name)?.();
-    _modelProgressResolvers.delete(name);
-    vscode.window.showErrorMessage(`Kōdo: model installation failed — ${msg}`);
-  }
+/** "Show me local files" — reveal the installed model's file in Finder/Explorer/etc.
+ * `installed_path` comes straight from the server's registry payload (resolved via
+ * LocalModelManager/entry.path — see doc/LLM_REGISTRY.md §4), no extra WS round trip. */
+function _revealLocalLlmFiles(name: string): void {
+  const entry = localRegistryState.find((e) => e.name === name);
+  if (!entry?.installed_path) { return; }
+  void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(entry.installed_path));
 }
 
 function _onLocalLlmRegistryState(payload: Record<string, unknown>): void {
