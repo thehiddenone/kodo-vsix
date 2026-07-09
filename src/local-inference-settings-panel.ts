@@ -962,7 +962,14 @@ function buildHtml(): string {
         } else {
           const installBtn = document.createElement('button');
           installBtn.textContent = 'Download and Install';
-          installBtn.addEventListener('click', () => vsc.postMessage({ type: 'install', name: entry.name }));
+          installBtn.addEventListener('click', () => {
+            // Immediate feedback only — the next 'update' (kickoff reply, disk-poll
+            // tick, or an error event's registry_state) always re-renders this button
+            // from scratch, so a silent early failure just gets a normal one back.
+            installBtn.disabled = true;
+            installBtn.textContent = 'Starting download…';
+            vsc.postMessage({ type: 'install', name: entry.name });
+          });
           buttons.appendChild(installBtn);
         }
       }

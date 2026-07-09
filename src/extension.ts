@@ -222,8 +222,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // manager-state.json directly off disk (see local-model-downloads.ts) so a
   // download started before this window opened, or left running after a
   // previous window closed, shows up correctly as soon as this one starts.
+  //
+  // Every open window runs this same poller independently, which is also
+  // what makes it the right place to notice a download *finishing*: the
+  // server's local_llm.registry_state push on completion (_run_background_
+  // download in kodo/server/_app.py) is fire-and-forget to the one
+  // connection that kicked the download off, and silently no-ops forever if
+  // that connection reconnects at any point during a multi-minute transfer
+  // (sleep, idle timeout, network blip) — and it never reaches any *other*
+  // window's connection at all. Re-sending `hello` here re-syncs
+  // localRegistryState (installed/installed_path) — and both the sidebar and
+  // the settings panel with it — from every window, the moment each one's
+  // own poll notices the model file disappear from the "in progress" set.
   const _downloadPolling = startLocalDownloadPolling((states) => {
+    const previouslyTracked = new Set(localDownloadsState.map((d) => d.name));
     localDownloadsState = Array.from(states.values());
+    const stillTracked = new Set(localDownloadsState.map((d) => d.name));
+    const noLongerTracked = [...previouslyTracked].some((name) => !stillTracked.has(name));
+    if (noLongerTracked) {
+      sendControlHello();
+    }
     _pushLocalInferenceSettingsState();
   });
   context.subscriptions.push({ dispose: () => _downloadPolling.dispose() });
