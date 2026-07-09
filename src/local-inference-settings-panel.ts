@@ -317,8 +317,13 @@ function buildHtml(): string {
     .progress-track {
       height: 6px;
       border-radius: 3px;
-      background: var(--vscode-progressBar-background, #333);
-      opacity: 0.35;
+      /* Deliberately NOT var(--vscode-progressBar-background) and NOT the
+         opacity property: opacity on this element would also dim
+         .progress-fill (its child), and re-using the same color the fill
+         uses would make the two indistinguishable regardless — either one
+         alone was enough to make the bar look permanently empty. */
+      background: var(--vscode-input-background, rgba(128, 128, 128, 0.25));
+      border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
       overflow: hidden;
       margin-bottom: 4px;
     }
@@ -440,6 +445,15 @@ function buildHtml(): string {
 
     <section class="group" id="downloads-section"></section>
 
+    <section class="group" id="installed-section"></section>
+
+    <section class="group">
+      <h2>Available local LLM quants</h2>
+      <p class="explain">
+        Browse the quants below and click "Download and Install" to fetch one — once it
+        finishes, it shows up above under Installed and is ready to use.
+      </p>
+    </section>
     <section class="group" id="cards"></section>
   </div>
 
@@ -755,6 +769,7 @@ function buildHtml(): string {
     const DOWNLOADABLE = new Set(['hardcoded_hf', 'custom_hf']);
     const CUSTOM = new Set(['custom_hf', 'custom_file', 'custom_server_url']);
     const _expandedGroups = new Set();
+    let _installedExpanded = false;
 
     function formatBytes(n) {
       if (n == null) { return ''; }
@@ -1035,6 +1050,52 @@ function buildHtml(): string {
       });
     }
 
+    function renderInstalled() {
+      const section = document.getElementById('installed-section');
+      section.innerHTML = '';
+
+      const installed = _state.localRegistry.filter(e => e.installed);
+
+      const group = document.createElement('div');
+      group.className = 'base-llm-group';
+
+      const header = document.createElement('div');
+      header.className = 'group-header' + (_installedExpanded ? ' expanded' : '');
+      const chevron = document.createElement('span');
+      chevron.className = 'chevron';
+      chevron.textContent = '▶';
+      header.appendChild(chevron);
+      const title = document.createElement('span');
+      title.className = 'group-title';
+      title.textContent = 'Installed';
+      header.appendChild(title);
+      const count = document.createElement('span');
+      count.className = 'group-count';
+      count.textContent = '(' + installed.length + ')';
+      header.appendChild(count);
+      header.addEventListener('click', () => {
+        _installedExpanded = !_installedExpanded;
+        renderInstalled();
+      });
+      group.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'group-body' + (_installedExpanded ? ' expanded' : '');
+      if (installed.length === 0) {
+        const msg = document.createElement('div');
+        msg.id = 'empty-msg';
+        msg.textContent = 'Nothing installed yet — download one of the quants below.';
+        body.appendChild(msg);
+      } else {
+        const downloadingNames = new Set((_state.downloads || []).map(d => d.name));
+        installed.forEach(entry => body.appendChild(renderModelCard(entry, downloadingNames)));
+      }
+      group.appendChild(body);
+
+      section.appendChild(group);
+      section.appendChild(document.createElement('hr')).className = 'divider';
+    }
+
     function render() {
       const overrideEl = document.getElementById('override-path');
       overrideEl.textContent = _state.llamaServerOverridePath
@@ -1043,6 +1104,7 @@ function buildHtml(): string {
       document.getElementById('remove-override').disabled = !_state.llamaServerOverridePath;
 
       renderDownloads();
+      renderInstalled();
       renderCards();
     }
 
