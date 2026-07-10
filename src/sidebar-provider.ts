@@ -19,6 +19,7 @@ export interface SidebarState {
   llamaStarting: boolean;
   llamaStopping: boolean;
   detectedVramGb: number | null;
+  detectedRamGb: number | null;
 }
 
 export type SidebarMessage =

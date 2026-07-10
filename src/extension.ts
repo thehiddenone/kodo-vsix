@@ -97,6 +97,7 @@ let llamaStoppingState = false;
 let llamaServerOverridePathState: string | null = null;
 let _llamaStartProgressResolve: (() => void) | null = null;
 let detectedVramGbState: number | null = null;
+let detectedRamGbState: number | null = null;
 // Live download progress, read off manager-state.json on disk rather than
 // pushed over the WS wire (see local-model-downloads.ts and
 // doc/LOCAL_MODEL_MANAGER.md §11) — keyed by registry entry name.
@@ -312,6 +313,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaStarting: llamaStartingState,
       llamaStopping: llamaStoppingState,
       detectedVramGb: detectedVramGbState,
+      detectedRamGb: detectedRamGbState,
     },
     (msg) => {
       if (msg.type === 'list_sessions') {
@@ -950,6 +952,8 @@ function handleControlEnvelope(env: Envelope): void {
       llamaRunningState && typeof env.payload.llama_model === 'string' ? env.payload.llama_model : '';
     detectedVramGbState =
       typeof env.payload.detected_vram_gb === 'number' ? env.payload.detected_vram_gb : null;
+    detectedRamGbState =
+      typeof env.payload.detected_ram_gb === 'number' ? env.payload.detected_ram_gb : null;
     sidebarProvider?.update({
       cloudRegistry: cloudRegistryState,
       activeCloudVendor: activeCloudVendorState,
@@ -960,6 +964,7 @@ function handleControlEnvelope(env: Envelope): void {
       llamaRunning: llamaRunningState,
       llamaRunningModel: llamaRunningModelState,
       detectedVramGb: detectedVramGbState,
+      detectedRamGb: detectedRamGbState,
     });
     _pushLocalInferenceSettingsState();
     _pushCloudAiSettingsState();
@@ -1224,6 +1229,7 @@ function _pushLocalInferenceSettingsState(): void {
     localRegistry: localRegistryState,
     llamaServerOverridePath: llamaServerOverridePathState,
     detectedVramGb: detectedVramGbState,
+    detectedRamGb: detectedRamGbState,
     downloads: localDownloadsState,
     isMac: process.platform === 'darwin',
   });
@@ -1247,6 +1253,7 @@ function _openLocalInferenceSettings(): void {
       localRegistry: localRegistryState,
       llamaServerOverridePath: llamaServerOverridePathState,
       detectedVramGb: detectedVramGbState,
+      detectedRamGb: detectedRamGbState,
       downloads: localDownloadsState,
       isMac: process.platform === 'darwin',
     },

@@ -5,6 +5,7 @@ export interface LocalInferenceSettingsState {
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
   detectedVramGb: number | null;
+  detectedRamGb: number | null;
   /** Live download progress, polled off disk — see local-model-downloads.ts. */
   downloads: LocalDownloadState[];
   /** Picks gpu_tip vs mac_tip and the "Show me local files" label. */
@@ -566,6 +567,7 @@ function buildHtml(): string {
       llamaServerOverridePath: null,
       downloads: [],
       detectedVramGb: null,
+      detectedRamGb: null,
       isMac: false,
     };
 
@@ -782,22 +784,27 @@ function buildHtml(): string {
     // already covers every case the yellow check would (vram >= min == memory
     // implies vram >= memory), so only red can ever fire — no special-casing
     // needed. A 0 value means "unknown — don't warn" for that threshold.
-    function ramWarning(entry, vram) {
-      if (vram == null) { return null; }
+    // vram/ram are summed into one "total memory available for a
+    // GPU+CPU-offloaded model" figure — on macOS ram is always null (vram
+    // already reports the full unified-memory pool), so the sum degrades to
+    // vram alone there. See doc/LLM_REGISTRY.md §4.4 in the kodo repo.
+    function ramWarning(entry, vram, ram) {
+      if (vram == null && ram == null) { return null; }
+      const total = (vram || 0) + (ram || 0);
       const min = entry.min_memory || 0;
       const rec = entry.memory || 0;
-      if (min > 0 && vram < min) {
+      if (min > 0 && total < min) {
         return {
           level: 'red',
           text: '⛔ This LLM will likely not run on this machine — it needs at least ' +
-            min + ' GB, but only ' + vram + ' GB was detected.',
+            min + ' GB of combined VRAM + RAM, but only ' + total + ' GB was detected.',
         };
       }
-      if (rec > 0 && vram < rec) {
+      if (rec > 0 && total < rec) {
         return {
           level: 'yellow',
           text: '⚠️ This LLM may not perform well with large contexts on this machine — ' +
-            rec + ' GB is recommended, but only ' + vram + ' GB was detected.',
+            rec + ' GB of combined VRAM + RAM is recommended, but only ' + total + ' GB was detected.',
         };
       }
       return null;
@@ -935,7 +942,7 @@ function buildHtml(): string {
         card.appendChild(tipEl);
       }
 
-      const warning = ramWarning(entry, _state.detectedVramGb);
+      const warning = ramWarning(entry, _state.detectedVramGb, _state.detectedRamGb);
       if (warning) {
         const w = document.createElement('div');
         w.className = 'ram-warning ' + warning.level;
@@ -1130,6 +1137,7 @@ function buildHtml(): string {
         ? data.llamaServerOverridePath : _state.llamaServerOverridePath;
       _state.downloads = data.downloads || [];
       _state.detectedVramGb = data.detectedVramGb !== undefined ? data.detectedVramGb : _state.detectedVramGb;
+      _state.detectedRamGb = data.detectedRamGb !== undefined ? data.detectedRamGb : _state.detectedRamGb;
       _state.isMac = Boolean(data.isMac);
       render();
     });
