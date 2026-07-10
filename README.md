@@ -1,6 +1,6 @@
 # Kōdo — VS Code Extension
 
-The VS Code front-end for [Kōdo](../kodo): a build system that converts natural language into working code through a multi-agent LLM workflow, designed to run on your own hardware — model included.
+The VS Code front-end for [Kōdo](https://github.com/thehiddenone/kodo): a build system that converts natural language into working code through a multi-agent LLM workflow, designed to run on your own hardware — model included.
 
 This README covers installing and running the extension. Everything else — the workflow, the agents, the wire protocol, security, local inference — is documented in the Kōdo repo: start with [`kodo/README.md`](https://github.com/thehiddenone/kodo/blob/main/README.md) and [`kodo/doc/`](https://github.com/thehiddenone/kodo/tree/main/doc).
 
@@ -125,7 +125,7 @@ Python-side changes need no rebuild at all — the server is installed editable 
 | [server-launcher.ts](src/server-launcher.ts) | Singleton discovery, detached server spawn (survives window reloads), shared-log tailing into the "Kodo Server" channel. |
 | [uv-setup.ts](src/uv-setup.ts) | First-run bootstrap: install `uv`, create the venv, install `kodo` from `KODO_DEV_PATH`. |
 | [ws-client.ts](src/ws-client.ts) | WebSocket client with automatic reconnect; the server replays buffered events on reconnect. |
-| [envelope.ts](src/envelope.ts) | Wire-protocol envelope construction/parsing (see [`kodo/doc/WS_PROTOCOL.md`](../kodo/doc/WS_PROTOCOL.md)). |
+| [envelope.ts](src/envelope.ts) | Wire-protocol envelope construction/parsing (see [`kodo/doc/WS_PROTOCOL.md`](https://github.com/thehiddenone/kodo/blob/main/doc/WS_PROTOCOL.md)). |
 | [session-controller.ts](src/session-controller.ts) | Per-session state and routing — one instance per session tab. |
 | [sidebar-provider.ts](src/sidebar-provider.ts) | The activity-bar sidebar WebView. |
 | [cloud-ai-settings-panel.ts](src/cloud-ai-settings-panel.ts), [cloud-credentials.ts](src/cloud-credentials.ts) | Cloud LLM settings UI; API keys in VS Code secret storage. |
