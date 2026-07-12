@@ -1,5 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
+import { tierLabel } from '../llm-registry-types';
+import type { ThinkingFamily } from '../llm-registry-types';
 import { styles } from './styles';
 import { vscode } from './vscode';
 import type { EditControl, CommandControl } from './types';
@@ -70,6 +72,45 @@ const _COMMAND_NEXT: Record<CommandControl, CommandControl> = {
   defensive: 'permissive',
   permissive: 'smart',
 };
+
+/**
+ * Per-tier tooltip text, one dictionary per thinking family (kodo/doc/
+ * LLM_REGISTRY.md §4.5) — the same tier slug can appear in both families
+ * (e.g. "high") with a different token-budget/effort meaning, so the family
+ * is needed to pick the right description, not just the tier name.
+ */
+const _QWEN_THINKING_DESC: Record<string, string> = {
+  minimal: 'Thinking: Minimal. The smallest reasoning budget — fastest replies, most likely to miss subtlety on hard problems.',
+  low: 'Thinking: Low. A small reasoning budget — quick replies with a bit of deliberation.',
+  medium: 'Thinking: Medium. A moderate reasoning budget — balances speed and depth for everyday tasks.',
+  high: 'Thinking: High. A large reasoning budget — more careful deliberation on demanding problems, at the cost of speed.',
+  huge: 'Thinking: Huge. A very large reasoning budget — reserved for the hardest problems, where speed matters least.',
+  unlimited: 'Thinking: Unlimited. No cap on reasoning — Kōdo thinks for as long as it judges necessary.',
+};
+
+const _GPT_OSS_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. Minimal reasoning effort — fastest replies.',
+  medium: "Thinking: Medium. The model's default reasoning effort — balances speed and depth.",
+  high: 'Thinking: High. Maximum reasoning effort — the most careful deliberation, at the cost of speed.',
+};
+
+/** Tooltip for a tier, keyed by family. Falls back to a plain label for an
+ *  unrecognised tier (should not happen — the tier list comes straight from
+ *  the server's `thinking_families` payload). */
+function _thinkingTierDesc(family: ThinkingFamily, tier: string): string {
+  const table = family === 'qwen_reasoning_budget' ? _QWEN_THINKING_DESC : _GPT_OSS_THINKING_DESC;
+  return table[tier] ?? `Thinking: ${tierLabel(tier)}.`;
+}
+
+/** The next tier in click-cycle order, wrapping — falls back to the first
+ *  tier if the current value isn't (or is no longer) one of them. */
+function _nextThinkingTier(tiers: string[], current: string): string {
+  if (tiers.length === 0) {
+    return '';
+  }
+  const idx = tiers.indexOf(current);
+  return tiers[(idx + 1 + tiers.length) % tiers.length];
+}
 
 /**
  * Tooltip for the two *frozen* toggles (workflow, autonomous): the description
@@ -187,6 +228,12 @@ interface ModeControlsProps {
   commandControl: CommandControl;
   /** True while Autonomous is in effect: Edit/Command are forced and locked. */
   editCommandLocked: boolean;
+  /** Server-owned (doc/SESSIONS.md) — the active local model's current tier, or "". */
+  thinkingLevel: string;
+  /** Which thinking-tier family (if any) the active local model belongs to. */
+  thinkingFamily: ThinkingFamily | null;
+  /** Ordered tier slugs for `thinkingFamily`; [] when `thinkingFamily` is null. */
+  thinkingTiers: string[];
   connected: boolean;
   /** True while a turn is in flight; gates the frozen toggles' "queued" status. */
   running: boolean;
@@ -200,6 +247,9 @@ export function ModeControls({
   editControl,
   commandControl,
   editCommandLocked,
+  thinkingLevel,
+  thinkingFamily,
+  thinkingTiers,
   connected,
   running,
 }: ModeControlsProps) {
@@ -221,6 +271,12 @@ export function ModeControls({
     editCommandLocked,
     _COMMAND_NAME.permissive,
   );
+  const thinkingDisabled = !connected || thinkingFamily === null;
+  const thinkingLabel = thinkingFamily === null ? '💭 Thinking: N/A' : `💭 Thinking: ${tierLabel(thinkingLevel)}`;
+  const thinkingTip =
+    thinkingFamily === null
+      ? 'This LLM does not have thinking mode.'
+      : _thinkingTierDesc(thinkingFamily, thinkingLevel);
 
   return (
     <div style={styles.modeControls}>
@@ -248,6 +304,17 @@ export function ModeControls({
         tip={commandTip}
         disabled={!connected || editCommandLocked}
         onClick={() => vscode.postMessage({ type: 'command_control_set', commandControl: _COMMAND_NEXT[commandControl] })}
+      />
+      <ModeButton
+        label={thinkingLabel}
+        tip={thinkingTip}
+        disabled={thinkingDisabled}
+        onClick={() =>
+          vscode.postMessage({
+            type: 'thinking_level_set',
+            thinkingLevel: _nextThinkingTier(thinkingTiers, thinkingLevel),
+          })
+        }
       />
     </div>
   );

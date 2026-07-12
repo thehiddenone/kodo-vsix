@@ -444,6 +444,9 @@ export function reducer(state: State, action: Action): State {
         editControl: action.editControl,
         commandControl: action.commandControl,
         editCommandLocked: action.editCommandLocked,
+        thinkingLevel: action.thinkingLevel,
+        thinkingFamily: action.thinkingFamily,
+        thinkingTiers: action.thinkingTiers,
         running: action.running,
       };
     case 'resume_offer':
@@ -727,6 +730,9 @@ export const initial: State = {
   editControl: 'smart',
   commandControl: 'smart',
   editCommandLocked: false,
+  thinkingLevel: '',
+  thinkingFamily: null,
+  thinkingTiers: [],
   running: false,
   resumeSessionId: null,
   awaitingLlm: false,

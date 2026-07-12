@@ -19,6 +19,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
+import type { ThinkingContext } from './llm-registry-types';
 import { WsClient } from './ws-client';
 
 const TOKEN_BUFFER_MAX = 64 * 1024;
@@ -145,6 +146,14 @@ export interface SessionDeps {
   /** Called once the server assigns/confirms this session's id. */
   onSessionAssigned: (c: SessionController, sessionId: string) => void;
   /**
+   * The current thinking-tier context: which family (if any) the session's
+   * active *local* model belongs to, and its tiers/default. The active
+   * model is a machine-global selection, not per-session, so the host
+   * supplies this fresh (read at construction, then pushed on every change
+   * via {@link SessionController.updateThinkingContext}).
+   */
+  getThinkingContext: () => ThinkingContext;
+  /**
    * Forward a window-global `llama.state` event to the host. llama.cpp is
    * auto-started inside an engine run, so the event arrives on THIS session's
    * socket (not the session-less control connection); the host owns the sidebar
@@ -209,6 +218,15 @@ export class SessionController {
   // so a switch to Autonomous only locks them once the next turn actually starts.
   private editControl: EditControl = 'smart';
   private commandControl: CommandControl = 'smart';
+  // Thinking level is server-owned (unlike Edit/Tool Control): the valid tier
+  // set is model-dependent, so the server validates every change and this is
+  // simply the last value it reported via a `state` event/hello.ack, never a
+  // client-side guess. `thinkingContext` is the sibling piece the *host*
+  // supplies (which family, if any, the active local model belongs to) —
+  // together they're enough for the webview to render the toggle, compute
+  // the next tier to request on click, and show per-tier tooltips.
+  private thinkingLevel = '';
+  private thinkingContext: ThinkingContext = { family: null, tiers: [], defaultTier: '' };
   private running = false;
   // The last shown values pushed to the server, so we resend only on change
   // (`undefined` until the first sync forces an initial send).
@@ -231,6 +249,7 @@ export class SessionController {
     this.sessionId = sessionId;
     this.isNewSession = sessionId === '';
     this.panel = panel;
+    this.thinkingContext = deps.getThinkingContext();
 
     panel.iconPath = vscode.Uri.file(
       path.join(deps.context.extensionPath, 'images', 'kodo16px.svg'),
@@ -370,6 +389,9 @@ export class SessionController {
       commandControl: this._commandShown(),
       editCommandLocked: this._autonomousInEffect(),
       running: this.running,
+      thinkingLevel: this.thinkingLevel,
+      thinkingFamily: this.thinkingContext.family,
+      thinkingTiers: this.thinkingContext.tiers,
     });
   }
 
@@ -535,6 +557,17 @@ export class SessionController {
           this._syncEditCommandToServer();
           this._postModeState();
         }
+        break;
+      }
+      case 'thinking_level_set': {
+        // Server-validated, unlike Edit/Tool Control — no optimistic local
+        // update. The webview computed the next tier from the family/tiers
+        // it was already given; the server replies (thinking_level.accepted)
+        // and a `state` event carries the outcome either way, so the shown
+        // value stays in sync even on rejection (it simply won't move).
+        this._sendStamped(
+          makeRequest('thinking_level.set', { thinking_level: String(msg.thinkingLevel ?? '') }),
+        );
         break;
       }
       case 'open_file': {
@@ -968,6 +1001,11 @@ export class SessionController {
       this.effectiveWorkflowMode = coerceWorkflowMode(
         env.payload.effective_workflow_mode ?? env.payload.workflow_mode,
       );
+      // thinking_level is likewise server-owned — adopted verbatim, never
+      // client-computed (doc/SESSIONS.md): a new-session seed, a resume
+      // reconciliation, a model-switch reset, or a thinking_level.set accept
+      // all land here the same way.
+      this.thinkingLevel = String(env.payload.thinking_level ?? '');
       // The turn boundary may have just locked/unlocked Edit & Command (a turn
       // starting under Autonomous forces Allow All/Permissive; a turn ending
       // unlocks to the user's selection) — resync the shown values if so.
@@ -1389,6 +1427,12 @@ export class SessionController {
       }),
     );
 
+    // thinking_level is server-owned and always present in `state` regardless
+    // of new-vs-resumed (a new session is seeded server-side from the active
+    // model's family default — doc/SESSIONS.md) — hydrate it uniformly.
+    const state = env.payload.state as Record<string, unknown> | undefined;
+    this.thinkingLevel = String(state?.thinking_level ?? '');
+
     if (this.isNewSession) {
       // A blank session starts interactive, problem-solving, with Edit & Command
       // Control at their Smart default — selected == effective, nothing locked.
@@ -1402,33 +1446,30 @@ export class SessionController {
       this._sendStamped(makeRequest('workflow.set', { mode: 'problem_solving' }));
       this._syncEditCommandToServer();
       this._postModeState();
-    } else {
+    } else if (state) {
       // Resumed: adopt the session's own persisted prefs from hello.ack state.
-      const state = env.payload.state as Record<string, unknown> | undefined;
-      if (state) {
-        this.autonomous = Boolean(state.autonomous ?? false);
-        this.effectiveAutonomous = Boolean(state.effective_autonomous ?? this.autonomous);
-        this.workflowMode = coerceWorkflowMode(state.workflow_mode);
-        this.effectiveWorkflowMode = coerceWorkflowMode(
-          state.effective_workflow_mode ?? state.workflow_mode,
-        );
-        // A resumed tab is never mid-turn (the worker is idle on connect), so
-        // the lock follows the resumed `autonomous` selection. Hydrate the
-        // Edit/Command selection from the persisted value only when *not* locked;
-        // while locked the persisted value is the forced Allow All/Permissive, so
-        // we leave the selection at its Smart default (it would otherwise show a
-        // stale forced value on the next unlock).
-        this.running = false;
-        if (this.autonomous) {
-          this.editControl = 'smart';
-          this.commandControl = 'smart';
-        } else {
-          this.editControl = coerceEditControl(state.edit_control);
-          this.commandControl = coerceCommandControl(state.command_control);
-        }
-        this._syncEditCommandToServer();
-        this._postModeState();
+      this.autonomous = Boolean(state.autonomous ?? false);
+      this.effectiveAutonomous = Boolean(state.effective_autonomous ?? this.autonomous);
+      this.workflowMode = coerceWorkflowMode(state.workflow_mode);
+      this.effectiveWorkflowMode = coerceWorkflowMode(
+        state.effective_workflow_mode ?? state.workflow_mode,
+      );
+      // A resumed tab is never mid-turn (the worker is idle on connect), so
+      // the lock follows the resumed `autonomous` selection. Hydrate the
+      // Edit/Command selection from the persisted value only when *not* locked;
+      // while locked the persisted value is the forced Allow All/Permissive, so
+      // we leave the selection at its Smart default (it would otherwise show a
+      // stale forced value on the next unlock).
+      this.running = false;
+      if (this.autonomous) {
+        this.editControl = 'smart';
+        this.commandControl = 'smart';
+      } else {
+        this.editControl = coerceEditControl(state.edit_control);
+        this.commandControl = coerceCommandControl(state.command_control);
       }
+      this._syncEditCommandToServer();
+      this._postModeState();
     }
 
     const cp = env.payload.current_project as { root?: unknown; name?: unknown } | null | undefined;
@@ -1454,6 +1495,18 @@ export class SessionController {
   /** Notify the webview of a workspace open/close gate change. */
   postWorkspaceStatus(hasWorkspace: boolean): void {
     this._post({ type: 'workspace_status', hasWorkspace });
+  }
+
+  /**
+   * Apply a new window-global thinking-tier context (the host calls this on
+   * every session tab whenever the active local/cloud model changes) and
+   * re-push the mode-toggle snapshot so the webview's Thinking control
+   * updates immediately — e.g. disables itself the moment the user switches
+   * to a non-thinking model, without waiting for a server round trip.
+   */
+  updateThinkingContext(ctx: ThinkingContext): void {
+    this.thinkingContext = ctx;
+    this._postModeState();
   }
 }
 

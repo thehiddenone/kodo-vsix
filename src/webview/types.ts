@@ -1,4 +1,6 @@
 // Shared data, state, and action types for the Kōdo WebView.
+import type { ThinkingFamily } from '../llm-registry-types';
+
 /** Edit Control posture the Edit toggle cycles through. `smart` is the default. */
 export type EditControl = 'review_all' | 'allow_all' | 'smart';
 /** Tool Control posture the Tool Control toggle cycles through. `smart` is the default. */
@@ -259,6 +261,15 @@ export interface State {
   editControl: EditControl;
   commandControl: CommandControl;
   editCommandLocked: boolean;
+  // Thinking level is server-owned (doc/SESSIONS.md): the host adopts
+  // whatever the server's `state` event reports verbatim, never computes it
+  // client-side. `thinkingFamily`/`thinkingTiers` describe the session's
+  // active *local* model's thinking mechanism (`null`/`[]` when on a cloud
+  // model or a local model with none), letting the toggle compute the next
+  // tier to request and render per-tier tooltips.
+  thinkingLevel: string;
+  thinkingFamily: ThinkingFamily | null;
+  thinkingTiers: string[];
   /** True while a turn is in progress (server phase "running"); gates the frozen toggles' "queued" status. */
   running: boolean;
   resumeSessionId: string | null;
@@ -351,6 +362,9 @@ export type Action =
       editControl: EditControl;
       commandControl: CommandControl;
       editCommandLocked: boolean;
+      thinkingLevel: string;
+      thinkingFamily: ThinkingFamily | null;
+      thinkingTiers: string[];
       running: boolean;
     }
   | { type: 'resume_offer'; sessionId: string }

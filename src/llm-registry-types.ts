@@ -112,3 +112,19 @@ export type ThinkingFamilies = Record<string, ThinkingFamilyInfo>;
 export function tierLabel(tier: string): string {
   return tier.charAt(0).toUpperCase() + tier.slice(1);
 }
+
+/**
+ * The thinking-tier shape a session's Thinking Level toggle (ModeControls.tsx)
+ * needs, derived window-wide from `activeLocalModelState`/`modeState`/
+ * `thinkingFamiliesState` in extension.ts and pushed to every open session tab
+ * (`SessionController.updateThinkingContext`) whenever any of those three
+ * change — the active model is a machine-global selection, not per-session,
+ * so every open tab shares one `ThinkingContext` at a time. `family: null`
+ * (cloud mode, or a local model/custom entry with no thinking mechanism)
+ * means the toggle is disabled; `tiers`/`defaultTier` are `[]`/`""` in that case.
+ */
+export interface ThinkingContext {
+  family: ThinkingFamily | null;
+  tiers: string[];
+  defaultTier: string;
+}

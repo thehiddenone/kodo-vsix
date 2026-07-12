@@ -277,6 +277,12 @@ export function App() {
             editControl: coerceEditControl(msg.editControl),
             commandControl: coerceCommandControl(msg.commandControl),
             editCommandLocked: Boolean(msg.editCommandLocked),
+            thinkingLevel: String(msg.thinkingLevel ?? ''),
+            thinkingFamily:
+              msg.thinkingFamily === 'qwen_reasoning_budget' || msg.thinkingFamily === 'gpt_oss_reasoning_effort'
+                ? msg.thinkingFamily
+                : null,
+            thinkingTiers: Array.isArray(msg.thinkingTiers) ? msg.thinkingTiers.map((t) => String(t)) : [],
             running: Boolean(msg.running),
           });
           break;
@@ -495,6 +501,9 @@ export function App() {
             editControl={state.editControl}
             commandControl={state.commandControl}
             editCommandLocked={state.editCommandLocked}
+            thinkingLevel={state.thinkingLevel}
+            thinkingFamily={state.thinkingFamily}
+            thinkingTiers={state.thinkingTiers}
             connected={state.connected}
             running={state.running}
           />
