@@ -4,7 +4,7 @@ import type { SessionEntry, DiffLinkData, CheckpointData } from './types';
 import { Markdown } from './markdown';
 import { ThinkingBlock, CompactionBlock, WebSearchBlock } from './StreamingBlocks';
 import { RunCommandProgress } from './indicators';
-import { completionLabel } from './format';
+import { completionLabel, APPROX_TOKENS_TITLE } from './format';
 /** Crop a `visible` parameter value to at most 3 lines / 200 characters. */
 function cropVisibleValue(value: string): string {
   const lines = value.split('\n');
@@ -262,7 +262,7 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
       return (
         <div>
           {entry.toolgenDurationMs !== null && (
-            <div style={styles.toolgenDone}>
+            <div style={styles.toolgenDone} title={APPROX_TOKENS_TITLE}>
               {completionLabel(`Generated content for ${entry.toolName}`, entry.toolgenChars ?? 0, entry.toolgenDurationMs)}
             </div>
           )}

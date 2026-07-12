@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { styles } from './styles';
 import { BouncingDots } from './indicators';
 import { useElapsedTick } from './hooks';
-import { completionLabel, formatTokens } from './format';
+import { approxTokens, completionLabel, formatTokens, APPROX_TOKENS_TITLE } from './format';
 import type { SessionEntry } from './types';
-/** "<N> chars · <S>s" line shown under a live streaming summary. */
+/** "~<N> tokens · <S>s" line shown under a live streaming summary. Token count
+ *  is approximate (estimated from text length) — hence the "~" and tooltip. */
 function StreamingMeta({ content, startedAt }: { content: string; startedAt: number | null }) {
   const elapsed = startedAt !== null ? Math.floor((Date.now() - startedAt) / 1000) : 0;
-  return <div style={styles.toolgenMeta}>{`${content.length.toLocaleString()} chars · ${elapsed}s`}</div>;
+  return <div style={styles.toolgenMeta} title={APPROX_TOKENS_TITLE}>{`~${approxTokens(content.length).toLocaleString()} tokens · ${elapsed}s`}</div>;
 }
 
 interface ThinkingBlockProps {
@@ -27,7 +28,7 @@ export function ThinkingBlock({ content, isActive, startedAt = null, durationMs 
             <span>{'Thinking '}<BouncingDots /></span>
             <StreamingMeta content={content} startedAt={startedAt} />
           </>
-        ) : completionLabel('Thinking completed', content.length, durationMs)}
+        ) : <span title={APPROX_TOKENS_TITLE}>{completionLabel('Thinking completed', content.length, durationMs)}</span>}
       </summary>
       <div style={styles.thinkingContent}>{content}</div>
     </details>

@@ -175,7 +175,9 @@ export type SessionEntry =
       /** How long the model spent streaming this call's arguments (ms), shown as
        *  "Generated content for <tool> in Xs, …". null when unknown (history / no toolgen). */
       toolgenDurationMs: number | null;
-      /** How many characters the model streamed for this call's arguments. null when unknown. */
+      /** How many characters the model streamed for this call's arguments (the raw
+       *  measure; the UI renders it as an approximate token count / tok/s via
+       *  completionLabel). null when unknown. */
       toolgenChars: number | null;
       /** Live narration the `web_search` agent produced while researching (doc/WEB_SEARCH.md §6),
        *  in order. Drives the "Web Search is in progress"/"Web Search Completed" collapsible block;
