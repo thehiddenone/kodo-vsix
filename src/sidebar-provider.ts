@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { CloudRegistry, LocalRegistryEntry } from './llm-registry-types';
+import type { CloudRegistry, LocalRegistryEntry, ThinkingFamilies } from './llm-registry-types';
 
 export interface SidebarState {
   connected: boolean;
@@ -20,6 +20,10 @@ export interface SidebarState {
   llamaStopping: boolean;
   detectedVramGb: number | null;
   detectedRamGb: number | null;
+  /** base_llm -> thinking-family metadata (kodo/doc/LLM_REGISTRY.md §4.5). */
+  thinkingFamilies: ThinkingFamilies;
+  /** base_llm -> currently selected tier slug (or the family default if unset). */
+  localThinkingTiers: Record<string, string>;
 }
 
 export type SidebarMessage =
@@ -33,6 +37,7 @@ export type SidebarMessage =
   | { type: 'install_llamacpp' }
   | { type: 'start_llamacpp' }
   | { type: 'stop_llamacpp' }
+  | { type: 'set_thinking_tier'; base_llm: string; tier: string }
   | { type: 'ready' };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -173,6 +178,9 @@ function buildHtml(): string {
       accent-color: var(--vscode-button-background);
       cursor: pointer;
       margin: 0;
+    }
+    .thinking-mode input[type="range"] {
+      accent-color: var(--vscode-button-background);
     }
     /* Model / vendor cards */
     #cards-section { margin-top: 4px; }
@@ -326,6 +334,8 @@ function buildHtml(): string {
       llamaRunningModel: '',
       llamaStarting: false,
       llamaStopping: false,
+      thinkingFamilies: {},
+      localThinkingTiers: {},
     };
 
     function statusDisplay(connected, stage) {
@@ -402,6 +412,55 @@ function buildHtml(): string {
           + (_state.llamaRunning && _state.llamaRunningModel ? '  ·  running: ' + _state.llamaRunningModel : '');
         section.appendChild(ver);
       }
+    }
+
+    // Tier slugs are already display-ready words ("minimal" -> "Minimal").
+    function tierLabel(tier) {
+      return tier.charAt(0).toUpperCase() + tier.slice(1);
+    }
+
+    // Thinking-tier control for the active local model's base_llm, if it
+    // belongs to a known family (kodo/doc/LLM_REGISTRY.md §4.5). Renders
+    // nothing for non-family models (custom entries, or a hardcoded model
+    // outside both families).
+    function renderThinkingMode(section) {
+      const active = _state.localRegistry.find(m => m.name === _state.activeLocalModel);
+      const baseLlm = active ? active.base_llm : '';
+      const info = baseLlm ? _state.thinkingFamilies[baseLlm] : undefined;
+      if (!info) { return; }
+
+      const tiers = info.tiers;
+      const current = _state.localThinkingTiers[baseLlm] || info.default;
+      const idx = Math.max(0, tiers.indexOf(current));
+
+      section.appendChild(document.createElement('hr'));
+
+      const wrap = document.createElement('div');
+      wrap.className = 'thinking-mode';
+      wrap.style.cssText = 'margin-bottom:8px;display:flex;align-items:center;gap:8px;';
+
+      const label = document.createElement('div');
+      label.style.cssText = 'font-size:calc(var(--vscode-font-size) + 2px);color:var(--vscode-descriptionForeground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto;width:140px;';
+      label.textContent = 'Thinking: ' + tierLabel(tiers[idx]);
+      wrap.appendChild(label);
+
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = String(tiers.length - 1);
+      slider.step = '1';
+      slider.value = String(idx);
+      slider.style.cssText = 'flex:1 1 auto;min-width:0;';
+      slider.addEventListener('input', () => {
+        label.textContent = 'Thinking: ' + tierLabel(tiers[Number(slider.value)]);
+      });
+      slider.addEventListener('change', () => {
+        vsc.postMessage({ type: 'set_thinking_tier', base_llm: baseLlm, tier: tiers[Number(slider.value)] });
+      });
+      wrap.appendChild(slider);
+
+      section.appendChild(wrap);
+      section.appendChild(document.createElement('hr'));
     }
 
     function renderLocalCards(section) {
@@ -570,6 +629,7 @@ function buildHtml(): string {
 
       if (_state.mode === 'local') {
         renderLlamaControls(section);
+        renderThinkingMode(section);
         renderLocalCards(section);
       } else {
         renderCloudControls(section);
@@ -617,6 +677,8 @@ function buildHtml(): string {
       if (typeof data.llamaRunningModel === 'string') { _state.llamaRunningModel = data.llamaRunningModel; }
       if (data.llamaStarting !== undefined) { _state.llamaStarting = Boolean(data.llamaStarting); }
       if (data.llamaStopping !== undefined) { _state.llamaStopping = Boolean(data.llamaStopping); }
+      _state.thinkingFamilies = data.thinkingFamilies || _state.thinkingFamilies;
+      _state.localThinkingTiers = data.localThinkingTiers || _state.localThinkingTiers;
 
       renderCards();
     });

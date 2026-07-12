@@ -29,7 +29,13 @@ import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
-import type { CloudRegistry, EffortLevel, LocalDownloadState, LocalRegistryEntry } from './llm-registry-types';
+import type {
+  CloudRegistry,
+  EffortLevel,
+  LocalDownloadState,
+  LocalRegistryEntry,
+  ThinkingFamilies,
+} from './llm-registry-types';
 import { startLocalDownloadPolling } from './local-model-downloads';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
@@ -98,6 +104,11 @@ let llamaServerOverridePathState: string | null = null;
 let _llamaStartProgressResolve: (() => void) | null = null;
 let detectedVramGbState: number | null = null;
 let detectedRamGbState: number | null = null;
+// base_llm -> thinking-family metadata, from the server's `thinking_families`
+// payload (doc/LLM_REGISTRY.md §4.5); base_llm -> currently selected tier,
+// read from settings.json (mirrors activeLocalModelState/models.local).
+let thinkingFamiliesState: ThinkingFamilies = {};
+let localThinkingTiersState: Record<string, string> = {};
 // Live download progress, read off manager-state.json on disk rather than
 // pushed over the WS wire (see local-model-downloads.ts and
 // doc/LOCAL_MODEL_MANAGER.md §11) — keyed by registry entry name.
@@ -126,6 +137,26 @@ function _mergeLocalRegistry(raw: unknown): LocalRegistryEntry[] {
     }
     return { ...entry, installed };
   });
+}
+
+/** Parse the `thinking_families` map off a `hello.ack`/`local_llm.registry_state`
+ * payload (doc/WS_PROTOCOL.md §5.12a); `{}` if absent/malformed. */
+function _parseThinkingFamilies(raw: unknown): ThinkingFamilies {
+  if (!raw || typeof raw !== 'object') {
+    return {};
+  }
+  return raw as ThinkingFamilies;
+}
+
+/** Populate `localThinkingTiersState` for every base_llm the registry/family
+ * map currently knows about, so the sidebar has a value immediately — even
+ * before the user has ever changed a tier for that base_llm. */
+function _hydrateLocalThinkingTiers(): void {
+  const tiers: Record<string, string> = {};
+  for (const baseLlm of Object.keys(thinkingFamiliesState)) {
+    tiers[baseLlm] = _readLocalThinkingTier(baseLlm);
+  }
+  localThinkingTiersState = tiers;
 }
 
 /**
@@ -314,6 +345,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaStopping: llamaStoppingState,
       detectedVramGb: detectedVramGbState,
       detectedRamGb: detectedRamGbState,
+      thinkingFamilies: thinkingFamiliesState,
+      localThinkingTiers: localThinkingTiersState,
     },
     (msg) => {
       if (msg.type === 'list_sessions') {
@@ -326,6 +359,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _setActiveLocalModel(msg.name);
       } else if (msg.type === 'set_cloud_vendor') {
         _setActiveCloudVendor(msg.vendor);
+      } else if (msg.type === 'set_thinking_tier') {
+        _setLocalThinkingTier(msg.base_llm, msg.tier);
       } else if (msg.type === 'open_local_inference_settings') {
         _openLocalInferenceSettings();
       } else if (msg.type === 'open_cloud_ai_settings') {
@@ -954,6 +989,8 @@ function handleControlEnvelope(env: Envelope): void {
       typeof env.payload.detected_vram_gb === 'number' ? env.payload.detected_vram_gb : null;
     detectedRamGbState =
       typeof env.payload.detected_ram_gb === 'number' ? env.payload.detected_ram_gb : null;
+    thinkingFamiliesState = _parseThinkingFamilies(env.payload.thinking_families);
+    _hydrateLocalThinkingTiers();
     sidebarProvider?.update({
       cloudRegistry: cloudRegistryState,
       activeCloudVendor: activeCloudVendorState,
@@ -965,6 +1002,8 @@ function handleControlEnvelope(env: Envelope): void {
       llamaRunningModel: llamaRunningModelState,
       detectedVramGb: detectedVramGbState,
       detectedRamGb: detectedRamGbState,
+      thinkingFamilies: thinkingFamiliesState,
+      localThinkingTiers: localThinkingTiersState,
     });
     _pushLocalInferenceSettingsState();
     _pushCloudAiSettingsState();
@@ -1104,6 +1143,20 @@ function _readMode(): 'local' | 'cloud' {
 function _readActiveLocalModel(): string {
   const models = _readSettings()['models'] as Record<string, unknown> | undefined;
   return typeof models?.['local'] === 'string' ? models['local'] : _DEFAULT_LOCAL_MODEL;
+}
+
+/** The configured thinking tier for *baseLlm*, or its family default if unset
+ * (doc/LLM_REGISTRY.md §4.5). Requires `thinkingFamiliesState` to already be
+ * populated (from `hello.ack`/`local_llm.registry_state`) for the default
+ * fallback to resolve to anything other than "". */
+function _readLocalThinkingTier(baseLlm: string): string {
+  const models = _readSettings()['models'] as Record<string, unknown> | undefined;
+  const localThinking = models?.['local_thinking'] as Record<string, unknown> | undefined;
+  const value = localThinking?.[baseLlm];
+  if (typeof value === 'string' && value) {
+    return value;
+  }
+  return thinkingFamiliesState[baseLlm]?.default ?? '';
 }
 
 function _readActiveCloudVendor(): string {
@@ -1387,8 +1440,25 @@ function _onLocalLlmRegistryState(payload: Record<string, unknown>): void {
   localRegistryState = _mergeLocalRegistry(payload.local_registry);
   llamaServerOverridePathState =
     typeof payload.llama_server_override_path === 'string' ? payload.llama_server_override_path : null;
-  sidebarProvider?.update({ localRegistry: localRegistryState });
+  thinkingFamiliesState = _parseThinkingFamilies(payload.thinking_families);
+  _hydrateLocalThinkingTiers();
+  sidebarProvider?.update({
+    localRegistry: localRegistryState,
+    thinkingFamilies: thinkingFamiliesState,
+    localThinkingTiers: localThinkingTiersState,
+  });
   _pushLocalInferenceSettingsState();
+}
+
+function _setLocalThinkingTier(baseLlm: string, tier: string): void {
+  const models = (_readSettings()['models'] as Record<string, unknown> | undefined) ?? {};
+  const localThinking = (models['local_thinking'] as Record<string, string> | undefined) ?? {};
+  localThinking[baseLlm] = tier;
+  models['local_thinking'] = localThinking;
+  _writeSettings({ models });
+  _sendControl(makeRequest('config.reload'));
+  localThinkingTiersState = { ...localThinkingTiersState, [baseLlm]: tier };
+  sidebarProvider?.update({ localThinkingTiers: localThinkingTiersState });
 }
 
 function _setActiveLocalModel(name: string): void {

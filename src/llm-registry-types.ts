@@ -88,3 +88,27 @@ export function isCustomLocalEntry(kind: LocalEntryKind): boolean {
 export function isDownloadableLocalEntry(kind: LocalEntryKind): boolean {
   return kind === 'hardcoded_hf' || kind === 'custom_hf';
 }
+
+/** Which llama.cpp reasoning-tiering mechanism a `base_llm` uses — see
+ * kodo/doc/LLM_REGISTRY.md §4.5. `qwen_reasoning_budget` rides a 6-tier
+ * `--reasoning-budget`/`thinking_budget_tokens` scale; `gpt_oss_reasoning_effort`
+ * rides GPT-OSS's built-in 3-tier `reasoning_effort`. */
+export type ThinkingFamily = 'qwen_reasoning_budget' | 'gpt_oss_reasoning_effort';
+
+export interface ThinkingFamilyInfo {
+  family: ThinkingFamily;
+  /** Ordered tier slugs, lowest intensity first, e.g. ["minimal", ..., "unlimited"]. */
+  tiers: string[];
+  /** Default tier slug when the user hasn't chosen one for this base_llm yet. */
+  default: string;
+}
+
+/** `base_llm` -> thinking-family metadata, mirroring the server's
+ * `thinking_families` payload (kodo/doc/WS_PROTOCOL.md §5.12a). A `base_llm`
+ * absent from this map has no thinking-tier control. */
+export type ThinkingFamilies = Record<string, ThinkingFamilyInfo>;
+
+/** Tier slugs are already display-ready words ("minimal" -> "Minimal"). */
+export function tierLabel(tier: string): string {
+  return tier.charAt(0).toUpperCase() + tier.slice(1);
+}
