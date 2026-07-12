@@ -779,6 +779,22 @@ function buildHtml(): string {
       return mb < 1024 ? Math.round(mb) + ' MB' : (mb / 1024).toFixed(2) + ' GB';
     }
 
+    // Auto-scales B/s -> KB/s -> MB/s -> GB/s (1024-based), unlike formatBytes
+    // above: a speed can legitimately sit well under 1 MB/s on a slow
+    // connection, where formatBytes' MB/GB-only scale would round to '0 MB'.
+    function formatSpeed(bytesPerSecond) {
+      if (bytesPerSecond == null || bytesPerSecond < 0) { return ''; }
+      const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+      let value = bytesPerSecond;
+      let unitIndex = 0;
+      while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex++;
+      }
+      const formatted = unitIndex === 0 ? Math.round(value).toString() : value.toFixed(1);
+      return formatted + ' ' + units[unitIndex];
+    }
+
     // Rules (per product spec): red if below the absolute minimum; yellow if
     // below the recommended amount. When min_memory === memory, the red check
     // already covers every case the yellow check would (vram >= min == memory
@@ -842,9 +858,13 @@ function buildHtml(): string {
 
         const label = document.createElement('div');
         label.className = 'progress-label';
-        label.textContent = dl.bytes_total
+        let labelText = dl.bytes_total
           ? (formatBytes(dl.bytes_downloaded) + ' / ' + formatBytes(dl.bytes_total))
           : (formatBytes(dl.bytes_downloaded) + ' downloaded');
+        if (dl.status === 'downloading' && dl.bytes_per_second != null) {
+          labelText += ' — ' + formatSpeed(dl.bytes_per_second);
+        }
+        label.textContent = labelText;
         row.appendChild(label);
 
         const status = document.createElement('div');
@@ -860,12 +880,24 @@ function buildHtml(): string {
           const pauseBtn = document.createElement('button');
           pauseBtn.className = 'secondary-btn';
           pauseBtn.textContent = 'Pause';
-          pauseBtn.addEventListener('click', () => vsc.postMessage({ type: 'pause', name: dl.name }));
+          pauseBtn.addEventListener('click', () => {
+            // Same immediate-feedback pattern as "Download and Install" below:
+            // the next 'update' (disk-poll tick reflecting the new status)
+            // always re-renders this row from scratch, so there's no separate
+            // re-enable path to maintain.
+            pauseBtn.disabled = true;
+            pauseBtn.textContent = 'Pausing…';
+            vsc.postMessage({ type: 'pause', name: dl.name });
+          });
           buttons.appendChild(pauseBtn);
         } else {
           const resumeBtn = document.createElement('button');
           resumeBtn.textContent = 'Resume';
-          resumeBtn.addEventListener('click', () => vsc.postMessage({ type: 'resume', name: dl.name }));
+          resumeBtn.addEventListener('click', () => {
+            resumeBtn.disabled = true;
+            resumeBtn.textContent = 'Resuming…';
+            vsc.postMessage({ type: 'resume', name: dl.name });
+          });
           buttons.appendChild(resumeBtn);
         }
         const cancelBtn = document.createElement('button');

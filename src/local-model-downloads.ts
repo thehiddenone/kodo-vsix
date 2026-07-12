@@ -51,6 +51,7 @@ interface RawModelFile {
   size?: number | null;
   status?: string;
   error?: string;
+  bytes_per_second?: number | null;
 }
 
 interface RawModelRecord {
@@ -80,6 +81,11 @@ function summarize(modelId: string, raw: RawModelRecord): LocalDownloadState | n
   const bytesDownloaded = files.reduce((sum, f) => sum + (f.downloaded_bytes ?? 0), 0);
   const sizes = files.map((f) => f.size);
   const bytesTotal = sizes.every((s) => typeof s === 'number') ? (sizes as number[]).reduce((a, b) => a + b, 0) : null;
+  // Only one file downloads at a time (server's __run_transfer loop is
+  // per-file, sequential), so at most one of these is ever non-null — summed
+  // rather than picked, since which file that is isn't tracked here.
+  const rates = files.map((f) => f.bytes_per_second).filter((r): r is number => typeof r === 'number');
+  const bytesPerSecond = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) : null;
   return {
     name: modelId,
     repo_id: raw.repo_id,
@@ -87,6 +93,7 @@ function summarize(modelId: string, raw: RawModelRecord): LocalDownloadState | n
     bytes_downloaded: bytesDownloaded,
     bytes_total: bytesTotal,
     error,
+    bytes_per_second: bytesPerSecond,
   };
 }
 

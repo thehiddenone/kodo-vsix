@@ -66,6 +66,10 @@ export interface LocalDownloadState {
   bytes_downloaded: number;
   bytes_total: number | null;
   error: string;
+  /** Trailing ~10s transfer rate in bytes/sec, computed server-side
+   * (kodo/doc/LOCAL_MODEL_MANAGER.md §11a). `null` whenever not actively
+   * downloading, including the first instant of a (re)started transfer. */
+  bytes_per_second: number | null;
 }
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
