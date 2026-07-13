@@ -223,9 +223,6 @@ export interface State {
   currentProject: string;
   /** True while the silent session-titler call is running (shows a naming indicator). */
   namingSession: boolean;
-  /** True while the security layer's silent SMART-mode intent-judge LLM call is running
-   *  (shows an "Evaluating…" indicator so a long judge round doesn't look like a stall). */
-  securityJudging: boolean;
   stage: string;
   agent: string | null;
   /** Committed session entries. Rendered in order; exclude_from_context entries excluded from LLM context. */
@@ -374,7 +371,6 @@ export type Action =
   | { type: 'session_name'; name: string }
   | { type: 'current_project'; name: string }
   | { type: 'session_naming'; active: boolean }
-  | { type: 'security_judging'; active: boolean }
   | { type: 'session_cleared' }
   | { type: 'attachment_added'; id: string; name: string; path: string }
   | { type: 'attachment_removed'; id: string }

@@ -23,8 +23,6 @@ export function reducer(state: State, action: Action): State {
       return { ...state, currentProject: action.name };
     case 'session_naming':
       return { ...state, namingSession: action.active };
-    case 'security_judging':
-      return { ...state, securityJudging: action.active };
     case 'session_cleared':
       // Wipe the visible feed + all transient streaming state (the session is
       // being deleted). Connection/mode/header fields are left as-is.
@@ -47,7 +45,6 @@ export function reducer(state: State, action: Action): State {
         pendingQuestion: null,
         pendingPermission: null,
         namingSession: false,
-        securityJudging: false,
         attachedFiles: [],
       };
     case 'attachment_added':
@@ -430,7 +427,6 @@ export function reducer(state: State, action: Action): State {
         },
         streaming: false,
         awaitingLlm: false,
-        securityJudging: false,
       };
     case 'permission_cleared':
       return { ...state, pendingPermission: null };
@@ -707,7 +703,6 @@ export const initial: State = {
   sessionName: '',
   currentProject: '',
   namingSession: false,
-  securityJudging: false,
   stage: 'IDLE',
   agent: null,
   session: [],

@@ -1055,11 +1055,6 @@ export class SessionController {
       return;
     }
 
-    if (env.kind === 'event' && evtType === 'security.judging') {
-      this._post({ type: 'security_judging', active: Boolean(env.payload.active) });
-      return;
-    }
-
     if (env.kind === 'event' && evtType === 'agent.started') {
       this.agent = String(env.payload.agent ?? '');
       this._post({ type: 'agent_started', agent: this.agent });
