@@ -35,6 +35,33 @@ export interface AddServerUrlLlmPayload {
   url: string;
 }
 
+export interface AddFlavorPayload {
+  /** The local registry entry this flavor is being added to. */
+  name: string;
+  flavor_name: string;
+  description: string;
+  /** Raw multi-line "--flag value" text box content, parsed server-side. */
+  llama_args_text: string;
+  /** GB, 0 = unknown/no requirement — see LlamaFlavorInfo.min_ram/min_vram. */
+  min_ram: number;
+  min_vram: number;
+}
+
+export interface UpdateFlavorPayload {
+  /** The local registry entry the edited flavor belongs to. */
+  name: string;
+  /** The existing flavor's id — kept fixed, never re-derived from flavor_name. */
+  flavor_id: string;
+  flavor_name: string;
+  description: string;
+  /** Raw multi-line "--flag value" text box content, parsed server-side. */
+  llama_args_text: string;
+  /** GB, 0 = unknown/no requirement. Not carried forward if omitted — the
+   * modal always resends its own fields' current contents. */
+  min_ram: number;
+  min_vram: number;
+}
+
 export type LocalInferenceSettingsMessage =
   | { type: 'ready' }
   | ({ type: 'add_huggingface' } & AddHuggingfaceLlmPayload)
@@ -49,7 +76,10 @@ export type LocalInferenceSettingsMessage =
   | { type: 'remove'; name: string }
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
-  | { type: 'remove_override' };
+  | { type: 'remove_override' }
+  | ({ type: 'add_flavor' } & AddFlavorPayload)
+  | ({ type: 'update_flavor' } & UpdateFlavorPayload)
+  | { type: 'remove_flavor'; name: string; flavor_id: string };
 
 /** Singleton settings panel — reveals the existing one instead of opening a second. */
 export class LocalInferenceSettingsPanel {
@@ -251,6 +281,44 @@ function buildHtml(): string {
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: -1px;
     }
+    .modal-field textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 5px 7px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: var(--vscode-font-size);
+      resize: vertical;
+    }
+    .modal-field textarea:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+    .modal-field input[readonly],
+    .modal-field textarea[readonly] {
+      opacity: 0.6;
+      cursor: default;
+    }
+    .modal-field-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .modal-field-row .modal-field {
+      flex: 1;
+      margin-bottom: 0;
+    }
+    #flavor-readonly-hint {
+      /* visibility (not display) keeps the two lines of text reserved in
+         the layout at all times, so toggling them on for a predefined
+         flavor doesn't shift the Submit/Close buttons below. */
+      visibility: hidden;
+      color: var(--vscode-descriptionForeground);
+    }
+    #flavor-readonly-hint.visible { visibility: visible; }
     .file-picker-row {
       display: flex;
       align-items: center;
@@ -408,6 +476,62 @@ function buildHtml(): string {
       padding: 1px 8px;
       margin-bottom: 6px;
     }
+
+    /* --- Manage flavors modal: twice the width, split into two panes --- */
+    .modal-dialog.flavor-modal-dialog {
+      width: 840px;
+      max-width: calc(100vw - 40px);
+    }
+    .flavor-modal-body {
+      display: flex;
+      gap: 18px;
+      align-items: flex-start;
+      margin-top: 10px;
+    }
+    .flavor-list-pane {
+      flex: 0 0 38%;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .flavor-list {
+      height: 480px;
+      overflow-y: auto;
+      border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      margin-bottom: 8px;
+    }
+    .flavor-list-row {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+      cursor: pointer;
+    }
+    .flavor-list-row:last-child { border-bottom: none; }
+    .flavor-list-row:hover { background: var(--vscode-list-hoverBackground); }
+    .flavor-list-row.selected {
+      background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+      color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+    }
+    .flavor-row-name { font-weight: 600; margin-bottom: 2px; }
+    .flavor-row-desc {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+    }
+    .flavor-list-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .flavor-list-actions button {
+      display: inline-block;
+      width: auto;
+      flex: 1;
+    }
+    .flavor-form-pane {
+      flex: 1 1 62%;
+      min-width: 0;
+      border-left: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+      padding-left: 18px;
+    }
   </style>
 </head>
 <body>
@@ -555,6 +679,68 @@ function buildHtml(): string {
     </div>
   </div>
 
+  <div class="modal-overlay" id="flavor-modal">
+    <div class="modal-dialog flavor-modal-dialog" role="dialog" aria-modal="true">
+      <h3 id="flavor-modal-title">Manage flavors</h3>
+      <p class="explain">
+        A flavor is a named set of llama.cpp launch arguments for this LLM — e.g. a larger
+        context window or GPU-offload tuning for a smaller card. Only one flavor is active at a
+        time, and switching to a different one fully replaces the previous flavor's arguments.
+        Pick which flavor is active from the sidebar.
+      </p>
+      <div class="flavor-modal-body">
+        <div class="flavor-list-pane">
+          <div class="flavor-list" id="flavor-list"></div>
+          <div class="flavor-list-actions">
+            <button class="secondary-btn" id="flavor-add-list-btn" type="button">Add</button>
+            <button class="secondary-btn" id="flavor-remove-list-btn" type="button">Remove</button>
+          </div>
+        </div>
+        <div class="flavor-form-pane">
+          <div class="modal-field">
+            <label for="flavor-name">Name</label>
+            <input type="text" id="flavor-name" autocomplete="off">
+            <div class="field-error" id="flavor-name-error"></div>
+          </div>
+          <div class="modal-field">
+            <label for="flavor-description">Description (optional)</label>
+            <input type="text" id="flavor-description" autocomplete="off">
+          </div>
+          <div class="modal-field">
+            <label for="flavor-llama-args">llama.cpp arguments (optional)</label>
+            <textarea id="flavor-llama-args" rows="8" placeholder="--ctx-size 1048576
+--rope-scaling yarn
+--rope-scale 4"></textarea>
+            <div class="field-hint">One flag per line. Fully replaces the previously active flavor's arguments once this one is selected.</div>
+          </div>
+          <div class="modal-field-row">
+            <div class="modal-field">
+              <label for="flavor-min-ram">Minimum RAM (GB, optional)</label>
+              <input type="number" id="flavor-min-ram" min="0" step="1">
+            </div>
+            <div class="modal-field">
+              <label for="flavor-min-vram">Minimum VRAM (GB, optional)</label>
+              <input type="number" id="flavor-min-vram" min="0" step="1">
+            </div>
+          </div>
+          <div class="field-hint">
+            System RAM (or Apple Silicon unified memory) and discrete GPU VRAM this flavor
+            needs to run — leave blank/0 if unknown. Selecting a flavor whose requirement
+            exceeds this machine's detected hardware prompts for confirmation first.
+          </div>
+          <div class="field-hint" id="flavor-readonly-hint">
+            This is a built-in flavor and cannot be edited or removed. Copy its values into a
+            new flavor with "Add" if you want to customize it.
+          </div>
+          <div class="modal-actions">
+            <button id="flavor-submit-btn">Submit</button>
+            <button class="secondary-btn" id="flavor-close-btn">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script nonce="${nonce}">
     const vsc = acquireVsCodeApi();
     vsc.postMessage({ type: 'ready' });
@@ -589,7 +775,7 @@ function buildHtml(): string {
       return result;
     }
 
-    function parseContextWindow(text) {
+    function parseNonNegativeInt(text) {
       const trimmed = text.trim();
       if (!trimmed) { return 0; }
       const n = parseInt(trimmed, 10);
@@ -653,7 +839,7 @@ function buildHtml(): string {
         repo_id: hfRepoId.value.trim(),
         filename: hfFilename.value.trim(),
         llama_args: parseLlamaArgs(hfLlamaArgs.value),
-        context_window: parseContextWindow(hfContextWindow.value),
+        context_window: parseNonNegativeInt(hfContextWindow.value),
       });
       closeHfModal();
     });
@@ -704,7 +890,7 @@ function buildHtml(): string {
         description: fileDescription.value.trim(),
         path: _filePickedPath,
         llama_args: parseLlamaArgs(fileLlamaArgs.value),
-        context_window: parseContextWindow(fileContextWindow.value),
+        context_window: parseNonNegativeInt(fileContextWindow.value),
       });
       closeFileModal();
     });
@@ -761,15 +947,209 @@ function buildHtml(): string {
       closeServerModal();
     });
 
+    // --- Manage flavors modal ---
+    //
+    // A list-detail layout: the left pane lists every flavor for the entry
+    // the button was opened from; selecting one populates the right pane's
+    // form. _selectedFlavorId === null means "add new" mode (the form is
+    // blank and Submit creates a brand-new flavor); otherwise Submit updates
+    // the selected *custom* flavor in place. Predefined flavors are strictly
+    // read-only (kodo/doc/LLM_REGISTRY.md section 4.6) — selecting one fills
+    // the form for reference (fields become readonly, so their text stays
+    // selectable/copyable into a new flavor) but disables Submit and Remove;
+    // the server independently rejects update_flavor/remove_flavor for a
+    // predefined flavor_id regardless of this client-side gate.
+
+    const flavorModal = document.getElementById('flavor-modal');
+    const flavorModalTitle = document.getElementById('flavor-modal-title');
+    const flavorListEl = document.getElementById('flavor-list');
+    const flavorAddListBtn = document.getElementById('flavor-add-list-btn');
+    const flavorRemoveListBtn = document.getElementById('flavor-remove-list-btn');
+    const flavorName = document.getElementById('flavor-name');
+    const flavorDescription = document.getElementById('flavor-description');
+    const flavorLlamaArgs = document.getElementById('flavor-llama-args');
+    const flavorMinRam = document.getElementById('flavor-min-ram');
+    const flavorMinVram = document.getElementById('flavor-min-vram');
+    const flavorReadonlyHint = document.getElementById('flavor-readonly-hint');
+    const flavorSubmitBtn = document.getElementById('flavor-submit-btn');
+    const FLAVOR_FIELDS = [flavorName, flavorDescription, flavorLlamaArgs, flavorMinRam, flavorMinVram];
+    let _flavorEntryName = null;
+    let _selectedFlavorId = null;
+
+    function currentFlavorEntry() {
+      return _state.localRegistry.find(e => e.name === _flavorEntryName) || null;
+    }
+
+    function selectedFlavorPredefined() {
+      const entry = currentFlavorEntry();
+      const flavor = entry && (entry.flavors || []).find(f => f.id === _selectedFlavorId);
+      return Boolean(flavor && flavor.predefined);
+    }
+
+    function llamaArgsToText(llamaArgs) {
+      return Object.entries(llamaArgs || {})
+        .map(([flag, value]) => value ? (flag + ' ' + value) : flag)
+        .join('\\n');
+    }
+
+    function openFlavorModal(entryName) {
+      _flavorEntryName = entryName;
+      flavorModalTitle.textContent = 'Manage flavors — ' + entryName;
+      const entry = currentFlavorEntry();
+      const flavors = (entry && entry.flavors) || [];
+      const initialId = (entry && entry.active_flavor) || (flavors[0] && flavors[0].id) || null;
+      selectFlavor(initialId);
+      flavorModal.classList.add('open');
+    }
+
+    function closeFlavorModal() {
+      flavorModal.classList.remove('open');
+      _flavorEntryName = null;
+      _selectedFlavorId = null;
+    }
+
+    // Excludes the flavor currently being edited, so re-submitting a flavor
+    // under its own unchanged name isn't flagged as a clash with itself.
+    function flavorNameTaken(name) {
+      const entry = currentFlavorEntry();
+      const flavors = (entry && entry.flavors) || [];
+      return flavors.some(f => f.id !== _selectedFlavorId && f.name === name);
+    }
+
+    function updateFlavorValidity() {
+      const name = flavorName.value.trim();
+      const nameDup = name && flavorNameTaken(name);
+      const readOnly = selectedFlavorPredefined();
+      document.getElementById('flavor-name-error').textContent = nameDup ? ('A flavor named "' + name + '" already exists for this LLM.') : '';
+      flavorSubmitBtn.disabled = readOnly || !name || nameDup;
+    }
+
+    function selectFlavor(flavorId) {
+      _selectedFlavorId = flavorId || null;
+      const entry = currentFlavorEntry();
+      const flavor = entry && (entry.flavors || []).find(f => f.id === _selectedFlavorId);
+      if (flavor) {
+        flavorName.value = flavor.name;
+        flavorDescription.value = flavor.description || '';
+        flavorLlamaArgs.value = llamaArgsToText(flavor.llama_args);
+        flavorMinRam.value = flavor.min_ram ? String(flavor.min_ram) : '';
+        flavorMinVram.value = flavor.min_vram ? String(flavor.min_vram) : '';
+      } else {
+        flavorName.value = '';
+        flavorDescription.value = '';
+        flavorLlamaArgs.value = '';
+        flavorMinRam.value = '';
+        flavorMinVram.value = '';
+      }
+      const readOnly = selectedFlavorPredefined();
+      FLAVOR_FIELDS.forEach(el => { el.readOnly = readOnly; });
+      flavorReadonlyHint.classList.toggle('visible', readOnly);
+      updateFlavorValidity();
+      renderFlavorList();
+    }
+
+    function renderFlavorList() {
+      flavorListEl.innerHTML = '';
+      const entry = currentFlavorEntry();
+      const flavors = (entry && entry.flavors) || [];
+      const activeId = (entry && entry.active_flavor) || (flavors[0] && flavors[0].id) || '';
+      flavors.forEach(f => {
+        const row = document.createElement('div');
+        row.className = 'flavor-list-row' + (f.id === _selectedFlavorId ? ' selected' : '');
+
+        const nameLine = document.createElement('div');
+        nameLine.className = 'flavor-row-name';
+        nameLine.textContent = f.name + (f.id === activeId ? ' (active)' : '') + (f.predefined ? ' — built-in' : '');
+        row.appendChild(nameLine);
+
+        if (f.description) {
+          const desc = document.createElement('div');
+          desc.className = 'flavor-row-desc';
+          desc.textContent = f.description;
+          row.appendChild(desc);
+        }
+
+        row.addEventListener('click', () => selectFlavor(f.id));
+        flavorListEl.appendChild(row);
+      });
+
+      const selected = flavors.find(f => f.id === _selectedFlavorId);
+      flavorRemoveListBtn.disabled = !selected || selected.predefined;
+    }
+
+    // If the modal is open, re-syncs it against the latest _state (called
+    // from the global update() on every registry_state push) — falls back
+    // off a selection that no longer exists (e.g. it was just removed).
+    function refreshFlavorModalIfOpen() {
+      if (!_flavorEntryName) { return; }
+      const entry = currentFlavorEntry();
+      const flavors = (entry && entry.flavors) || [];
+      if (_selectedFlavorId && !flavors.some(f => f.id === _selectedFlavorId)) {
+        selectFlavor(flavors[0] ? flavors[0].id : null);
+      } else {
+        renderFlavorList();
+      }
+    }
+
+    flavorName.addEventListener('input', updateFlavorValidity);
+    document.getElementById('flavor-close-btn').addEventListener('click', closeFlavorModal);
+    flavorModal.addEventListener('click', (e) => { if (e.target === flavorModal) { closeFlavorModal(); } });
+
+    flavorAddListBtn.addEventListener('click', () => {
+      selectFlavor(null);
+      flavorName.focus();
+    });
+
+    flavorRemoveListBtn.addEventListener('click', () => {
+      if (flavorRemoveListBtn.disabled || !_flavorEntryName || !_selectedFlavorId) { return; }
+      vsc.postMessage({ type: 'remove_flavor', name: _flavorEntryName, flavor_id: _selectedFlavorId });
+    });
+
+    flavorSubmitBtn.addEventListener('click', () => {
+      if (flavorSubmitBtn.disabled || !_flavorEntryName) { return; }
+      if (_selectedFlavorId) {
+        vsc.postMessage({
+          type: 'update_flavor',
+          name: _flavorEntryName,
+          flavor_id: _selectedFlavorId,
+          flavor_name: flavorName.value.trim(),
+          description: flavorDescription.value.trim(),
+          llama_args_text: flavorLlamaArgs.value,
+          min_ram: parseNonNegativeInt(flavorMinRam.value),
+          min_vram: parseNonNegativeInt(flavorMinVram.value),
+        });
+      } else {
+        vsc.postMessage({
+          type: 'add_flavor',
+          name: _flavorEntryName,
+          flavor_name: flavorName.value.trim(),
+          description: flavorDescription.value.trim(),
+          llama_args_text: flavorLlamaArgs.value,
+          min_ram: parseNonNegativeInt(flavorMinRam.value),
+          min_vram: parseNonNegativeInt(flavorMinVram.value),
+        });
+        // Stays open in "add another" mode — the freshly-added flavor shows
+        // up in the left pane once the next registry_state arrives.
+        flavorName.value = '';
+        flavorDescription.value = '';
+        flavorLlamaArgs.value = '';
+        flavorMinRam.value = '';
+        flavorMinVram.value = '';
+        updateFlavorValidity();
+      }
+    });
+
     window.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') { return; }
       if (hfModal.classList.contains('open')) { closeHfModal(); }
       if (fileModal.classList.contains('open')) { closeFileModal(); }
       if (serverModal.classList.contains('open')) { closeServerModal(); }
+      if (flavorModal.classList.contains('open')) { closeFlavorModal(); }
     });
 
     const DOWNLOADABLE = new Set(['hardcoded_hf', 'custom_hf']);
     const CUSTOM = new Set(['custom_hf', 'custom_file', 'custom_server_url']);
+    const FLAVOR_CAPABLE = new Set(['hardcoded_hf', 'custom_hf', 'custom_file']);
     const _expandedGroups = new Set();
     let _installedExpanded = false;
 
@@ -992,6 +1372,17 @@ function buildHtml(): string {
       const buttons = document.createElement('div');
       buttons.className = 'row-buttons';
 
+      // Flavor *selection* lives only in the sidebar now — this button just
+      // opens the "Manage flavors" modal (add/edit/remove definitions).
+      if (FLAVOR_CAPABLE.has(entry.kind)) {
+        const manageBtn = document.createElement('button');
+        manageBtn.className = 'secondary-btn';
+        manageBtn.type = 'button';
+        manageBtn.textContent = 'Manage flavors';
+        manageBtn.addEventListener('click', () => openFlavorModal(entry.name));
+        buttons.appendChild(manageBtn);
+      }
+
       if (DOWNLOADABLE.has(entry.kind) && !entry.installed) {
         if (downloadingNames.has(entry.name)) {
           const note = document.createElement('span');
@@ -1152,6 +1543,7 @@ function buildHtml(): string {
       renderDownloads();
       renderInstalled();
       renderCards();
+      refreshFlavorModalIfOpen();
     }
 
     window.addEventListener('message', ({ data }) => {

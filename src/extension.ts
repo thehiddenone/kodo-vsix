@@ -37,6 +37,7 @@ import type {
   ThinkingContext,
   ThinkingFamilies,
 } from './llm-registry-types';
+import { hardwareFitWarningForFlavor } from './llm-registry-types';
 import { startLocalDownloadPolling } from './local-model-downloads';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
@@ -370,6 +371,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _setMode(msg.mode);
       } else if (msg.type === 'set_active_model') {
         _setActiveLocalModel(msg.name);
+      } else if (msg.type === 'set_active_flavor') {
+        void _setActiveFlavor(msg.name, msg.flavor_id);
       } else if (msg.type === 'set_cloud_vendor') {
         _setActiveCloudVendor(msg.vendor);
       } else if (msg.type === 'open_local_inference_settings') {
@@ -1378,6 +1381,31 @@ async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessa
     await _setLlamaServerOverride();
   } else if (msg.type === 'remove_override') {
     _sendControl(makeRequest('llama_server_override.remove'));
+  } else if (msg.type === 'add_flavor') {
+    _sendControl(
+      makeRequest('local_llm.add_flavor', {
+        name: msg.name,
+        flavor_name: msg.flavor_name,
+        description: msg.description,
+        llama_args_text: msg.llama_args_text,
+        min_ram: msg.min_ram,
+        min_vram: msg.min_vram,
+      }),
+    );
+  } else if (msg.type === 'update_flavor') {
+    _sendControl(
+      makeRequest('local_llm.update_flavor', {
+        name: msg.name,
+        flavor_id: msg.flavor_id,
+        flavor_name: msg.flavor_name,
+        description: msg.description,
+        llama_args_text: msg.llama_args_text,
+        min_ram: msg.min_ram,
+        min_vram: msg.min_vram,
+      }),
+    );
+  } else if (msg.type === 'remove_flavor') {
+    _sendControl(makeRequest('local_llm.remove_flavor', { name: msg.name, flavor_id: msg.flavor_id }));
   }
 }
 
@@ -1452,6 +1480,37 @@ function _setActiveLocalModel(name: string): void {
   activeLocalModelState = name;
   sidebarProvider?.update({ activeLocalModel: name });
   _broadcastThinkingContext();
+}
+
+/**
+ * Selecting a flavor whose `min_ram`/`min_vram` exceed this machine's
+ * detected hardware is allowed, but gated behind a native "I understand the
+ * risk, proceed" / "Cancel" confirmation — proceeding anyway may crash
+ * llama.cpp with an OOM. See `hardwareFitWarningForFlavor` for the
+ * detection-vs-threshold comparison (kodo/doc/LLM_REGISTRY.md §4.6a).
+ * Cancelling never contacts the server — the sidebar's flavor `<select>`
+ * is reset to the real active flavor by re-pushing the unchanged state.
+ */
+async function _setActiveFlavor(name: string, flavorId: string): Promise<void> {
+  const entry = localRegistryState.find((e) => e.name === name);
+  const flavor = entry?.flavors.find((f) => f.id === flavorId);
+  const warning = flavor
+    ? hardwareFitWarningForFlavor(
+        flavor,
+        detectedVramGbState,
+        detectedRamGbState,
+        process.platform === 'darwin',
+      )
+    : null;
+  if (warning) {
+    const proceedLabel = 'I understand the risk, proceed';
+    const choice = await vscode.window.showWarningMessage(warning, { modal: true }, proceedLabel);
+    if (choice !== proceedLabel) {
+      sidebarProvider?.update({});
+      return;
+    }
+  }
+  _sendControl(makeRequest('local_llm.set_active_flavor', { name, flavor_id: flavorId }));
 }
 
 function _setActiveCloudVendor(vendor: string): void {

@@ -27,6 +27,7 @@ export type SidebarMessage =
   | { type: 'new_session' }
   | { type: 'set_mode'; mode: 'local' | 'cloud' }
   | { type: 'set_active_model'; name: string }
+  | { type: 'set_active_flavor'; name: string; flavor_id: string }
   | { type: 'set_cloud_vendor'; vendor: string }
   | { type: 'open_local_inference_settings' }
   | { type: 'open_cloud_ai_settings' }
@@ -204,6 +205,18 @@ function buildHtml(): string {
       font-size: 0.88em;
       color: var(--vscode-descriptionForeground);
       line-height: 1.4;
+    }
+    select.flavor-select {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
+      padding: 3px 5px;
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: 0.9em;
     }
     #restart-btn { margin-bottom: 8px; }
     #restart-btn:disabled { opacity: 0.45; cursor: default; }
@@ -447,6 +460,27 @@ function buildHtml(): string {
         desc.className = 'card-desc';
         desc.textContent = model.description;
         card.appendChild(desc);
+
+        // Flavor picker: not offered for custom_server_url (not a process
+        // kodo launches, so it has no launch args to vary) or an entry with
+        // no flavors at all (every entry that reaches here normally has at
+        // least a built-in/seeded "default" one — see LLM_REGISTRY.md §4.6).
+        const flavors = model.flavors || [];
+        if (model.kind !== 'custom_server_url' && flavors.length > 0) {
+          const select = document.createElement('select');
+          select.className = 'flavor-select';
+          flavors.forEach(f => {
+            const option = document.createElement('option');
+            option.value = f.id;
+            option.textContent = 'Flavor: ' + f.name;
+            select.appendChild(option);
+          });
+          select.value = model.active_flavor || flavors[0].id;
+          select.addEventListener('change', () => {
+            vsc.postMessage({ type: 'set_active_flavor', name: model.name, flavor_id: select.value });
+          });
+          card.appendChild(select);
+        }
 
         section.appendChild(card);
       });

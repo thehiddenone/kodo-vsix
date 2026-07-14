@@ -25,6 +25,49 @@ export type CloudRegistry = Record<string, CloudVendorInfo>;
 
 export type LocalEntryKind = 'hardcoded_hf' | 'custom_hf' | 'custom_file' | 'custom_server_url';
 
+/**
+ * A named llama-server launch config for one local registry entry — the
+ * *only* source of its launch args (a local registry entry carries none of
+ * its own). E.g. a "1M context" variant (YaRN rope-scaling + a much larger
+ * `--ctx-size`) or a "VRAM-tight" variant (`--n-cpu-moe`/`--override-tensor`
+ * tuned for a smaller GPU). Switching the active flavor **fully replaces**
+ * the previously-active one's `llama_args` — flavors are never merged
+ * together (kodo/doc/LLM_REGISTRY.md §4.6). There is no `context_window`
+ * field here any more — the effective context size is deduced server-side
+ * from `llama_args`' own `-c`/`--ctx-size` value (falling back to the
+ * entry's own `context_window`), so it's never sent over the wire.
+ */
+export interface LlamaFlavorInfo {
+  id: string;
+  name: string;
+  description: string;
+  llama_args: Record<string, string>;
+  /**
+   * `true` when `id` is one of the entry's built-in predefined flavors —
+   * stays `true` even after the user edits it (which stores a same-id
+   * *override* rather than changing the predefined definition itself, see
+   * LLM_REGISTRY.md §4.6). Drives the "Manage flavors" modal's "Remove"
+   * button, which stays disabled for these ids.
+   */
+  predefined: boolean;
+  /**
+   * Minimum system RAM (GB) this flavor needs, or the minimum *unified
+   * memory* on Apple Silicon (there, compare against `detectedVramGb` —
+   * `detectedRamGb` is always `null` on macOS, see `detect_ram_gb` in
+   * kodo/llms/_hardware.py). `0` = unknown/no requirement.
+   */
+  min_ram: number;
+  /**
+   * Minimum discrete GPU VRAM (GB) this flavor needs, for a Windows/Linux
+   * GPU setup (always `0` on an Apple Silicon-oriented flavor — see
+   * `min_ram`). `0` = unknown/no requirement. When both `min_ram` and
+   * `min_vram` are `0` the hardware-fit check is inactive — the flavor is
+   * treated as runnable everywhere (see `hardwareFitWarningForFlavor` in
+   * extension.ts).
+   */
+  min_vram: number;
+}
+
 export interface LocalRegistryEntry {
   name: string;
   kind: LocalEntryKind;
@@ -52,6 +95,15 @@ export interface LocalRegistryEntry {
   min_memory: number;
   /** Recommended VRAM (GB) for large contexts; 0 = no known recommendation. */
   memory: number;
+  /**
+   * Predefined + custom flavors, predefined first. Empty for
+   * `custom_server_url`; every other kind normally has at least one (a
+   * built-in "default" for `hardcoded_hf`, or one seeded at creation time
+   * for `custom_hf`/`custom_file` — see LLM_REGISTRY.md §4.6).
+   */
+  flavors: LlamaFlavorInfo[];
+  /** Active flavor id, or "" for unset — falls back to `flavors[0]`. */
+  active_flavor: string;
 }
 
 export type DownloadStatus = 'downloading' | 'paused' | 'failed';
@@ -91,6 +143,69 @@ export function isCustomLocalEntry(kind: LocalEntryKind): boolean {
 /** True for entry kinds that go through the HF download/install pipeline. */
 export function isDownloadableLocalEntry(kind: LocalEntryKind): boolean {
   return kind === 'hardcoded_hf' || kind === 'custom_hf';
+}
+
+/**
+ * `null` if `flavor` is fine to launch given the detected hardware (or the
+ * check is inactive/inconclusive); otherwise a human-readable explanation
+ * — with real detected numbers — suitable for a confirmation dialog's
+ * detail text (see `hardwareFitConfirm` in extension.ts, which gates the
+ * sidebar's flavor `<select>` behind a native "I understand the risk,
+ * proceed" / "Cancel" modal using this).
+ *
+ * `min_ram`/`min_vram` are independent thresholds, never summed — unlike
+ * the entry-level `min_memory`/`memory` combined-pool warning rendered in
+ * the Local Inference Settings panel (kodo/doc/LLM_REGISTRY.md §4.4), this
+ * checks discrete GPU VRAM and system RAM as two separate pools, since a
+ * flavor's launch args (e.g. `--n-gpu-layers -1`, fully on GPU) can have a
+ * real per-pool minimum.
+ *
+ * On Apple Silicon there is one unified memory pool, reported in full via
+ * `detectedVramGb` — `detectedRamGb` is always `null` there (see
+ * `detect_ram_gb` in kodo/llms/_hardware.py). A Mac-oriented flavor
+ * expresses its unified-memory requirement via `min_ram` by convention
+ * (leaving `min_vram` at `0`), so on Mac this checks `min_ram` against
+ * `detectedVramGb` instead of the always-null `detectedRamGb`.
+ *
+ * A `null` detected figure is treated as `0` once at least one of
+ * VRAM/RAM is known; if *both* are `null` (nothing could be detected at
+ * all) the check is skipped entirely rather than blocking on a guess.
+ */
+export function hardwareFitWarningForFlavor(
+  flavor: LlamaFlavorInfo,
+  detectedVramGb: number | null,
+  detectedRamGb: number | null,
+  isMac: boolean,
+): string | null {
+  if (flavor.min_ram <= 0 && flavor.min_vram <= 0) {
+    return null;
+  }
+  const effectiveRamGb = isMac ? detectedVramGb : detectedRamGb;
+  if (detectedVramGb === null && effectiveRamGb === null) {
+    return null;
+  }
+  const vram = detectedVramGb ?? 0;
+  const ram = effectiveRamGb ?? 0;
+  const vramShort = flavor.min_vram > 0 && vram < flavor.min_vram;
+  const ramShort = flavor.min_ram > 0 && ram < flavor.min_ram;
+  if (!vramShort && !ramShort) {
+    return null;
+  }
+
+  const ramLabel = isMac ? 'unified memory' : 'RAM';
+  const needs: string[] = [];
+  const has: string[] = [];
+  if (flavor.min_vram > 0) {
+    needs.push(flavor.min_vram + ' GB VRAM');
+    has.push(vram + ' GB VRAM');
+  }
+  if (flavor.min_ram > 0) {
+    needs.push(flavor.min_ram + ' GB ' + ramLabel);
+    has.push(ram + ' GB ' + ramLabel);
+  }
+  return 'The "' + flavor.name + '" flavor needs at least ' + needs.join(' and ') +
+    ', but this system has ' + has.join(' and ') + ' detected. Proceeding may cause ' +
+    'llama.cpp to crash from running out of memory.';
 }
 
 /** Which llama.cpp reasoning-tiering mechanism a `base_llm` uses — see
