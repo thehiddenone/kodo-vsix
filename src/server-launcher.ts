@@ -189,6 +189,14 @@ export class ServerLauncher {
         stdio: 'ignore',
         detached: false,
         windowsHide: true,
+        // cmd.exe's /c parses its command line with its own quoting rules, not
+        // CommandLineToArgvW. Without this, Node re-escapes the embedded quotes
+        // in the string above (backslash-before-quote) before building the
+        // Win32 command line, which cmd.exe then misparses: the whole `start
+        // "" /b cmd ...` line is silently swallowed, the launcher shell exits 0
+        // having spawned nothing, and no log/discovery file is ever written —
+        // surfacing later as a WS-connect timeout with no diagnostic trace.
+        windowsVerbatimArguments: true,
         env: process.env,
       });
     } else {
