@@ -1,5 +1,6 @@
 import { h } from 'preact';
 import type { ComponentChildren } from 'preact';
+import { useState } from 'preact/hooks';
 import { styles } from './styles';
 // ---------------------------------------------------------------------------
 // Markdown rendering
@@ -202,11 +203,7 @@ function parseBlocks(text: string, kp: string): ComponentChildren[] {
         i++;
       }
       if (i < lines.length) i++; // consume the closing fence
-      blocks.push(
-        <pre key={nextKey()} style={styles.mdPre}>
-          <code>{code.join('\n')}</code>
-        </pre>,
-      );
+      blocks.push(<CodeBlock key={nextKey()} code={code.join('\n')} />);
       continue;
     }
     // Heading
@@ -323,6 +320,48 @@ function parseBlocks(text: string, kp: string): ComponentChildren[] {
     );
   }
   return blocks;
+}
+
+// A fenced code block with a copy-to-clipboard icon that appears on hover.
+// The icon nudges down and to the right on press (same faked-`:active` trick
+// as the bottom-bar FooterButton) and briefly swaps to a checkmark once the
+// text has actually been copied.
+function CodeBlock({ code }: { code: string }) {
+  const [hover, setHover] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const press = () => setPressed(true);
+  const release = () => setPressed(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  return (
+    <div style={styles.mdPreWrap} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <pre style={styles.mdPre}>
+        <code>{code}</code>
+      </pre>
+      {hover && (
+        <button
+          style={styles.mdCopyBtn}
+          title={copied ? 'Copied!' : 'Copy'}
+          onClick={handleCopy}
+          onMouseDown={press}
+          onMouseUp={release}
+          onMouseLeave={release}
+          onTouchStart={press}
+          onTouchEnd={release}
+          onTouchCancel={release}
+        >
+          <span style={pressed ? styles.footerBtnSymbolPressed : styles.footerBtnSymbol}>
+            {copied ? '✓' : '⧉'}
+          </span>
+        </button>
+      )}
+    </div>
+  );
 }
 
 function KodoBlock({ variant, inner }: { variant: KodoVariant; inner: string }) {
