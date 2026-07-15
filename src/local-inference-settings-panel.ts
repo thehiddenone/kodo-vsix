@@ -1374,7 +1374,8 @@ function buildHtml(): string {
 
       // Flavor *selection* lives only in the sidebar now — this button just
       // opens the "Manage flavors" modal (add/edit/remove definitions).
-      if (FLAVOR_CAPABLE.has(entry.kind)) {
+      // Only meaningful once the model is installed — flavors are local files.
+      if (FLAVOR_CAPABLE.has(entry.kind) && entry.installed) {
         const manageBtn = document.createElement('button');
         manageBtn.className = 'secondary-btn';
         manageBtn.type = 'button';
