@@ -65,6 +65,15 @@ export interface PermissionParamRow {
   value: string;
 }
 
+/** The generalized `(executable, subcommand)` shape a permission prompt may
+ *  offer to permanently allow (doc/SECURITY_RULES_PLAN.md §2.2) — e.g.
+ *  `{executable: 'git', subcommand: 'push'}` for `git push origin main`. A
+ *  blank `subcommand` ("") means the executable alone is the shape. */
+export interface RuleOffer {
+  executable: string;
+  subcommand: string;
+}
+
 /** The outstanding prompt.permission request — the security layer wants the
  *  user to allow or deny one gated tool call. Transient (never a session
  *  entry): once decided, the tool call's own card/result records the outcome. */
@@ -85,6 +94,10 @@ export interface PermissionData {
    *  call the model emitted instead of a proper tool call. The panel renders a
    *  distinct "recovered" banner so the user reviews the inferred tool. */
   recovered: boolean;
+  /** The rule shape this ask may be permanently allowed as, or `null` when
+   *  this ask isn't offer-eligible (doc/SECURITY_RULES_PLAN.md §2.2) — the
+   *  panel only shows the "always allow" checkboxes when this is set. */
+  ruleOffer: RuleOffer | null;
 }
 
 /**
@@ -350,7 +363,7 @@ export type Action =
   | { type: 'question_request'; requestId: string; toolCallId: string; questions: AskUserQuestion[] }
   | { type: 'question_answered'; toolCallId: string; answers: AskUserAnswer[] }
   | { type: 'question_cleared' }
-  | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[]; recovered: boolean }
+  | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[]; recovered: boolean; ruleOffer: RuleOffer | null }
   | { type: 'permission_cleared' }
   | {
       type: 'mode_state';

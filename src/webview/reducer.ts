@@ -424,6 +424,7 @@ export function reducer(state: State, action: Action): State {
           reason: action.reason,
           params: action.params,
           recovered: action.recovered,
+          ruleOffer: action.ruleOffer,
         },
         streaming: false,
         awaitingLlm: false,

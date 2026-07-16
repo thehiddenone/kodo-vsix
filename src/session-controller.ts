@@ -120,6 +120,10 @@ interface PermissionData {
   /** True when the gated call was salvaged from a malformed (plain-text) tool
    *  call — the panel shows a distinct "recovered" banner. */
   recovered: boolean;
+  /** The `(executable, subcommand)` shape this ask may be permanently
+   *  allowed as, or `null` when not offer-eligible (doc/SECURITY_RULES_PLAN.md
+   *  §2.2) — drives the panel's "always allow" checkboxes. */
+  ruleOffer: { executable: string; subcommand: string } | null;
 }
 
 /** Collaborators the controller needs from the window-level host. */
@@ -469,16 +473,19 @@ export class SessionController {
         );
         this.pendingGate = null;
         break;
-      case 'permission_respond':
+      case 'permission_respond': {
+        const remember = msg.remember === 'session' || msg.remember === 'global' ? msg.remember : null;
         this._sendStamped(
           makeResponse(String(msg.requestId ?? ''), {
             type: 'prompt.permission.response',
             action: String(msg.action ?? 'deny'),
             feedback: String(msg.feedback ?? '') || null,
+            remember,
           }),
         );
         this.pendingPermission = null;
         break;
+      }
       case 'question_respond': {
         // One entry per question, in order: {selected: string[], free_text: string|null}.
         const rawAnswers = Array.isArray(msg.answers) ? msg.answers : [];
@@ -1109,6 +1116,7 @@ export class SessionController {
 
     if (env.kind === 'request' && evtType === 'prompt.permission') {
       const rawParams = Array.isArray(env.payload.params) ? env.payload.params : [];
+      const rawRuleOffer = env.payload.rule_offer as Record<string, unknown> | null | undefined;
       this.pendingPermission = {
         requestId: env.id,
         toolCallId: String(env.payload.tool_call_id ?? ''),
@@ -1122,6 +1130,9 @@ export class SessionController {
           return { name: String(rec.name ?? ''), value: String(rec.value ?? '') };
         }),
         recovered: env.payload.recovered === true,
+        ruleOffer: rawRuleOffer
+          ? { executable: String(rawRuleOffer.executable ?? ''), subcommand: String(rawRuleOffer.subcommand ?? '') }
+          : null,
       };
       this._post({ type: 'permission_request', ...this.pendingPermission });
       return;

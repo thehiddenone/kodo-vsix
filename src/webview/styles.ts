@@ -851,6 +851,27 @@ export const styles = {
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-all',
   },
+  // "Always allow <shape>" rule-offer checkboxes (doc/SECURITY_RULES_PLAN.md §2.3)
+  permissionRuleOffer: {
+    border: '1px solid var(--vscode-panel-border)',
+    borderRadius: '3px',
+    padding: '6px 8px',
+    marginBottom: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  permissionRuleOfferLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '12px',
+    cursor: 'pointer',
+  },
+  permissionRuleOfferShape: {
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+    fontWeight: 'bold',
+  },
   // ask_user question panel (in-feed, interactive until confirmed)
   askUserPanel: {
     border: '1px solid var(--vscode-focusBorder)',

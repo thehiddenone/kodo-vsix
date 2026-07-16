@@ -250,6 +250,7 @@ export function App() {
             const rec = p as Record<string, unknown>;
             return { name: String(rec.name ?? ''), value: String(rec.value ?? '') };
           });
+          const rawRuleOffer = msg.ruleOffer as Record<string, unknown> | null | undefined;
           dispatch({
             type: 'permission_request',
             requestId: String(msg.requestId ?? ''),
@@ -261,6 +262,9 @@ export function App() {
             reason: String(msg.reason ?? ''),
             params,
             recovered: msg.recovered === true,
+            ruleOffer: rawRuleOffer
+              ? { executable: String(rawRuleOffer.executable ?? ''), subcommand: String(rawRuleOffer.subcommand ?? '') }
+              : null,
           });
           break;
         }
@@ -451,12 +455,13 @@ export function App() {
       {state.pendingPermission !== null ? (
         <PermissionPanel
           permission={state.pendingPermission}
-          onRespond={(action, feedback) => {
+          onRespond={(action, feedback, remember) => {
             vscode.postMessage({
               type: 'permission_respond',
               requestId: state.pendingPermission!.requestId,
               action,
               feedback,
+              remember,
             });
             dispatch({ type: 'permission_cleared' });
           }}

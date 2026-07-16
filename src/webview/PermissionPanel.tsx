@@ -1,4 +1,4 @@
-import { useRef } from 'preact/hooks';
+import { useRef, useState } from 'preact/hooks';
 import { styles } from './styles';
 import type { PermissionData } from './types';
 
@@ -18,19 +18,35 @@ import type { PermissionData } from './types';
  * confirm the guess before running it. A distinct banner flags that (only ever
  * shown outside autonomous mode; the server auto-runs recovered calls when
  * autonomous).
+ *
+ * When `permission.ruleOffer` is set, the security layer judged this ask
+ * generalizable to a permanent "always allow" rule (doc/SECURITY_RULES_PLAN.md
+ * §2.2) — two mutually exclusive checkboxes let the user grant it for this
+ * session only, or for every session on this machine. The choice only takes
+ * effect alongside Allow (the server ignores `remember` on a Deny); clicking
+ * Deny with a scope checked is harmless, not a silent grant.
  */
 
 interface PermissionPanelProps {
   permission: PermissionData;
-  onRespond: (action: 'allow' | 'deny', feedback: string) => void;
+  onRespond: (action: 'allow' | 'deny', feedback: string, remember: 'session' | 'global' | null) => void;
 }
 
 export function PermissionPanel({ permission, onRespond }: PermissionPanelProps) {
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
+  const [remember, setRemember] = useState<'session' | 'global' | null>(null);
 
   function respond(action: 'allow' | 'deny') {
-    onRespond(action, feedbackRef.current?.value.trim() ?? '');
+    onRespond(action, feedbackRef.current?.value.trim() ?? '', remember);
   }
+
+  function toggleRemember(scope: 'session' | 'global') {
+    setRemember((current) => (current === scope ? null : scope));
+  }
+
+  const ruleShape = permission.ruleOffer
+    ? `${permission.ruleOffer.executable} ${permission.ruleOffer.subcommand}`.trim()
+    : '';
 
   return (
     <div style={styles.permissionCard}>
@@ -60,6 +76,28 @@ export function PermissionPanel({ permission, onRespond }: PermissionPanelProps)
               <span style={styles.permissionParamValue}>{p.value}</span>
             </div>
           ))}
+        </div>
+      )}
+      {permission.ruleOffer && (
+        <div style={styles.permissionRuleOffer}>
+          <label style={styles.permissionRuleOfferLabel}>
+            <input
+              type="checkbox"
+              checked={remember === 'session'}
+              onChange={() => toggleRemember('session')}
+            />
+            Always allow <span style={styles.permissionRuleOfferShape}>{ruleShape}</span> — this
+            session
+          </label>
+          <label style={styles.permissionRuleOfferLabel}>
+            <input
+              type="checkbox"
+              checked={remember === 'global'}
+              onChange={() => toggleRemember('global')}
+            />
+            Always allow <span style={styles.permissionRuleOfferShape}>{ruleShape}</span> — all
+            sessions
+          </label>
         </div>
       )}
       <div style={styles.gateActions}>
