@@ -1,6 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
 import { styles } from './styles';
-import type { PermissionData } from './types';
+import type { PermissionData, PermissionPart, RuleOffer } from './types';
 
 /**
  * Security-layer permission prompt (`prompt.permission`, WS_PROTOCOL.md §6.5).
@@ -19,34 +19,65 @@ import type { PermissionData } from './types';
  * shown outside autonomous mode; the server auto-runs recovered calls when
  * autonomous).
  *
- * When `permission.ruleOffer` is set, the security layer judged this ask
- * generalizable to a permanent "always allow" rule (doc/SECURITY_RULES_PLAN.md
- * §2.2) — two mutually exclusive checkboxes let the user grant it for this
- * session only, or for every session on this machine. The choice only takes
- * effect alongside Allow (the server ignores `remember` on a Deny); clicking
- * Deny with a scope checked is harmless, not a silent grant.
+ * `permission.parts` is every elementary command within the call that still
+ * needs attention (doc/SECURITY_RULES_PLAN.md §2.6) — one for an ordinary
+ * single-command ask, several for a compound pipeline/`&&`/`;` chain where
+ * each part was judged independently. A single part renders exactly as
+ * before: the top `reason` banner plus, when that part's `ruleOffer` is set,
+ * one checkbox pair ("this session" / "all sessions", mutually exclusive).
+ * More than one part renders the top `reason` as a summary, then one block
+ * per part with its own reason line and its own checkbox pair. The choice
+ * only takes effect alongside Allow (the server ignores `remember` on a
+ * Deny); clicking Deny with boxes checked is harmless, not a silent grant.
  */
 
 interface PermissionPanelProps {
   permission: PermissionData;
-  onRespond: (action: 'allow' | 'deny', feedback: string, remember: 'session' | 'global' | null) => void;
+  onRespond: (action: 'allow' | 'deny', feedback: string, remember: ('session' | 'global' | null)[]) => void;
+}
+
+function ruleShapeText(offer: RuleOffer): string {
+  return `${offer.executable} ${offer.subcommand}`.trim();
+}
+
+interface RuleOfferCheckboxesProps {
+  offer: RuleOffer;
+  remembered: 'session' | 'global' | null;
+  onToggle: (scope: 'session' | 'global') => void;
+}
+
+function RuleOfferCheckboxes({ offer, remembered, onToggle }: RuleOfferCheckboxesProps) {
+  const shape = ruleShapeText(offer);
+  return (
+    <div style={styles.permissionRuleOffer}>
+      <label style={styles.permissionRuleOfferLabel}>
+        <input type="checkbox" checked={remembered === 'session'} onChange={() => onToggle('session')} />
+        Always allow <span style={styles.permissionRuleOfferShape}>{shape}</span> — this session
+      </label>
+      <label style={styles.permissionRuleOfferLabel}>
+        <input type="checkbox" checked={remembered === 'global'} onChange={() => onToggle('global')} />
+        Always allow <span style={styles.permissionRuleOfferShape}>{shape}</span> — all sessions
+      </label>
+    </div>
+  );
 }
 
 export function PermissionPanel({ permission, onRespond }: PermissionPanelProps) {
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
-  const [remember, setRemember] = useState<'session' | 'global' | null>(null);
+  const [remember, setRemember] = useState<('session' | 'global' | null)[]>(() =>
+    permission.parts.map(() => null),
+  );
 
   function respond(action: 'allow' | 'deny') {
     onRespond(action, feedbackRef.current?.value.trim() ?? '', remember);
   }
 
-  function toggleRemember(scope: 'session' | 'global') {
-    setRemember((current) => (current === scope ? null : scope));
+  function toggleRemember(index: number, scope: 'session' | 'global') {
+    setRemember((current) => current.map((v, i) => (i === index ? (v === scope ? null : scope) : v)));
   }
 
-  const ruleShape = permission.ruleOffer
-    ? `${permission.ruleOffer.executable} ${permission.ruleOffer.subcommand}`.trim()
-    : '';
+  const parts: PermissionPart[] = permission.parts;
+  const singlePart = parts.length === 1 ? parts[0] : null;
 
   return (
     <div style={styles.permissionCard}>
@@ -78,26 +109,27 @@ export function PermissionPanel({ permission, onRespond }: PermissionPanelProps)
           ))}
         </div>
       )}
-      {permission.ruleOffer && (
-        <div style={styles.permissionRuleOffer}>
-          <label style={styles.permissionRuleOfferLabel}>
-            <input
-              type="checkbox"
-              checked={remember === 'session'}
-              onChange={() => toggleRemember('session')}
-            />
-            Always allow <span style={styles.permissionRuleOfferShape}>{ruleShape}</span> — this
-            session
-          </label>
-          <label style={styles.permissionRuleOfferLabel}>
-            <input
-              type="checkbox"
-              checked={remember === 'global'}
-              onChange={() => toggleRemember('global')}
-            />
-            Always allow <span style={styles.permissionRuleOfferShape}>{ruleShape}</span> — all
-            sessions
-          </label>
+      {singlePart?.ruleOffer && (
+        <RuleOfferCheckboxes
+          offer={singlePart.ruleOffer}
+          remembered={remember[0] ?? null}
+          onToggle={(scope) => toggleRemember(0, scope)}
+        />
+      )}
+      {parts.length > 1 && (
+        <div style={styles.permissionParts}>
+          {parts.map((part, i) => (
+            <div key={i} style={styles.permissionPartBlock}>
+              <div style={styles.permissionPartReason}>{part.reason}</div>
+              {part.ruleOffer && (
+                <RuleOfferCheckboxes
+                  offer={part.ruleOffer}
+                  remembered={remember[i] ?? null}
+                  onToggle={(scope) => toggleRemember(i, scope)}
+                />
+              )}
+            </div>
+          ))}
         </div>
       )}
       <div style={styles.gateActions}>

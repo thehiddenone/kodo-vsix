@@ -106,6 +106,16 @@ interface QuestionData {
   questions: AskUserQuestion[];
 }
 
+/** One elementary command within a (possibly compound) `run_command` ask
+ *  that still needs the user's attention (doc/SECURITY_RULES_PLAN.md §2.6). */
+interface PermissionPart {
+  reason: string;
+  /** The `(executable, subcommand)` shape this part may be permanently
+   *  allowed as, or `null` when not offer-eligible — drives this part's
+   *  "always allow" checkboxes. */
+  ruleOffer: { executable: string; subcommand: string } | null;
+}
+
 /** The outstanding `prompt.permission` request — the security layer wants an
  *  allow/deny for one gated tool call (WS_PROTOCOL.md §6.5). */
 interface PermissionData {
@@ -120,10 +130,10 @@ interface PermissionData {
   /** True when the gated call was salvaged from a malformed (plain-text) tool
    *  call — the panel shows a distinct "recovered" banner. */
   recovered: boolean;
-  /** The `(executable, subcommand)` shape this ask may be permanently
-   *  allowed as, or `null` when not offer-eligible (doc/SECURITY_RULES_PLAN.md
-   *  §2.2) — drives the panel's "always allow" checkboxes. */
-  ruleOffer: { executable: string; subcommand: string } | null;
+  /** Every elementary command that still needs attention, in command order
+   *  (doc/SECURITY_RULES_PLAN.md §2.6) — empty for an ordinary Allow/Deny-only
+   *  prompt with no offer. */
+  parts: PermissionPart[];
 }
 
 /** Collaborators the controller needs from the window-level host. */
@@ -474,7 +484,10 @@ export class SessionController {
         this.pendingGate = null;
         break;
       case 'permission_respond': {
-        const remember = msg.remember === 'session' || msg.remember === 'global' ? msg.remember : null;
+        // One entry per part the server offered (parallel to `parts` on the
+        // original prompt.permission request) — 'session' | 'global' | null.
+        const rawRemember = Array.isArray(msg.remember) ? msg.remember : [];
+        const remember = rawRemember.map((r) => (r === 'session' || r === 'global' ? r : null));
         this._sendStamped(
           makeResponse(String(msg.requestId ?? ''), {
             type: 'prompt.permission.response',
@@ -1116,7 +1129,17 @@ export class SessionController {
 
     if (env.kind === 'request' && evtType === 'prompt.permission') {
       const rawParams = Array.isArray(env.payload.params) ? env.payload.params : [];
-      const rawRuleOffer = env.payload.rule_offer as Record<string, unknown> | null | undefined;
+      const rawParts = Array.isArray(env.payload.parts) ? env.payload.parts : [];
+      const parts: PermissionPart[] = rawParts.map((p) => {
+        const rec = p as Record<string, unknown>;
+        const rawOffer = rec.rule_offer as Record<string, unknown> | null | undefined;
+        return {
+          reason: String(rec.reason ?? ''),
+          ruleOffer: rawOffer
+            ? { executable: String(rawOffer.executable ?? ''), subcommand: String(rawOffer.subcommand ?? '') }
+            : null,
+        };
+      });
       this.pendingPermission = {
         requestId: env.id,
         toolCallId: String(env.payload.tool_call_id ?? ''),
@@ -1130,9 +1153,7 @@ export class SessionController {
           return { name: String(rec.name ?? ''), value: String(rec.value ?? '') };
         }),
         recovered: env.payload.recovered === true,
-        ruleOffer: rawRuleOffer
-          ? { executable: String(rawRuleOffer.executable ?? ''), subcommand: String(rawRuleOffer.subcommand ?? '') }
-          : null,
+        parts,
       };
       this._post({ type: 'permission_request', ...this.pendingPermission });
       return;

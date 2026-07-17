@@ -872,6 +872,22 @@ export const styles = {
     fontFamily: 'var(--vscode-editor-font-family, monospace)',
     fontWeight: 'bold',
   },
+  // Per-part breakdown for a compound command (doc/SECURITY_RULES_PLAN.md §2.6)
+  // — only rendered when the ask carries more than one part.
+  permissionParts: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  permissionPartBlock: {
+    borderLeft: '2px solid var(--vscode-panel-border)',
+    paddingLeft: '8px',
+  },
+  permissionPartReason: {
+    fontSize: '12px',
+    marginBottom: '4px',
+  },
   // ask_user question panel (in-feed, interactive until confirmed)
   askUserPanel: {
     border: '1px solid var(--vscode-focusBorder)',

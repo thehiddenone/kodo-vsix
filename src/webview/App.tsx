@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
-import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow } from './types';
+import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart } from './types';
 import { coerceEditControl, coerceCommandControl } from './types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
@@ -250,7 +250,17 @@ export function App() {
             const rec = p as Record<string, unknown>;
             return { name: String(rec.name ?? ''), value: String(rec.value ?? '') };
           });
-          const rawRuleOffer = msg.ruleOffer as Record<string, unknown> | null | undefined;
+          const rawParts = Array.isArray(msg.parts) ? msg.parts : [];
+          const parts: PermissionPart[] = rawParts.map((p) => {
+            const rec = p as Record<string, unknown>;
+            const rawOffer = rec.ruleOffer as Record<string, unknown> | null | undefined;
+            return {
+              reason: String(rec.reason ?? ''),
+              ruleOffer: rawOffer
+                ? { executable: String(rawOffer.executable ?? ''), subcommand: String(rawOffer.subcommand ?? '') }
+                : null,
+            };
+          });
           dispatch({
             type: 'permission_request',
             requestId: String(msg.requestId ?? ''),
@@ -262,9 +272,7 @@ export function App() {
             reason: String(msg.reason ?? ''),
             params,
             recovered: msg.recovered === true,
-            ruleOffer: rawRuleOffer
-              ? { executable: String(rawRuleOffer.executable ?? ''), subcommand: String(rawRuleOffer.subcommand ?? '') }
-              : null,
+            parts,
           });
           break;
         }

@@ -74,6 +74,19 @@ export interface RuleOffer {
   subcommand: string;
 }
 
+/** One elementary command within a (possibly compound) `run_command` ask
+ *  that still needs the user's attention (doc/SECURITY_RULES_PLAN.md §2.6).
+ *  A simple, single-command ask carries exactly one; a pipeline/`&&`/`;`
+ *  chain may carry several, each independently checkable. */
+export interface PermissionPart {
+  /** One user-facing sentence explaining why this part asks. */
+  reason: string;
+  /** The rule shape this part may be permanently allowed as, or `null` when
+   *  this part isn't offer-eligible — the panel only shows this part's
+   *  "always allow" checkboxes when set. */
+  ruleOffer: RuleOffer | null;
+}
+
 /** The outstanding prompt.permission request — the security layer wants the
  *  user to allow or deny one gated tool call. Transient (never a session
  *  entry): once decided, the tool call's own card/result records the outcome. */
@@ -87,17 +100,18 @@ export interface PermissionData {
   risk: string;
   /** The agent's declared intent ("" when the tool carries none). */
   intent: string;
-  /** The security layer's one-sentence reason for asking. */
+  /** The security layer's one-sentence reason for asking — a summary when
+   *  `parts.length > 1`. */
   reason: string;
   params: PermissionParamRow[];
   /** True when the gated call was salvaged from a malformed (plain-text) tool
    *  call the model emitted instead of a proper tool call. The panel renders a
    *  distinct "recovered" banner so the user reviews the inferred tool. */
   recovered: boolean;
-  /** The rule shape this ask may be permanently allowed as, or `null` when
-   *  this ask isn't offer-eligible (doc/SECURITY_RULES_PLAN.md §2.2) — the
-   *  panel only shows the "always allow" checkboxes when this is set. */
-  ruleOffer: RuleOffer | null;
+  /** Every elementary command that still needs the user's attention, in
+   *  command order (doc/SECURITY_RULES_PLAN.md §2.6) — empty for an
+   *  ordinary Allow/Deny-only prompt with no offer. */
+  parts: PermissionPart[];
 }
 
 /**
@@ -363,7 +377,7 @@ export type Action =
   | { type: 'question_request'; requestId: string; toolCallId: string; questions: AskUserQuestion[] }
   | { type: 'question_answered'; toolCallId: string; answers: AskUserAnswer[] }
   | { type: 'question_cleared' }
-  | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[]; recovered: boolean; ruleOffer: RuleOffer | null }
+  | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[]; recovered: boolean; parts: PermissionPart[] }
   | { type: 'permission_cleared' }
   | {
       type: 'mode_state';
