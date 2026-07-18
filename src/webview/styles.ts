@@ -679,6 +679,22 @@ export const styles = {
   securityRuleAddedIcon: {
     flexShrink: 0,
   },
+  // Stuck-agent watchdog's continuation nudge (doc/STUCK_DETECTION.md) — the
+  // user-facing explanation of why Kōdo told the agent to keep going.
+  agentUnstuckNudge: {
+    fontSize: '12px',
+    marginTop: '4px',
+    marginBottom: '2px',
+    display: 'flex',
+    gap: '4px',
+    alignItems: 'baseline',
+  },
+  agentUnstuckNudgeIcon: {
+    flexShrink: 0,
+  },
+  agentUnstuckNudgeText: {
+    color: 'var(--vscode-descriptionForeground)',
+  },
   // File events
   fileEvents: {
     borderTop: '1px solid var(--vscode-panel-border)',
@@ -903,6 +919,53 @@ export const styles = {
   permissionPartReason: {
     fontSize: '12px',
     marginBottom: '4px',
+  },
+  // Stuck-agent watchdog alarm (doc/STUCK_DETECTION.md) — modeled on the
+  // permission card's layout, but info-blue rather than warning-amber (this
+  // is a behavioral observation, not a security risk) and with no rule
+  // checkboxes: there is nothing here to "always allow".
+  stuckAlertCard: {
+    border: '1px solid var(--vscode-inputValidation-infoBorder, var(--vscode-focusBorder))',
+    borderRadius: '4px',
+    padding: '10px',
+    marginBottom: '8px',
+    background: 'var(--vscode-editor-background)',
+  },
+  stuckAlertBadge: {
+    marginLeft: 'auto',
+    background: 'var(--vscode-inputValidation-infoBackground, var(--vscode-badge-background))',
+    color: 'var(--vscode-foreground)',
+    border: '1px solid var(--vscode-inputValidation-infoBorder, transparent)',
+    borderRadius: '3px',
+    padding: '1px 6px',
+    fontSize: '10px',
+    fontWeight: 'bold',
+    whiteSpace: 'nowrap',
+  },
+  stuckAlertReasons: {
+    fontSize: '12px',
+    lineHeight: '1.5',
+    marginBottom: '8px',
+    paddingLeft: '18px',
+  },
+  stuckAlertBtn: {
+    background: 'var(--vscode-button-background)',
+    color: 'var(--vscode-button-foreground)',
+    border: 'none',
+    borderRadius: '2px',
+    padding: '6px 16px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    alignSelf: 'flex-start',
+  },
+  stuckAlertDismissBtn: {
+    background: 'var(--vscode-button-secondaryBackground, transparent)',
+    color: 'var(--vscode-button-secondaryForeground, var(--vscode-foreground))',
+    border: '1px solid var(--vscode-panel-border)',
+    borderRadius: '2px',
+    padding: '6px 12px',
+    cursor: 'pointer',
+    alignSelf: 'flex-start',
   },
   // ask_user question panel (in-feed, interactive until confirmed)
   askUserPanel: {

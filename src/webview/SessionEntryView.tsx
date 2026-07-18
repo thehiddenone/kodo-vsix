@@ -364,5 +364,15 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
         </div>
       );
     }
+    case 'agent_unstuck_nudge':
+      // The stuck-watchdog's continuation nudge (doc/STUCK_DETECTION.md) —
+      // the actual continuation instruction was sent to the agent as a real
+      // turn, but here we show only the user-facing explanation of why.
+      return (
+        <div style={styles.agentUnstuckNudge}>
+          <span style={styles.agentUnstuckNudgeIcon}>↻</span>
+          <span style={styles.agentUnstuckNudgeText}>{entry.note}</span>
+        </div>
+      );
   }
 }

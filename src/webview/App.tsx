@@ -14,6 +14,7 @@ import { FileEventList } from './FileEventList';
 import { ApprovalGate } from './gates';
 import { AskUserPanel } from './AskUserPanel';
 import { PermissionPanel } from './PermissionPanel';
+import { StuckAlertPanel } from './StuckAlertPanel';
 import { ModeControls } from './ModeControls';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { FooterButton } from './FooterButton';
@@ -285,6 +286,27 @@ export function App() {
           });
           break;
         }
+        case 'stuck_alert_request': {
+          const rawReasons = Array.isArray(msg.reasons) ? msg.reasons : [];
+          dispatch({
+            type: 'stuck_alert_request',
+            requestId: String(msg.requestId ?? ''),
+            agentName: String(msg.agentName ?? ''),
+            displayName: String(msg.displayName ?? ''),
+            reasons: rawReasons.map((r) => String(r)),
+          });
+          break;
+        }
+        case 'agent_unstuck_nudge': {
+          const rawReasons = Array.isArray(msg.reasons) ? msg.reasons : [];
+          dispatch({
+            type: 'agent_unstuck_nudge',
+            note: String(msg.note ?? ''),
+            reasons: rawReasons.map((r) => String(r)),
+            mode: String(msg.mode ?? ''),
+          });
+          break;
+        }
         case 'mode_state':
           dispatch({
             type: 'mode_state',
@@ -354,7 +376,10 @@ export function App() {
   // field, so it is always 'IDLE' and must not gate the Stop button.
   const isRunning = state.running;
   const isBlocked =
-    state.pendingGate !== null || state.pendingQuestion !== null || state.pendingPermission !== null;
+    state.pendingGate !== null ||
+    state.pendingQuestion !== null ||
+    state.pendingPermission !== null ||
+    state.pendingStuckAlert !== null;
 
   function handleStop() {
     vscode.postMessage({ type: 'stop' });
@@ -466,9 +491,10 @@ export function App() {
         <FileEventList events={state.fileEvents} />
       )}
 
-      {/* Permission prompt / approval gate (replace the prompt input when
-          pending). Questions render in-feed as AskUserPanel; while one is
-          pending the prompt input below stays disabled via isBlocked. */}
+      {/* Permission prompt / stuck-agent alarm / approval gate (replace the
+          prompt input when pending). Questions render in-feed as
+          AskUserPanel; while one is pending the prompt input below stays
+          disabled via isBlocked. */}
       {state.pendingPermission !== null ? (
         <PermissionPanel
           permission={state.pendingPermission}
@@ -481,6 +507,18 @@ export function App() {
               remember,
             });
             dispatch({ type: 'permission_cleared' });
+          }}
+        />
+      ) : state.pendingStuckAlert !== null ? (
+        <StuckAlertPanel
+          alert={state.pendingStuckAlert}
+          onRespond={(action) => {
+            vscode.postMessage({
+              type: 'stuck_alert_respond',
+              requestId: state.pendingStuckAlert!.requestId,
+              action,
+            });
+            dispatch({ type: 'stuck_alert_cleared' });
           }}
         />
       ) : state.pendingGate !== null ? (

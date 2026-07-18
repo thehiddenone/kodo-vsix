@@ -44,6 +44,7 @@ export function reducer(state: State, action: Action): State {
         pendingGate: null,
         pendingQuestion: null,
         pendingPermission: null,
+        pendingStuckAlert: null,
         namingSession: false,
         attachedFiles: [],
       };
@@ -431,6 +432,41 @@ export function reducer(state: State, action: Action): State {
       };
     case 'permission_cleared':
       return { ...state, pendingPermission: null };
+    case 'stuck_alert_request':
+      // The stuck-agent watchdog wants to know whether to nudge a stalled
+      // agent (doc/STUCK_DETECTION.md). Transient like pendingPermission:
+      // once decided, the "unstick" action produces its own
+      // agent_unstuck_nudge session entry recording the outcome.
+      return {
+        ...state,
+        pendingStuckAlert: {
+          requestId: action.requestId,
+          agentName: action.agentName,
+          displayName: action.displayName,
+          reasons: action.reasons,
+        },
+        streaming: false,
+        awaitingLlm: false,
+      };
+    case 'stuck_alert_cleared':
+      return { ...state, pendingStuckAlert: null };
+    case 'agent_unstuck_nudge':
+      // The watchdog's continuation nudge just landed — a plain append,
+      // mirroring 'security_rule_added': it fires right after the nudge is
+      // persisted, before the agent's next turn starts streaming.
+      return {
+        ...state,
+        session: [
+          ...state.session,
+          {
+            type: 'agent_unstuck_nudge',
+            note: action.note,
+            reasons: action.reasons,
+            mode: action.mode,
+            exclude_from_context: true,
+          },
+        ],
+      };
     case 'security_rule_added':
       // The user's own record of a just-granted "always allow" rule
       // (WS_PROTOCOL.md §5.9d) — a plain append, mirroring 'tool_call': it
@@ -615,6 +651,19 @@ export function reducer(state: State, action: Action): State {
             offer: { executable: String(e.executable ?? ''), subcommand: String(e.subcommand ?? '') },
             exclude_from_context: true,
           });
+        } else if (type === 'agent_unstuck_nudge') {
+          // Replay of a persisted "agent_unstuck_nudge"-kind message
+          // (doc/STUCK_DETECTION.md) — same notice the live
+          // 'agent_unstuck_nudge' action renders, so a reload doesn't lose
+          // the record of why the agent kept going.
+          const reasons = Array.isArray(e.reasons) ? e.reasons.map((r) => String(r)) : [];
+          entries.push({
+            type: 'agent_unstuck_nudge',
+            note: String(e.note ?? ''),
+            reasons,
+            mode: String(e.mode ?? ''),
+            exclude_from_context: true,
+          });
         }
       }
       // session.history is (re-)sent on every reconnect, including one where
@@ -741,6 +790,7 @@ export const initial: State = {
   pendingGate: null,
   pendingQuestion: null,
   pendingPermission: null,
+  pendingStuckAlert: null,
   autonomous: false,
   effectiveAutonomous: false,
   workflowMode: 'problem_solving',

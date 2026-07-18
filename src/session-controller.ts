@@ -136,6 +136,16 @@ interface PermissionData {
   parts: PermissionPart[];
 }
 
+/** The outstanding `prompt.stuck_alert` request — the stuck-agent watchdog
+ *  (doc/STUCK_DETECTION.md) wants to know whether to nudge a stalled agent. */
+interface StuckAlertData {
+  requestId: string;
+  agentName: string;
+  displayName: string;
+  /** One-sentence, user-facing description per matched red flag. */
+  reasons: string[];
+}
+
 /** Collaborators the controller needs from the window-level host. */
 export interface SessionDeps {
   context: vscode.ExtensionContext;
@@ -212,6 +222,7 @@ export class SessionController {
   private pendingGate: GateData | null = null;
   private pendingQuestion: QuestionData | null = null;
   private pendingPermission: PermissionData | null = null;
+  private pendingStuckAlert: StuckAlertData | null = null;
   private sessionHistory: Record<string, unknown>[] | null = null;
   private sessionName = '';
   // The two *frozen* toggles come in pairs: the user-facing *selected* value
@@ -499,6 +510,15 @@ export class SessionController {
         this.pendingPermission = null;
         break;
       }
+      case 'stuck_alert_respond':
+        this._sendStamped(
+          makeResponse(String(msg.requestId ?? ''), {
+            type: 'prompt.stuck_alert.response',
+            action: String(msg.action ?? 'dismiss'),
+          }),
+        );
+        this.pendingStuckAlert = null;
+        break;
       case 'question_respond': {
         // One entry per question, in order: {selected: string[], free_text: string|null}.
         const rawAnswers = Array.isArray(msg.answers) ? msg.answers : [];
@@ -648,6 +668,7 @@ export class SessionController {
     this.pendingGate = null;
     this.pendingQuestion = null;
     this.pendingPermission = null;
+    this.pendingStuckAlert = null;
     this._sendStamped(makeRequest('prompt.submit', { text: this._composePrompt(text) }));
     this._clearAttachments();
   }
@@ -920,6 +941,9 @@ export class SessionController {
     if (this.pendingPermission !== null) {
       this._post({ type: 'permission_request', ...this.pendingPermission });
     }
+    if (this.pendingStuckAlert !== null) {
+      this._post({ type: 'stuck_alert_request', ...this.pendingStuckAlert });
+    }
     if (this.resumeSessionId !== null) {
       this._post({ type: 'resume_offer', sessionId: this.resumeSessionId });
     }
@@ -1156,6 +1180,17 @@ export class SessionController {
         parts,
       };
       this._post({ type: 'permission_request', ...this.pendingPermission });
+      return;
+    }
+
+    if (env.kind === 'request' && evtType === 'prompt.stuck_alert') {
+      this.pendingStuckAlert = {
+        requestId: env.id,
+        agentName: String(env.payload.agent_name ?? ''),
+        displayName: String(env.payload.display_name ?? ''),
+        reasons: Array.isArray(env.payload.reasons) ? env.payload.reasons.map((r) => String(r)) : [],
+      };
+      this._post({ type: 'stuck_alert_request', ...this.pendingStuckAlert });
       return;
     }
 
@@ -1396,6 +1431,17 @@ export class SessionController {
           executable: String(env.payload.executable ?? ''),
           subcommand: String(env.payload.subcommand ?? ''),
         },
+      });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'agent.unstuck_nudge') {
+      const rawReasons = Array.isArray(env.payload.reasons) ? env.payload.reasons : [];
+      this._post({
+        type: 'agent_unstuck_nudge',
+        note: String(env.payload.note ?? ''),
+        reasons: rawReasons.map((r) => String(r)),
+        mode: String(env.payload.mode ?? ''),
       });
       return;
     }

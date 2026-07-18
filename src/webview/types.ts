@@ -114,6 +114,18 @@ export interface PermissionData {
   parts: PermissionPart[];
 }
 
+/** The outstanding prompt.stuck_alert request — the stuck-agent watchdog
+ *  (doc/STUCK_DETECTION.md) wants to know whether to nudge a stalled agent.
+ *  Transient (never a session entry): once decided, an "unstick" produces its
+ *  own agent_unstuck_nudge entry recording the outcome. */
+export interface StuckAlertData {
+  requestId: string;
+  agentName: string;
+  displayName: string;
+  /** One-sentence, user-facing description per matched red flag. */
+  reasons: string[];
+}
+
 /**
  * A session entry is a JSON object in the session array.
  *
@@ -247,7 +259,15 @@ export type SessionEntry =
   // as a permission prompt's RuleOffer — subcommand holds a resolved
   // absolute path for a workspace-escape/path rule). Persisted as a
   // "security_rule_added" marker and replayed via session_history on reload.
-  | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer; exclude_from_context: true };
+  | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer; exclude_from_context: true }
+  // The stuck-agent watchdog's continuation nudge (doc/STUCK_DETECTION.md) —
+  // a real user-role turn the agent responds to, but rendered as a distinct
+  // notice (not a fake user-typed bubble), mirroring 'subagent_task'. `note`
+  // is the user-facing explanation of what Kōdo observed; `reasons` are the
+  // matched red-flag codes; `mode` is "auto" (autonomous/auto-unstuck) or
+  // "manual" (the user clicked "Unstick it"). Persisted as an
+  // "agent_unstuck_nudge"-kind message and replayed via session_history.
+  | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -279,6 +299,9 @@ export interface State {
   /** Outstanding security permission prompt, or null. Replaces the prompt
    *  input (like pendingGate) until the user allows or denies. */
   pendingPermission: PermissionData | null;
+  /** Outstanding stuck-agent alarm, or null. Replaces the prompt input (like
+   *  pendingGate) until the user unsticks the agent or dismisses it. */
+  pendingStuckAlert: StuckAlertData | null;
   // The two *frozen* toggles are pairs: the user-facing *selected* value (flips
   // the instant the user clicks) and the per-turn frozen *effective* value the
   // server reports. While a turn runs and the two differ, the toggle is "queued
@@ -386,6 +409,9 @@ export type Action =
   | { type: 'question_cleared' }
   | { type: 'permission_request'; requestId: string; toolCallId: string; toolName: string; externalName: string; risk: string; intent: string; reason: string; params: PermissionParamRow[]; recovered: boolean; parts: PermissionPart[] }
   | { type: 'permission_cleared' }
+  | { type: 'stuck_alert_request'; requestId: string; agentName: string; displayName: string; reasons: string[] }
+  | { type: 'stuck_alert_cleared' }
+  | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string }
   | {
       type: 'mode_state';
       autonomous: boolean;
