@@ -43,6 +43,11 @@
         "icon": "images/kodo16px.svg"
       },
       {
+        "command": "kodo.openSettings",
+        "title": "Kōdo: Settings",
+        "icon": "$(gear)"
+      },
+      {
         "command": "kodo.newSession",
         "title": "Kōdo: Start New Session",
         "icon": "images/kodo16px.svg"
@@ -71,7 +76,7 @@
     "menus": {
       "view/title": [
         {
-          "command": "kodo.openPanel",
+          "command": "kodo.openSettings",
           "when": "view == kodo.view",
           "group": "navigation"
         }

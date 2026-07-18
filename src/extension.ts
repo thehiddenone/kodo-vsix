@@ -29,6 +29,8 @@ import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
+import { KodoSettingsPanel } from './kodo-settings-panel';
+import type { GlobalRuleEntry, KodoSettingsMessage } from './kodo-settings-panel';
 import type {
   CloudRegistry,
   EffortLevel,
@@ -405,6 +407,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     }),
     vscode.commands.registerCommand('kodo.openPanel', () => openPanel()),
+    vscode.commands.registerCommand('kodo.openSettings', () => void _openKodoSettings()),
     vscode.commands.registerCommand('kodo.newSession', () => newSession()),
     vscode.commands.registerCommand('kodo.createProject', () => createProject()),
     vscode.commands.registerCommand('kodo.useCloudLLMs', () => _setMode('cloud')),
@@ -1323,6 +1326,75 @@ function _openCloudAiSettings(): void {
     { cloudRegistry: cloudRegistryState, modelsByVendor: _readCloudModels(), keysByVendor },
     (msg: CloudAiSettingsMessage) => void _onCloudAiSettingsMessage(msg),
   );
+}
+
+/** Parse a `security.rules.list.ack`/`.delete.ack` `rules` payload
+ * (kodo/doc/WS_PROTOCOL.md §7.6c) — malformed/unknown entries are dropped
+ * rather than shown as broken rows. */
+function _parseGlobalRules(raw: unknown): GlobalRuleEntry[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: GlobalRuleEntry[] = [];
+  for (const entry of raw as unknown[]) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const rec = entry as Record<string, unknown>;
+    const executable = typeof rec.executable === 'string' ? rec.executable : '';
+    const value = typeof rec.value === 'string' ? rec.value : '';
+    if (!executable || !value) {
+      continue;
+    }
+    out.push({ kind: rec.kind === 'path' ? 'path' : 'command', executable, value });
+  }
+  return out;
+}
+
+/** Fetch the current global rule set from the server. Returns `[]` (and shows
+ * a toast) if the server is unreachable — the caller opens/refreshes the panel
+ * either way. */
+async function _fetchGlobalRules(): Promise<GlobalRuleEntry[]> {
+  try {
+    const resp = await sendControlAwait('security.rules.list');
+    return _parseGlobalRules(resp.rules);
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to load global allow-rules.');
+    return [];
+  }
+}
+
+/** Open (or reveal) the Kōdo Settings panel, seeded with the current global
+ * rules fetched up-front.
+ *
+ * The rules are fetched BEFORE the panel is created so its webview is
+ * constructed with fully-populated state — exactly like the local-inference
+ * and cloud-ai panels. The previous approach opened the panel with an empty
+ * list and relied on a later `security.rules.list` response arriving as an
+ * async `update` postMessage; that message could race the freshly-created
+ * webview's load and be dropped, leaving the panel showing nothing (the panel
+ * has no static shell — every row is produced by the webview's `render()`,
+ * which only ran on receipt of an `update`). Fetching first makes the initial
+ * data ride the reliable `ready`→`update` handshake instead. */
+async function _openKodoSettings(): Promise<void> {
+  const rules = await _fetchGlobalRules();
+  const panel = KodoSettingsPanel.createOrShow({ rules }, (msg) => void _onKodoSettingsMessage(msg));
+  // For an already-open panel, createOrShow only revealed it (initialState is
+  // ignored) — push the freshly-fetched rules in explicitly so re-opening the
+  // panel always reflects current state.
+  panel.update({ rules });
+}
+
+async function _onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
+  if (msg.type !== 'delete_rules') {
+    return;
+  }
+  try {
+    const resp = await sendControlAwait('security.rules.delete', { rules: msg.rules });
+    KodoSettingsPanel.instance?.update({ rules: _parseGlobalRules(resp.rules) });
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to delete the selected rule(s).');
+  }
 }
 
 async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessage): Promise<void> {
