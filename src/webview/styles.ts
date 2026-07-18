@@ -663,6 +663,22 @@ export const styles = {
     fontSize: '12px',
     color: 'var(--vscode-foreground)',
   },
+  // A just-granted "always allow" security rule notice (WS_PROTOCOL.md §5.9d)
+  // — the header row mirrors a tool call's (icon + label), and its details
+  // sit in the same boxed/monospace table (toolCallBox/toolCallTable) a tool
+  // call uses for its parameters, just with an info icon instead of a
+  // success/failure one and only the two rows that matter (command, scope).
+  securityRuleAdded: {
+    fontSize: '12px',
+    marginTop: '4px',
+    marginBottom: '2px',
+    display: 'flex',
+    gap: '4px',
+    alignItems: 'baseline',
+  },
+  securityRuleAddedIcon: {
+    flexShrink: 0,
+  },
   // File events
   fileEvents: {
     borderTop: '1px solid var(--vscode-panel-border)',

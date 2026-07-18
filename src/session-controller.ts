@@ -1387,6 +1387,19 @@ export class SessionController {
       return;
     }
 
+    if (env.kind === 'event' && evtType === 'security.rule_added') {
+      const scope = env.payload.scope === 'global' ? 'global' : 'session';
+      this._post({
+        type: 'security_rule_added',
+        scope,
+        offer: {
+          executable: String(env.payload.executable ?? ''),
+          subcommand: String(env.payload.subcommand ?? ''),
+        },
+      });
+      return;
+    }
+
     if (env.kind === 'event' && evtType === 'error') {
       const message = String(env.payload.message ?? 'Unknown server error');
       const recoverable = Boolean(env.payload.recoverable ?? true);

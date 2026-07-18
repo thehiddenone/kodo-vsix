@@ -338,5 +338,31 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
         : ' The workflow cannot proceed.';
       return <Markdown content={`<kodo_crit>Error — ${entry.message}${tail}</kodo_crit>`} />;
     }
+    case 'security_rule_added': {
+      const shape = `${entry.offer.executable} ${entry.offer.subcommand}`.trim();
+      const scopeLabel = entry.scope === 'global' ? 'all sessions' : 'only this session';
+      return (
+        <div>
+          <div style={styles.securityRuleAdded}>
+            <span style={styles.securityRuleAddedIcon}>ℹ️</span>
+            <span>Added a new security rule</span>
+          </div>
+          <div style={styles.toolCallBox}>
+            <table style={styles.toolCallTable}>
+              <tbody>
+                <tr>
+                  <td style={styles.toolCallParamName}>command</td>
+                  <td style={styles.toolCallParamValue}>{shape}</td>
+                </tr>
+                <tr>
+                  <td style={styles.toolCallParamName}>scope</td>
+                  <td style={styles.toolCallParamValue}>{scopeLabel}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
   }
 }

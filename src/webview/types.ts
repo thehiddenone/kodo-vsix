@@ -240,7 +240,14 @@ export type SessionEntry =
   // failure that aborted the turn. Display-only; anchors the failure in the
   // feed so it is never silent. Persisted as an "error" marker in
   // session.jsonl and replayed via session_history on reload.
-  | { type: 'error_notice'; message: string; recoverable: boolean; exclude_from_context: true };
+  | { type: 'error_notice'; message: string; recoverable: boolean; exclude_from_context: true }
+  // The user's own record of a just-granted Phase 2 "always allow" security
+  // rule (WS_PROTOCOL.md §5.9d) — distinct from the gated tool call's own
+  // card. `offer` is the exact granted shape (same {executable, subcommand}
+  // as a permission prompt's RuleOffer — subcommand holds a resolved
+  // absolute path for a workspace-escape/path rule). Persisted as a
+  // "security_rule_added" marker and replayed via session_history on reload.
+  | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -409,4 +416,5 @@ export type Action =
   | { type: 'session_history'; entries: Record<string, unknown>[] }
   | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] }
   | { type: 'interrupted' }
-  | { type: 'runtime_error'; message: string; recoverable: boolean };
+  | { type: 'runtime_error'; message: string; recoverable: boolean }
+  | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer };

@@ -431,6 +431,18 @@ export function reducer(state: State, action: Action): State {
       };
     case 'permission_cleared':
       return { ...state, pendingPermission: null };
+    case 'security_rule_added':
+      // The user's own record of a just-granted "always allow" rule
+      // (WS_PROTOCOL.md §5.9d) — a plain append, mirroring 'tool_call': it
+      // fires mid-turn, after any toolgen/token streaming for this call has
+      // already committed, so there is no streaming state to fold in here.
+      return {
+        ...state,
+        session: [
+          ...state.session,
+          { type: 'security_rule_added', scope: action.scope, offer: action.offer, exclude_from_context: true },
+        ],
+      };
     case 'mode_state':
       return {
         ...state,
@@ -591,6 +603,16 @@ export function reducer(state: State, action: Action): State {
             type: 'error_notice',
             message: String(e.message ?? ''),
             recoverable: e.recoverable !== false,
+            exclude_from_context: true,
+          });
+        } else if (type === 'security_rule_added') {
+          // Replay of the server's persisted "security_rule_added" marker
+          // (see EngineEmitters.emit_security_rule_added) — same card the
+          // live action renders, so a reload doesn't lose the record.
+          entries.push({
+            type: 'security_rule_added',
+            scope: e.scope === 'global' ? 'global' : 'session',
+            offer: { executable: String(e.executable ?? ''), subcommand: String(e.subcommand ?? '') },
             exclude_from_context: true,
           });
         }

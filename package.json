@@ -75,6 +75,12 @@
           "when": "view == kodo.view",
           "group": "navigation"
         }
+      ],
+      "editor/title": [
+        {
+          "command": "kodo.newSession",
+          "group": "navigation"
+        }
       ]
     }
   },

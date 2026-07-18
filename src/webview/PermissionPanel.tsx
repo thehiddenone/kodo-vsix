@@ -24,11 +24,12 @@ import type { PermissionData, PermissionPart, RuleOffer } from './types';
  * single-command ask, several for a compound pipeline/`&&`/`;` chain where
  * each part was judged independently. A single part renders exactly as
  * before: the top `reason` banner plus, when that part's `ruleOffer` is set,
- * one checkbox pair ("this session" / "all sessions", mutually exclusive).
+ * one grouped, mutually-exclusive radio pair ("this session" / "all
+ * sessions") — a bordered box delineates each pair as its own choice group.
  * More than one part renders the top `reason` as a summary, then one block
- * per part with its own reason line and its own checkbox pair. The choice
- * only takes effect alongside Allow (the server ignores `remember` on a
- * Deny); clicking Deny with boxes checked is harmless, not a silent grant.
+ * per part with its own reason line and its own radio pair. The choice only
+ * takes effect alongside Allow (the server ignores `remember` on a Deny);
+ * clicking Deny with a scope picked is harmless, not a silent grant.
  */
 
 interface PermissionPanelProps {
@@ -40,24 +41,41 @@ function ruleShapeText(offer: RuleOffer): string {
   return `${offer.executable} ${offer.subcommand}`.trim();
 }
 
-interface RuleOfferCheckboxesProps {
+const SCOPE_LABELS: Record<'session' | 'global', string> = {
+  session: 'this session',
+  global: 'all sessions',
+};
+
+interface RuleOfferChoiceProps {
   offer: RuleOffer;
   remembered: 'session' | 'global' | null;
   onToggle: (scope: 'session' | 'global') => void;
+  groupName: string;
 }
 
-function RuleOfferCheckboxes({ offer, remembered, onToggle }: RuleOfferCheckboxesProps) {
+function RuleOfferChoice({ offer, remembered, onToggle, groupName }: RuleOfferChoiceProps) {
   const shape = ruleShapeText(offer);
+  // Every rule offer the server sends today carries both scopes as valid
+  // choices, so this is a genuine mutually-exclusive pair — rendered as
+  // radio buttons, grouped by `groupName` so multiple parts' pairs never
+  // interfere with each other. A future offer restricted to a single scope
+  // (none exists yet) would fall back to one plain checkbox instead, since a
+  // "choice" of one option isn't a meaningful radio group.
+  const scopes: ('session' | 'global')[] = ['session', 'global'];
+  const asRadio = scopes.length > 1;
   return (
-    <div style={styles.permissionRuleOffer}>
-      <label style={styles.permissionRuleOfferLabel}>
-        <input type="checkbox" checked={remembered === 'session'} onChange={() => onToggle('session')} />
-        Always allow <span style={styles.permissionRuleOfferShape}>{shape}</span> — this session
-      </label>
-      <label style={styles.permissionRuleOfferLabel}>
-        <input type="checkbox" checked={remembered === 'global'} onChange={() => onToggle('global')} />
-        Always allow <span style={styles.permissionRuleOfferShape}>{shape}</span> — all sessions
-      </label>
+    <div style={styles.permissionRuleOffer} role={asRadio ? 'radiogroup' : 'group'}>
+      {scopes.map((scope) => (
+        <label key={scope} style={styles.permissionRuleOfferLabel}>
+          <input
+            type={asRadio ? 'radio' : 'checkbox'}
+            name={asRadio ? groupName : undefined}
+            checked={remembered === scope}
+            onClick={() => onToggle(scope)}
+          />
+          Always allow <span style={styles.permissionRuleOfferShape}>{shape}</span> — {SCOPE_LABELS[scope]}
+        </label>
+      ))}
     </div>
   );
 }
@@ -110,10 +128,11 @@ export function PermissionPanel({ permission, onRespond }: PermissionPanelProps)
         </div>
       )}
       {singlePart?.ruleOffer && (
-        <RuleOfferCheckboxes
+        <RuleOfferChoice
           offer={singlePart.ruleOffer}
           remembered={remember[0] ?? null}
           onToggle={(scope) => toggleRemember(0, scope)}
+          groupName={`${permission.requestId}-rule-offer-0`}
         />
       )}
       {parts.length > 1 && (
@@ -122,10 +141,11 @@ export function PermissionPanel({ permission, onRespond }: PermissionPanelProps)
             <div key={i} style={styles.permissionPartBlock}>
               <div style={styles.permissionPartReason}>{part.reason}</div>
               {part.ruleOffer && (
-                <RuleOfferCheckboxes
+                <RuleOfferChoice
                   offer={part.ruleOffer}
                   remembered={remember[i] ?? null}
                   onToggle={(scope) => toggleRemember(i, scope)}
+                  groupName={`${permission.requestId}-rule-offer-${i}`}
                 />
               )}
             </div>

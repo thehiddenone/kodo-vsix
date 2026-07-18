@@ -76,6 +76,15 @@ export function App() {
         case 'runtime_error':
           dispatch({ type: 'runtime_error', message: String(msg.message ?? 'Unknown server error'), recoverable: Boolean(msg.recoverable ?? true) });
           break;
+        case 'security_rule_added': {
+          const offer = (msg.offer ?? {}) as Record<string, unknown>;
+          dispatch({
+            type: 'security_rule_added',
+            scope: msg.scope === 'global' ? 'global' : 'session',
+            offer: { executable: String(offer.executable ?? ''), subcommand: String(offer.subcommand ?? '') },
+          });
+          break;
+        }
         case 'pong':
           dispatch({ type: 'pong' });
           break;
