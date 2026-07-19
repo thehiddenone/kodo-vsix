@@ -215,12 +215,6 @@ function buildHtml(): string {
       margin-bottom: 6px;
     }
     .cell-status.installed { color: #4caf50; }
-    .cell-desc {
-      font-size: 0.88em;
-      color: var(--vscode-descriptionForeground);
-      line-height: 1.4;
-      margin-bottom: 10px;
-    }
     .llm-cell { margin-bottom: 20px; }
     .llm-cell button { margin-bottom: 8px; }
     #empty-msg { color: var(--vscode-descriptionForeground); padding: 8px 0; }
@@ -994,8 +988,8 @@ function buildHtml(): string {
 
     function openFlavorModal(entryName) {
       _flavorEntryName = entryName;
-      flavorModalTitle.textContent = 'Manage flavors — ' + entryName;
       const entry = currentFlavorEntry();
+      flavorModalTitle.textContent = 'Manage flavors — ' + ((entry && entry.description) || entryName);
       const flavors = (entry && entry.flavors) || [];
       const initialId = (entry && entry.active_flavor) || (flavors[0] && flavors[0].id) || null;
       selectFlavor(initialId);
@@ -1217,9 +1211,10 @@ function buildHtml(): string {
         const row = document.createElement('div');
         row.className = 'download-row';
 
+        const dlEntry = _state.localRegistry.find(e => e.name === dl.name);
         const name = document.createElement('div');
         name.className = 'download-name';
-        name.textContent = dl.name;
+        name.textContent = (dlEntry && dlEntry.description) || dl.name;
         row.appendChild(name);
 
         const repo = document.createElement('div');
@@ -1298,15 +1293,11 @@ function buildHtml(): string {
 
       const name = document.createElement('div');
       name.className = 'cell-name';
-      name.textContent = entry.name;
+      // entry.name is an internal identifier for hardcoded entries (a slug);
+      // only custom entries lack a description and fall back to the
+      // user-typed name.
+      name.textContent = entry.description || entry.name;
       card.appendChild(name);
-
-      if (entry.description) {
-        const desc = document.createElement('div');
-        desc.className = 'cell-desc';
-        desc.textContent = entry.description;
-        card.appendChild(desc);
-      }
 
       if (entry.quant_type || entry.quant_author) {
         const line = document.createElement('div');

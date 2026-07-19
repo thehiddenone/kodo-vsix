@@ -96,6 +96,15 @@ export interface LocalRegistryEntry {
   /** Recommended VRAM (GB) for large contexts; 0 = no known recommendation. */
   memory: number;
   /**
+   * Maximum input-context size in tokens, as configured on the
+   * `LocalLLMEntry` itself (kodo/llms/_local_registry.py) — the fallback
+   * used when the active flavor's own `-c`/`--ctx-size` is absent/`0`, see
+   * {@link resolveContextSize}. Not the effective, flavor-resolved figure —
+   * that's never sent as its own field, since it depends on which flavor is
+   * active (which kodo-vsix already knows via `active_flavor`/`flavors`).
+   */
+  context_window: number;
+  /**
    * Predefined + custom flavors, predefined first. Empty for
    * `custom_server_url`; every other kind normally has at least one (a
    * built-in "default" for `hardcoded_hf`, or one seeded at creation time
@@ -143,6 +152,42 @@ export function isCustomLocalEntry(kind: LocalEntryKind): boolean {
 /** True for entry kinds that go through the HF download/install pipeline. */
 export function isDownloadableLocalEntry(kind: LocalEntryKind): boolean {
   return kind === 'hardcoded_hf' || kind === 'custom_hf';
+}
+
+/**
+ * The context size (tokens) `flavor`'s own `llama_args` declare, mirroring
+ * `LlamaFlavor.get_context_size()` (kodo/llms/_local_registry.py): scans for
+ * `--ctx-size` (checked first) or `-c`, parsed as an integer. `0` if neither
+ * key is present or the value doesn't parse — including the `--ctx-size: "0"`
+ * "use the GGUF's own trained context length" sentinel every built-in flavor
+ * sets by default.
+ */
+export function flavorContextSize(flavor: LlamaFlavorInfo): number {
+  const raw = flavor.llama_args['--ctx-size'] ?? flavor.llama_args['-c'];
+  if (raw === undefined) {
+    return 0;
+  }
+  const value = parseInt(String(raw).trim(), 10);
+  return Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * The effective context window (tokens) for `entry` given its currently
+ * selected `flavor`, mirroring `resolve_context_window` (kodo/llms/
+ * _local_registry.py): `flavor`'s own declared size wins when positive,
+ * otherwise falls back to `entry.context_window`.
+ */
+export function resolveContextSize(
+  entry: LocalRegistryEntry,
+  flavor: LlamaFlavorInfo | undefined,
+): number {
+  if (flavor) {
+    const size = flavorContextSize(flavor);
+    if (size > 0) {
+      return size;
+    }
+  }
+  return entry.context_window;
 }
 
 /**

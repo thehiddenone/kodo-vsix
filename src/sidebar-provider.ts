@@ -201,10 +201,10 @@ function buildHtml(): string {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .card-desc {
-      font-size: 0.88em;
+    .card-meta-line {
+      font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
-      line-height: 1.4;
+      margin-bottom: 2px;
     }
     select.flavor-select {
       width: 100%;
@@ -409,12 +409,37 @@ function buildHtml(): string {
       section.appendChild(settingsBtn);
 
       if (_state.llamaInstalled && _state.llamaVersion) {
+        const runningEntry = _state.localRegistry.find(m => m.name === _state.llamaRunningModel);
+        const runningLabel = runningEntry ? runningEntry.description : _state.llamaRunningModel;
         const ver = document.createElement('div');
         ver.style.cssText = 'font-size:0.8em;color:var(--vscode-descriptionForeground);margin-bottom:6px;';
         ver.textContent = 'llama.cpp ' + _state.llamaVersion
-          + (_state.llamaRunning && _state.llamaRunningModel ? '  ·  running: ' + _state.llamaRunningModel : '');
+          + (_state.llamaRunning && _state.llamaRunningModel ? '  ·  running: ' + runningLabel : '');
         section.appendChild(ver);
       }
+    }
+
+    // Mirrors kodo's LlamaFlavor.get_context_size()/resolve_context_window
+    // (kodo/llms/_local_registry.py) — see doc/LLM_REGISTRY.md §4.4. Can't
+    // import the TS copy in llm-registry-types.ts from this plain-JS webview
+    // script, so it's duplicated here; keep both in sync by hand.
+    function flavorContextSize(flavor) {
+      const raw = flavor.llama_args['--ctx-size'] ?? flavor.llama_args['-c'];
+      if (raw === undefined) {
+        return 0;
+      }
+      const value = parseInt(String(raw).trim(), 10);
+      return Number.isFinite(value) ? value : 0;
+    }
+
+    function resolveContextSize(model, flavor) {
+      if (flavor) {
+        const size = flavorContextSize(flavor);
+        if (size > 0) {
+          return size;
+        }
+      }
+      return model.context_window;
     }
 
     function renderLocalCards(section) {
@@ -451,21 +476,28 @@ function buildHtml(): string {
 
         const nameEl = document.createElement('span');
         nameEl.className = 'card-name';
-        nameEl.textContent = model.name;
+        nameEl.textContent = model.description;
         header.appendChild(nameEl);
 
         card.appendChild(header);
 
-        const desc = document.createElement('div');
-        desc.className = 'card-desc';
-        desc.textContent = model.description;
-        card.appendChild(desc);
+        const flavors = model.flavors || [];
+
+        const quantLine = document.createElement('div');
+        quantLine.className = 'card-meta-line';
+        quantLine.textContent = 'Quant: ' + (model.quant_type || '—');
+        card.appendChild(quantLine);
+
+        const contextLine = document.createElement('div');
+        contextLine.className = 'card-meta-line';
+        const activeFlavor = flavors.find(f => f.id === model.active_flavor) || flavors[0];
+        contextLine.textContent = 'Context: ' + resolveContextSize(model, activeFlavor).toLocaleString();
+        card.appendChild(contextLine);
 
         // Flavor picker: not offered for custom_server_url (not a process
         // kodo launches, so it has no launch args to vary) or an entry with
         // no flavors at all (every entry that reaches here normally has at
         // least a built-in/seeded "default" one — see LLM_REGISTRY.md §4.6).
-        const flavors = model.flavors || [];
         if (model.kind !== 'custom_server_url' && flavors.length > 0) {
           const select = document.createElement('select');
           select.className = 'flavor-select';
@@ -477,6 +509,8 @@ function buildHtml(): string {
           });
           select.value = model.active_flavor || flavors[0].id;
           select.addEventListener('change', () => {
+            const selected = flavors.find(f => f.id === select.value);
+            contextLine.textContent = 'Context: ' + resolveContextSize(model, selected).toLocaleString();
             vsc.postMessage({ type: 'set_active_flavor', name: model.name, flavor_id: select.value });
           });
           card.appendChild(select);
