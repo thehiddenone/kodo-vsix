@@ -392,6 +392,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         _openLocalInferenceSettings();
       } else if (msg.type === 'open_cloud_ai_settings') {
         _openCloudAiSettings();
+      } else if (msg.type === 'open_kodo_settings') {
+        void _openKodoSettings();
       } else if (msg.type === 'start_llamacpp') {
         _startLlamaCpp();
       } else if (msg.type === 'stop_llamacpp') {

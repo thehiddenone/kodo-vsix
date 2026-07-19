@@ -31,6 +31,7 @@ export type SidebarMessage =
   | { type: 'set_cloud_vendor'; vendor: string }
   | { type: 'open_local_inference_settings' }
   | { type: 'open_cloud_ai_settings' }
+  | { type: 'open_kodo_settings' }
   | { type: 'install_llamacpp' }
   | { type: 'start_llamacpp' }
   | { type: 'stop_llamacpp' }
@@ -156,7 +157,7 @@ function buildHtml(): string {
     .toggle-btn:hover {
       background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
     }
-    #open-btn { margin-bottom: 8px; }
+    #open-settings-btn { margin-bottom: 8px; }
     .radio-group { display: flex; flex-direction: column; gap: 6px; }
     label {
       display: flex;
@@ -283,6 +284,7 @@ function buildHtml(): string {
     </div>
     <button id="new-btn" class="toggle-btn">+ Start new Kōdo session</button>
     <button id="open-btn" class="toggle-btn">⟳ Re-open existing Kōdo session</button>
+    <button id="open-settings-btn" class="toggle-btn">⚙ Open Kōdo settings</button>
 
     <hr>
     <div class="radio-group">
@@ -312,6 +314,10 @@ function buildHtml(): string {
 
     document.getElementById('new-btn').addEventListener('click', () => {
       vsc.postMessage({ type: 'new_session' });
+    });
+
+    document.getElementById('open-settings-btn').addEventListener('click', () => {
+      vsc.postMessage({ type: 'open_kodo_settings' });
     });
 
     document.querySelectorAll('input[name="llm-mode"]').forEach(el => {
