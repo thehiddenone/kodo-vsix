@@ -27,7 +27,6 @@ export function StuckAlertPanel({ alert, onRespond }: StuckAlertPanelProps) {
       <div style={styles.gateHeader}>
         <span style={styles.gateType}>STUCK?</span>
         <span style={styles.gateTitle}>{alert.displayName} appears to have stopped early</span>
-        <span style={styles.stuckAlertBadge}>watchdog</span>
       </div>
       {alert.reasons.length > 0 && (
         <ul style={styles.stuckAlertReasons}>

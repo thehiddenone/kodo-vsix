@@ -374,5 +374,10 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
           <span style={styles.agentUnstuckNudgeText}>{entry.note}</span>
         </div>
       );
+    case 'agent_stuck_critical':
+      // The watchdog gave up (doc/STUCK_DETECTION.md) — a second consecutive
+      // stall right after its one nudge, so the turn ended instead of trying
+      // again. Rendered like error_notice: a red <kodo_crit> callout.
+      return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
   }
 }

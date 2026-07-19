@@ -267,7 +267,13 @@ export type SessionEntry =
   // matched red-flag codes; `mode` is "auto" (autonomous/auto-unstuck) or
   // "manual" (the user clicked "Unstick it"). Persisted as an
   // "agent_unstuck_nudge"-kind message and replayed via session_history.
-  | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string; exclude_from_context: true };
+  | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string; exclude_from_context: true }
+  // The stuck-agent watchdog gave up: an entry-agent turn stalled a second
+  // consecutive time right after its one nudge, so the turn ended instead of
+  // nudging (or asking) again. Display-only, like error_notice — rendered as
+  // a <kodo_crit> callout. Persisted as an "agent_stuck_critical" marker and
+  // replayed via session_history on reload.
+  | { type: 'agent_stuck_critical'; message: string; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -412,6 +418,7 @@ export type Action =
   | { type: 'stuck_alert_request'; requestId: string; agentName: string; displayName: string; reasons: string[] }
   | { type: 'stuck_alert_cleared' }
   | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string }
+  | { type: 'agent_stuck_critical'; message: string }
   | {
       type: 'mode_state';
       autonomous: boolean;

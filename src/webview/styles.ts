@@ -931,17 +931,6 @@ export const styles = {
     marginBottom: '8px',
     background: 'var(--vscode-editor-background)',
   },
-  stuckAlertBadge: {
-    marginLeft: 'auto',
-    background: 'var(--vscode-inputValidation-infoBackground, var(--vscode-badge-background))',
-    color: 'var(--vscode-foreground)',
-    border: '1px solid var(--vscode-inputValidation-infoBorder, transparent)',
-    borderRadius: '3px',
-    padding: '1px 6px',
-    fontSize: '10px',
-    fontWeight: 'bold',
-    whiteSpace: 'nowrap',
-  },
   stuckAlertReasons: {
     fontSize: '12px',
     lineHeight: '1.5',

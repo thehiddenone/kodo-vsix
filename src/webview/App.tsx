@@ -307,6 +307,9 @@ export function App() {
           });
           break;
         }
+        case 'agent_stuck_critical':
+          dispatch({ type: 'agent_stuck_critical', message: String(msg.message ?? '') });
+          break;
         case 'mode_state':
           dispatch({
             type: 'mode_state',

@@ -479,6 +479,18 @@ export function reducer(state: State, action: Action): State {
           { type: 'security_rule_added', scope: action.scope, offer: action.offer, exclude_from_context: true },
         ],
       };
+    case 'agent_stuck_critical':
+      // The watchdog gave up after one failed nudge (doc/STUCK_DETECTION.md)
+      // — a plain append, mirroring 'agent_unstuck_nudge'. The turn has
+      // already ended normally by the time this fires, so there is no
+      // streaming/awaiting state to clear here.
+      return {
+        ...state,
+        session: [
+          ...state.session,
+          { type: 'agent_stuck_critical', message: action.message, exclude_from_context: true },
+        ],
+      };
     case 'mode_state':
       return {
         ...state,
@@ -662,6 +674,16 @@ export function reducer(state: State, action: Action): State {
             note: String(e.note ?? ''),
             reasons,
             mode: String(e.mode ?? ''),
+            exclude_from_context: true,
+          });
+        } else if (type === 'agent_stuck_critical') {
+          // Replay of the server's persisted "agent_stuck_critical" marker
+          // (see EngineEmitters.emit_agent_stuck_critical) — same callout the
+          // live 'agent_stuck_critical' action renders, so a reload doesn't
+          // lose the record of why the watchdog stopped trying.
+          entries.push({
+            type: 'agent_stuck_critical',
+            message: String(e.message ?? ''),
             exclude_from_context: true,
           });
         }
