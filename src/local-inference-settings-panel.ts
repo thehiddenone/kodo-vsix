@@ -10,6 +10,15 @@ export interface LocalInferenceSettingsState {
   downloads: LocalDownloadState[];
   /** Picks gpu_tip vs mac_tip and the "Show me local files" label. */
   isMac: boolean;
+  /**
+   * Names of installed models whose remote GGUF no longer matches what's on
+   * disk (an ETag mismatch found by `local_llm.check_updates` /
+   * `LocalModelManager.check_for_update` — kodo/doc/LOCAL_MODEL_MANAGER.md
+   * §12). Drives the yellow "updates available" banner and each affected
+   * card's "Update" button. Populated asynchronously — empty until the
+   * fire-and-forget scan kicked off when this panel opens replies.
+   */
+  updatableNames: string[];
 }
 
 export interface AddHuggingfaceLlmPayload {
@@ -73,6 +82,7 @@ export type LocalInferenceSettingsMessage =
   | { type: 'resume'; name: string }
   | { type: 'cancel'; name: string }
   | { type: 'uninstall'; name: string }
+  | { type: 'update'; name: string }
   | { type: 'remove'; name: string }
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
@@ -461,6 +471,20 @@ function buildHtml(): string {
       background: rgba(215, 186, 125, 0.12);
       color: #d7ba7d;
     }
+    #updates-banner, .update-available-tag {
+      font-size: 0.88em;
+      padding: 8px 10px;
+      border-radius: 3px;
+      line-height: 1.4;
+      background: rgba(215, 186, 125, 0.12);
+      color: #d7ba7d;
+    }
+    #updates-banner {
+      display: none;
+      margin: 0 0 16px;
+    }
+    #updates-banner.visible { display: block; }
+    .update-available-tag { margin: 0 0 8px; }
     .installed-tag {
       display: inline-block;
       font-size: 0.78em;
@@ -564,6 +588,7 @@ function buildHtml(): string {
 
     <section class="group" id="downloads-section"></section>
 
+    <div id="updates-banner"></div>
     <section class="group" id="installed-section"></section>
 
     <section class="group">
@@ -749,6 +774,7 @@ function buildHtml(): string {
       detectedVramGb: null,
       detectedRamGb: null,
       isMac: false,
+      updatableNames: [],
     };
 
     document.getElementById('add-hf').addEventListener('click', openHfModal);
@@ -1200,6 +1226,23 @@ function buildHtml(): string {
       return null;
     }
 
+    function renderUpdatesBanner() {
+      const banner = document.getElementById('updates-banner');
+      const names = _state.updatableNames || [];
+      if (names.length === 0) {
+        banner.classList.remove('visible');
+        return;
+      }
+      const labels = names.map(name => {
+        const entry = _state.localRegistry.find(e => e.name === name);
+        return (entry && entry.description) || name;
+      });
+      banner.textContent = '⚠️ ' + (names.length === 1
+        ? ('An update is available for ' + labels[0] + '.')
+        : ('Updates are available for ' + names.length + ' models: ' + labels.join(', ') + '.'));
+      banner.classList.add('visible');
+    }
+
     function renderDownloads() {
       const section = document.getElementById('downloads-section');
       section.innerHTML = '';
@@ -1360,6 +1403,13 @@ function buildHtml(): string {
         card.appendChild(tag);
       }
 
+      if (DOWNLOADABLE.has(entry.kind) && entry.installed && (_state.updatableNames || []).includes(entry.name)) {
+        const updateTag = document.createElement('div');
+        updateTag.className = 'update-available-tag';
+        updateTag.textContent = '⚠️ Update available';
+        card.appendChild(updateTag);
+      }
+
       const buttons = document.createElement('div');
       buttons.className = 'row-buttons';
 
@@ -1402,6 +1452,22 @@ function buildHtml(): string {
         revealBtn.textContent = 'Show me local files';
         revealBtn.addEventListener('click', () => vsc.postMessage({ type: 'reveal', name: entry.name }));
         buttons.appendChild(revealBtn);
+      }
+
+      if (DOWNLOADABLE.has(entry.kind) && entry.installed && (_state.updatableNames || []).includes(entry.name)) {
+        const updateBtn = document.createElement('button');
+        updateBtn.textContent = 'Update';
+        updateBtn.addEventListener('click', () => {
+          // Same immediate-feedback pattern as "Download and Install" above: the
+          // update is a server-side uninstall-then-reinstall (doc/LOCAL_MODEL_
+          // MANAGER.md §12), so the entry briefly becomes not-installed and this
+          // button disappears on its own — the next 'update' postMessage always
+          // rebuilds the card from scratch, no separate re-enable path needed.
+          updateBtn.disabled = true;
+          updateBtn.textContent = 'Updating…';
+          vsc.postMessage({ type: 'update', name: entry.name });
+        });
+        buttons.appendChild(updateBtn);
       }
 
       if (DOWNLOADABLE.has(entry.kind) && entry.installed) {
@@ -1532,6 +1598,7 @@ function buildHtml(): string {
         : 'No override — using the bundled llama.cpp binary.';
       document.getElementById('remove-override').disabled = !_state.llamaServerOverridePath;
 
+      renderUpdatesBanner();
       renderDownloads();
       renderInstalled();
       renderCards();
@@ -1555,6 +1622,7 @@ function buildHtml(): string {
       _state.detectedVramGb = data.detectedVramGb !== undefined ? data.detectedVramGb : _state.detectedVramGb;
       _state.detectedRamGb = data.detectedRamGb !== undefined ? data.detectedRamGb : _state.detectedRamGb;
       _state.isMac = Boolean(data.isMac);
+      _state.updatableNames = data.updatableNames !== undefined ? data.updatableNames : _state.updatableNames;
       render();
     });
   </script>

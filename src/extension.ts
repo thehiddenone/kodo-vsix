@@ -39,7 +39,7 @@ import type {
   ThinkingContext,
   ThinkingFamilies,
 } from './llm-registry-types';
-import { hardwareFitWarningForFlavor } from './llm-registry-types';
+import { hardwareFitWarningForFlavor, isDownloadableLocalEntry } from './llm-registry-types';
 import { startLocalDownloadPolling } from './local-model-downloads';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
@@ -121,6 +121,13 @@ let thinkingFamiliesState: ThinkingFamilies = {};
 // pushed over the WS wire (see local-model-downloads.ts and
 // doc/LOCAL_MODEL_MANAGER.md §11) — keyed by registry entry name.
 let localDownloadsState: LocalDownloadState[] = [];
+// Installed models whose remote GGUF has changed (ETag mismatch) — reported
+// asynchronously by `local_llm.updates_available` in reply to a
+// `local_llm.check_updates` fire-and-forget scan kicked off whenever the
+// Local Inference Settings panel opens (see `_sendCheckLocalLlmUpdates` and
+// doc/LOCAL_MODEL_MANAGER.md §12). Empty until that reply lands, and reset
+// per-scan (not merged) so a model that's no longer stale drops out.
+let localUpdatableNamesState: string[] = [];
 
 // custom_file entries' installed state is resolved ONCE per entry, the first
 // time this window's extension host sees that entry (activation for entries
@@ -1044,6 +1051,11 @@ function handleControlEnvelope(env: Envelope): void {
     return;
   }
 
+  if (env.kind === 'event' && evtType === 'local_llm.updates_available') {
+    _onLocalLlmUpdatesAvailable(env.payload);
+    return;
+  }
+
   if (env.kind === 'event' && evtType === 'llamacpp.install.progress') {
     _onLlamaProgress(
       Number(env.payload.percent ?? 0),
@@ -1376,6 +1388,7 @@ function _pushLocalInferenceSettingsState(): void {
     detectedRamGb: detectedRamGbState,
     downloads: localDownloadsState,
     isMac: process.platform === 'darwin',
+    updatableNames: localUpdatableNamesState,
   });
 }
 
@@ -1400,10 +1413,14 @@ function _openLocalInferenceSettings(): void {
       detectedRamGb: detectedRamGbState,
       downloads: localDownloadsState,
       isMac: process.platform === 'darwin',
+      updatableNames: localUpdatableNamesState,
     },
     (msg: LocalInferenceSettingsMessage) => void _onLocalInferenceSettingsMessage(msg),
   );
   void panel;
+  // Fire-and-forget — the reply (local_llm.updates_available) lands later
+  // and re-pushes state on its own (_onLocalLlmUpdatesAvailable).
+  _sendCheckLocalLlmUpdates();
 }
 
 function _openCloudAiSettings(): void {
@@ -1639,6 +1656,15 @@ async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessa
     _sendControl(makeRequest('local_llm.uninstall', { name: msg.name }));
   } else if (msg.type === 'uninstall') {
     _sendControl(makeRequest('local_llm.uninstall', { name: msg.name }));
+  } else if (msg.type === 'update') {
+    // The server's local_llm.update handler uninstalls then re-downloads
+    // (doc/LOCAL_MODEL_MANAGER.md §12) and will push fresh local_llm.
+    // registry_state events reflecting each stage on its own — dropping
+    // msg.name here immediately is correct, not just optimistic: the update
+    // this triggers is what actually brings the file back in sync.
+    localUpdatableNamesState = localUpdatableNamesState.filter((n) => n !== msg.name);
+    _pushLocalInferenceSettingsState();
+    _sendControl(makeRequest('local_llm.update', { name: msg.name }));
   } else if (msg.type === 'remove') {
     _sendControl(makeRequest('local_llm.remove', { name: msg.name }));
   } else if (msg.type === 'reveal') {
@@ -1736,6 +1762,33 @@ function _onLocalLlmRegistryState(payload: Record<string, unknown>): void {
   });
   _pushLocalInferenceSettingsState();
   _broadcastThinkingContext();
+}
+
+/** Reply to `local_llm.check_updates` (doc/LOCAL_MODEL_MANAGER.md §12) —
+ * replaces (not merges) `localUpdatableNamesState` with this scan's result,
+ * so a model that no longer differs from its remote drops off the banner. */
+function _onLocalLlmUpdatesAvailable(payload: Record<string, unknown>): void {
+  const raw = payload.updatable;
+  localUpdatableNamesState = Array.isArray(raw) ? raw.filter((n): n is string => typeof n === 'string') : [];
+  _pushLocalInferenceSettingsState();
+}
+
+/**
+ * Fire-and-forget `local_llm.check_updates` — sent every time the Local
+ * Inference Settings panel opens, carrying every currently-installed
+ * HF-backed model's name. The server checks each one's on-disk ETag against
+ * HuggingFace in the background and replies later with
+ * `local_llm.updates_available`; this call does not wait for that reply (see
+ * `_onLocalLlmUpdatesAvailable`).
+ */
+function _sendCheckLocalLlmUpdates(): void {
+  const names = localRegistryState
+    .filter((e) => isDownloadableLocalEntry(e.kind) && e.installed)
+    .map((e) => e.name);
+  if (names.length === 0) {
+    return;
+  }
+  _sendControl(makeRequest('local_llm.check_updates', { names }));
 }
 
 function _setActiveLocalModel(name: string): void {
