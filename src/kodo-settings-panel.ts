@@ -10,13 +10,40 @@ export interface GlobalRuleEntry {
   value: string;
 }
 
+/** The `stuck_detection` settings block (kodo/doc/SETTINGS.md §2.6,
+ * kodo/doc/WS_PROTOCOL.md §7.6d) — backs the Kōdo Settings panel's
+ * "General" section. */
+export interface StuckDetectionSettings {
+  active: 'off' | 'local_only' | 'local_and_cloud';
+  scope: 'top_level' | 'top_level_and_subagents';
+  auto_unstuck_interactive: boolean;
+}
+
+/** llama.cpp install state backing the "Llama.cpp" section (kodo/doc/
+ * WS_PROTOCOL.md §7.6, `llamacpp.version_info`). `installedVersion`/
+ * `latestVersion` are `"bN"` strings or `null` ("not installed"/"unknown" —
+ * the latter only when the GitHub Releases fetch failed). `busy` disables
+ * every button while an install/update/uninstall is in flight. */
+export interface LlamaCppInfo {
+  installedVersion: string | null;
+  latestVersion: string | null;
+  busy: boolean;
+}
+
 export interface KodoSettingsState {
   rules: GlobalRuleEntry[];
+  stuckDetection: StuckDetectionSettings;
+  llamaCpp: LlamaCppInfo;
 }
 
 export type KodoSettingsMessage =
   | { type: 'ready' }
   | { type: 'delete_rules'; rules: GlobalRuleEntry[] }
+  | ({ type: 'set_stuck_detection' } & StuckDetectionSettings)
+  | { type: 'install_llamacpp' }
+  | { type: 'uninstall_llamacpp' }
+  | { type: 'update_llamacpp' }
+  | { type: 'install_llamacpp_version_prompt' }
   | { type: 'close' };
 
 /** Singleton settings panel — reveals the existing one instead of opening a second. */
@@ -141,14 +168,76 @@ function buildHtml(): string {
       max-width: 640px;
       margin: 0 0 16px;
     }
+    .section-subheading {
+      font-weight: 600;
+      margin: 0 0 8px;
+      font-size: 0.98em;
+    }
+    .section-divider {
+      border: none;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+      margin: 4px 0 16px;
+    }
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 0 0 14px;
+    }
+    .radio-row, .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 0.92em;
+      user-select: none;
+      margin-bottom: 6px;
+    }
+    .radio-row input, .checkbox-row input {
+      margin: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .checkbox-row:has(input:disabled) {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .checkbox-row input:disabled {
+      cursor: default;
+    }
     .toolbar {
       display: flex;
       gap: 8px;
       margin-bottom: 14px;
       flex-wrap: wrap;
     }
+    a { color: var(--vscode-textLink-foreground); }
+    .value-line {
+      font-size: 0.92em;
+      margin: 0 0 6px;
+    }
+    .value-code {
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .btn-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0 14px;
+      flex-wrap: wrap;
+    }
+    .btn-row button {
+      display: inline-block;
+      width: auto;
+    }
+    .btn-separator {
+      width: 1px;
+      align-self: stretch;
+      background: var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
     button {
-      padding: 5px 10px;
+      display: block;
+      padding: 6px 10px;
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
       border: none;
@@ -156,19 +245,21 @@ function buildHtml(): string {
       cursor: pointer;
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
+      box-sizing: border-box;
+      text-align: left;
     }
     button:hover { background: var(--vscode-button-hoverBackground); }
-    button:disabled {
-      opacity: 0.45;
-      cursor: default;
-      background: var(--vscode-button-background);
-    }
+    button:disabled { opacity: 0.45; cursor: default; }
     .secondary-btn {
       background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
       color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
     }
     .secondary-btn:hover {
       background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+    }
+    .toolbar button {
+      display: inline-block;
+      width: auto;
     }
     #delete-btn:not(:disabled) {
       background: var(--vscode-errorForeground, #f44336);
@@ -234,11 +325,16 @@ function buildHtml(): string {
     vsc.postMessage({ type: 'ready' });
 
     const NAV = [
+      { key: 'general', label: 'General' },
       { key: 'global-rules', label: 'Global Allow-Rules' },
     ];
 
-    let _state = { rules: [] };
-    let _selectedKey = 'global-rules';
+    let _state = {
+      rules: [],
+      stuckDetection: { active: 'local_only', scope: 'top_level', auto_unstuck_interactive: false },
+      llamaCpp: { installedVersion: null, latestVersion: null, busy: false },
+    };
+    let _selectedKey = 'general';
     const _checked = new Set();
 
     function ruleKey(rule) {
@@ -351,7 +447,7 @@ function buildHtml(): string {
       const intro = document.createElement('p');
       intro.className = 'intro-text';
       intro.textContent = "Commands and paths you told Kōdo to always allow, machine-wide, "
-        + "the last time it asked permission — these apply across every project and session "
+        + "when it asked permission — these apply across every project and session "
         + "on this machine and are never asked about again until you delete them here.";
       wrap.appendChild(intro);
 
@@ -374,11 +470,207 @@ function buildHtml(): string {
       return wrap;
     }
 
+    const LLAMACPP_RELEASES_URL = 'https://github.com/ggml-org/llama.cpp/releases';
+
+    function renderLlamaCppSection() {
+      const wrap = document.createElement('div');
+
+      const subheading = document.createElement('div');
+      subheading.className = 'section-subheading';
+      subheading.textContent = 'Llama.cpp';
+      wrap.appendChild(subheading);
+
+      const intro = document.createElement('p');
+      intro.className = 'intro-text';
+      intro.textContent = 'llama.cpp is the local inference engine Kōdo uses to run models on '
+        + "this machine. Install, update, or remove it here, and see how the installed build "
+        + 'compares to the latest one published on GitHub.';
+      wrap.appendChild(intro);
+
+      const installedLine = document.createElement('p');
+      installedLine.className = 'value-line';
+      installedLine.appendChild(document.createTextNode('Installed version: '));
+      const installedValue = document.createElement('span');
+      installedValue.className = 'value-code';
+      installedValue.textContent = _state.llamaCpp.installedVersion || 'not installed yet';
+      installedLine.appendChild(installedValue);
+      wrap.appendChild(installedLine);
+
+      const latestLine = document.createElement('p');
+      latestLine.className = 'value-line';
+      latestLine.appendChild(document.createTextNode('Latest version available at GitHub: '));
+      if (_state.llamaCpp.latestVersion) {
+        const link = document.createElement('a');
+        link.href = LLAMACPP_RELEASES_URL;
+        link.className = 'value-code';
+        link.textContent = _state.llamaCpp.latestVersion;
+        latestLine.appendChild(link);
+      } else {
+        const unknown = document.createElement('span');
+        unknown.className = 'value-code';
+        unknown.textContent = 'unknown';
+        latestLine.appendChild(unknown);
+      }
+      wrap.appendChild(latestLine);
+
+      const installed = Boolean(_state.llamaCpp.installedVersion);
+      const busy = _state.llamaCpp.busy;
+
+      const btnRow = document.createElement('div');
+      btnRow.className = 'btn-row';
+
+      const installUpdateBtn = document.createElement('button');
+      installUpdateBtn.textContent = installed ? 'Update llama.cpp' : 'Install llama.cpp';
+      installUpdateBtn.disabled = busy;
+      installUpdateBtn.addEventListener('click', () => {
+        vsc.postMessage({ type: installed ? 'update_llamacpp' : 'install_llamacpp' });
+      });
+      btnRow.appendChild(installUpdateBtn);
+
+      const sep1 = document.createElement('span');
+      sep1.className = 'btn-separator';
+      btnRow.appendChild(sep1);
+
+      const specificBtn = document.createElement('button');
+      specificBtn.className = 'secondary-btn';
+      specificBtn.textContent = 'Install specific version…';
+      specificBtn.disabled = busy;
+      specificBtn.addEventListener('click', () => {
+        vsc.postMessage({ type: 'install_llamacpp_version_prompt' });
+      });
+      btnRow.appendChild(specificBtn);
+
+      if (installed) {
+        const sep2 = document.createElement('span');
+        sep2.className = 'btn-separator';
+        btnRow.appendChild(sep2);
+
+        const uninstallBtn = document.createElement('button');
+        uninstallBtn.className = 'secondary-btn';
+        uninstallBtn.textContent = 'Uninstall llama.cpp';
+        uninstallBtn.disabled = busy;
+        uninstallBtn.addEventListener('click', () => {
+          vsc.postMessage({ type: 'uninstall_llamacpp' });
+        });
+        btnRow.appendChild(uninstallBtn);
+      }
+
+      wrap.appendChild(btnRow);
+
+      return wrap;
+    }
+
+    const STUCK_ACTIVE_OPTIONS = [
+      ['off', 'Off'],
+      ['local_only', 'Only for local LLMs'],
+      ['local_and_cloud', 'Both local LLMs and cloud LLMs'],
+    ];
+
+    function postStuckDetection() {
+      vsc.postMessage({ type: 'set_stuck_detection', ..._state.stuckDetection });
+    }
+
+    function renderGeneralSection() {
+      const wrap = document.createElement('div');
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'General';
+      wrap.appendChild(heading);
+
+      const topDivider = document.createElement('hr');
+      topDivider.className = 'section-divider';
+      wrap.appendChild(topDivider);
+
+      wrap.appendChild(renderLlamaCppSection());
+
+      const midDivider = document.createElement('hr');
+      midDivider.className = 'section-divider';
+      wrap.appendChild(midDivider);
+
+      const subheading = document.createElement('div');
+      subheading.className = 'section-subheading';
+      subheading.textContent = 'Detect Stuck Agentic Workflows';
+      wrap.appendChild(subheading);
+
+      const intro = document.createElement('p');
+      intro.className = 'intro-text';
+      intro.textContent = "Sometimes a model stops before it's actually finished a task — for "
+        + 'example, it replies with nothing useful, or just "Done." When Kōdo notices this '
+        + 'happening, it can nudge the model to pick up where it left off and finish the job.';
+      wrap.appendChild(intro);
+
+      const radioGroup = document.createElement('div');
+      radioGroup.className = 'radio-group';
+      STUCK_ACTIVE_OPTIONS.forEach(([value, label]) => {
+        const row = document.createElement('label');
+        row.className = 'radio-row';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'stuck-active';
+        input.value = value;
+        input.checked = _state.stuckDetection.active === value;
+        input.addEventListener('change', () => {
+          if (!input.checked) { return; }
+          _state.stuckDetection = { ..._state.stuckDetection, active: value };
+          postStuckDetection();
+          render();
+        });
+        row.appendChild(input);
+        row.appendChild(document.createTextNode(label));
+        radioGroup.appendChild(row);
+      });
+      wrap.appendChild(radioGroup);
+
+      const disabled = _state.stuckDetection.active === 'off';
+
+      const scopeRow = document.createElement('label');
+      scopeRow.className = 'checkbox-row';
+      const scopeInput = document.createElement('input');
+      scopeInput.type = 'checkbox';
+      scopeInput.checked = _state.stuckDetection.scope === 'top_level_and_subagents';
+      scopeInput.disabled = disabled;
+      scopeInput.addEventListener('change', () => {
+        _state.stuckDetection = {
+          ..._state.stuckDetection,
+          scope: scopeInput.checked ? 'top_level_and_subagents' : 'top_level',
+        };
+        postStuckDetection();
+        render();
+      });
+      scopeRow.appendChild(scopeInput);
+      scopeRow.appendChild(document.createTextNode('Also watch sub-agent turns'));
+      wrap.appendChild(scopeRow);
+
+      const autoRow = document.createElement('label');
+      autoRow.className = 'checkbox-row';
+      const autoInput = document.createElement('input');
+      autoInput.type = 'checkbox';
+      autoInput.checked = _state.stuckDetection.auto_unstuck_interactive;
+      autoInput.disabled = disabled;
+      autoInput.addEventListener('change', () => {
+        _state.stuckDetection = {
+          ..._state.stuckDetection,
+          auto_unstuck_interactive: autoInput.checked,
+        };
+        postStuckDetection();
+        render();
+      });
+      autoRow.appendChild(autoInput);
+      autoRow.appendChild(document.createTextNode('Nudge LLM automatically without asking me'));
+      wrap.appendChild(autoRow);
+
+      return wrap;
+    }
+
     function render() {
       renderNav();
       const content = document.getElementById('content');
       content.innerHTML = '';
-      content.appendChild(renderGlobalRulesSection());
+      if (_selectedKey === 'general') {
+        content.appendChild(renderGeneralSection());
+      } else {
+        content.appendChild(renderGlobalRulesSection());
+      }
     }
 
     window.addEventListener('message', ({ data }) => {
@@ -387,6 +679,12 @@ function buildHtml(): string {
         const keys = new Set(data.rules.map(ruleKey));
         [..._checked].forEach(k => { if (!keys.has(k)) { _checked.delete(k); } });
         _state.rules = data.rules;
+      }
+      if (data.stuckDetection && typeof data.stuckDetection === 'object') {
+        _state.stuckDetection = data.stuckDetection;
+      }
+      if (data.llamaCpp && typeof data.llamaCpp === 'object') {
+        _state.llamaCpp = data.llamaCpp;
       }
       render();
     });

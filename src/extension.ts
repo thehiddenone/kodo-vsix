@@ -30,7 +30,7 @@ import type { Envelope } from './envelope';
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
 import { KodoSettingsPanel } from './kodo-settings-panel';
-import type { GlobalRuleEntry, KodoSettingsMessage } from './kodo-settings-panel';
+import type { GlobalRuleEntry, KodoSettingsMessage, LlamaCppInfo, StuckDetectionSettings } from './kodo-settings-panel';
 import type {
   CloudRegistry,
   EffortLevel,
@@ -99,6 +99,10 @@ let activeLocalModelState = '';
 let effectiveLocalModelState = '';
 let llamaInstalledState = false;
 let llamaVersionState = '';
+// Latest build number available on GitHub Releases — only known once the
+// Kōdo Settings panel's "Llama.cpp" section has fetched `llamacpp.version_info`
+// at least once (not part of `hello.ack`); `null` until then or on fetch failure.
+let llamaLatestVersionState: string | null = null;
 let llamaInstallingState = false;
 let llamaRunningState = false;
 let llamaRunningModelState = '';
@@ -1041,7 +1045,11 @@ function handleControlEnvelope(env: Envelope): void {
   }
 
   if (env.kind === 'event' && evtType === 'llamacpp.install.progress') {
-    _onLlamaProgress(Number(env.payload.percent ?? 0), String(env.payload.message ?? ''));
+    _onLlamaProgress(
+      Number(env.payload.percent ?? 0),
+      String(env.payload.message ?? ''),
+      Boolean(env.payload.up_to_date),
+    );
     return;
   }
 
@@ -1213,15 +1221,22 @@ let _llamaProgressResolve: (() => void) | null = null;
 let _llamaProgressReject: ((err: Error) => void) | null = null;
 let _llamaLastPct = 0;
 
-function _installLlamaCpp(): void {
+/** Shared by `_installLlamaCpp`/`_updateLlamaCppToLatest`/
+ * `_installLlamaCppVersion` — sends *request* and drives the same progress
+ * notification + `_llamaProgress*` state that `_onLlamaProgress` (fed by the
+ * `llamacpp.install.progress` event, shared by both `llamacpp.install` and
+ * `llamacpp.update`) reports into, regardless of which of the three
+ * triggered it. */
+function _runLlamaCppInstallOp(request: Envelope, title: string): void {
   if (llamaInstallingState) { return; }
   llamaInstallingState = true;
   sidebarProvider?.update({ llamaInstalling: true });
-  _sendControl(makeRequest('llamacpp.install'));
+  KodoSettingsPanel.instance?.update({ llamaCpp: _llamaCppInfoForPanel() });
+  _sendControl(request);
 
   vscode.window
     .withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Installing llama.cpp', cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title, cancellable: false },
       (progress) =>
         new Promise<void>((resolve, reject) => {
           _llamaProgressReporter = progress;
@@ -1233,7 +1248,67 @@ function _installLlamaCpp(): void {
     .then(undefined, () => undefined);
 }
 
-function _onLlamaProgress(pct: number, msg: string): void {
+function _installLlamaCpp(): void {
+  _runLlamaCppInstallOp(makeRequest('llamacpp.install'), 'Installing llama.cpp');
+}
+
+function _updateLlamaCppToLatest(): void {
+  _runLlamaCppInstallOp(makeRequest('llamacpp.update'), 'Updating llama.cpp to the latest version');
+}
+
+function _installLlamaCppVersion(version: string): void {
+  _runLlamaCppInstallOp(makeRequest('llamacpp.update', { version }), `Installing llama.cpp ${version}`);
+}
+
+/** Prompt for a build number (Kōdo Settings panel's "Install specific
+ * version" button) and kick off the pinned install. Accepts "b12345" or a
+ * bare "12345", normalizing to the "bN" form the wire protocol expects
+ * (kodo/doc/WS_PROTOCOL.md §7.6). */
+async function _promptInstallLlamaCppVersion(): Promise<void> {
+  const raw = await vscode.window.showInputBox({
+    title: 'Install a specific llama.cpp version',
+    prompt: 'Enter the GitHub release build number (e.g. "b12345" or "12345")',
+    placeHolder: 'b12345',
+    validateInput: (value) =>
+      /^b?\d+$/i.test(value.trim()) ? null : 'Enter a build number, e.g. "b12345" or "12345".',
+  });
+  if (!raw) {
+    return;
+  }
+  const trimmed = raw.trim();
+  const version = /^b/i.test(trimmed) ? trimmed : `b${trimmed}`;
+  _installLlamaCppVersion(version);
+}
+
+/** Uninstall llama.cpp (Kōdo Settings panel's "Uninstall llama.cpp" button).
+ * Quick request/response, not a progress stream (`llamacpp.uninstall`,
+ * kodo/doc/WS_PROTOCOL.md §7.6) — reuses `llamaInstallingState` as a general
+ * "an install-affecting op is in flight" busy flag so the panel's buttons
+ * disable the same way they do during an install/update. */
+async function _uninstallLlamaCpp(): Promise<void> {
+  if (llamaInstallingState) { return; }
+  llamaInstallingState = true;
+  sidebarProvider?.update({ llamaInstalling: true });
+  KodoSettingsPanel.instance?.update({ llamaCpp: _llamaCppInfoForPanel() });
+  try {
+    await sendControlAwait('llamacpp.uninstall');
+    llamaInstalledState = false;
+    llamaVersionState = '';
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to uninstall llama.cpp.');
+  } finally {
+    llamaInstallingState = false;
+    sidebarProvider?.update({
+      llamaInstalling: false,
+      llamaInstalled: llamaInstalledState,
+      llamaVersion: llamaVersionState,
+      llamaRunning: false,
+    });
+    KodoSettingsPanel.instance?.update({ llamaCpp: _llamaCppInfoForPanel() });
+  }
+}
+
+function _onLlamaProgress(pct: number, msg: string, upToDate: boolean): void {
   if (_llamaProgressReporter) {
     const increment = Math.max(0, pct - _llamaLastPct);
     _llamaLastPct = pct;
@@ -1244,6 +1319,19 @@ function _onLlamaProgress(pct: number, msg: string): void {
     llamaInstallingState = false;
     llamaInstalledState = true;
     sidebarProvider?.update({ llamaInstalling: false, llamaInstalled: true });
+    KodoSettingsPanel.instance?.update({ llamaCpp: _llamaCppInfoForPanel() });
+    if (upToDate) {
+      // Server short-circuited before touching the install (or the titler) —
+      // nothing was actually reinstalled, just surface why.
+      vscode.window.showInformationMessage(`Kōdo: ${msg}`);
+    }
+    // Re-query for the authoritative build number (install/update only know
+    // it completed, not which build "latest" resolved to) and refresh the
+    // panel's "latest available" line at the same time.
+    void _fetchLlamaCppVersionInfo().then((llamaCpp) => {
+      sidebarProvider?.update({ llamaVersion: llamaVersionState });
+      KodoSettingsPanel.instance?.update({ llamaCpp });
+    });
     setTimeout(() => {
       _llamaProgressResolve?.();
       _llamaProgressReporter = null;
@@ -1253,6 +1341,7 @@ function _onLlamaProgress(pct: number, msg: string): void {
   } else if (pct < 0) {
     llamaInstallingState = false;
     sidebarProvider?.update({ llamaInstalling: false });
+    KodoSettingsPanel.instance?.update({ llamaCpp: _llamaCppInfoForPanel() });
     vscode.window.showErrorMessage(`llama.cpp installation failed: ${msg}`);
     _llamaProgressReject?.(new Error(msg));
     _llamaProgressReporter = null;
@@ -1364,36 +1453,141 @@ async function _fetchGlobalRules(): Promise<GlobalRuleEntry[]> {
   }
 }
 
+/** Same documented defaults as `kodo/server/_config.py`'s
+ * `_DEFAULT_USER_SETTINGS["stuck_detection"]` — used both as the fallback on
+ * a fetch error and to defensively coerce a malformed `.ack` payload. */
+const DEFAULT_STUCK_DETECTION: StuckDetectionSettings = {
+  active: 'local_only',
+  scope: 'top_level',
+  auto_unstuck_interactive: false,
+};
+
+/** Parse a `stuck_detection.get.ack`/`.set.ack` payload (kodo/doc/WS_PROTOCOL.md
+ * §7.6d) — an unrecognised/missing field falls back to its documented default,
+ * same defensive style as `_parseGlobalRules`. */
+function _parseStuckDetection(raw: Record<string, unknown>): StuckDetectionSettings {
+  const active = raw.active;
+  const scope = raw.scope;
+  return {
+    active: active === 'off' || active === 'local_only' || active === 'local_and_cloud'
+      ? active : DEFAULT_STUCK_DETECTION.active,
+    scope: scope === 'top_level' || scope === 'top_level_and_subagents'
+      ? scope : DEFAULT_STUCK_DETECTION.scope,
+    auto_unstuck_interactive: Boolean(raw.auto_unstuck_interactive),
+  };
+}
+
+/** Fetch the current `stuck_detection` settings from the server. Returns the
+ * documented defaults (and shows a toast) if the server is unreachable — the
+ * caller opens/refreshes the panel either way. */
+async function _fetchStuckDetection(): Promise<StuckDetectionSettings> {
+  try {
+    const resp = await sendControlAwait('stuck_detection.get');
+    return _parseStuckDetection(resp);
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to load stuck-detection settings.');
+    return DEFAULT_STUCK_DETECTION;
+  }
+}
+
+/** Current llama.cpp info as the Kōdo Settings panel's "Llama.cpp" section
+ * shape (kodo-settings-panel.ts `LlamaCppInfo`) — derived from the same
+ * module state the sidebar's llama.cpp controls use. */
+function _llamaCppInfoForPanel(): LlamaCppInfo {
+  return {
+    installedVersion: llamaInstalledState && llamaVersionState ? llamaVersionState : null,
+    latestVersion: llamaLatestVersionState,
+    busy: llamaInstallingState,
+  };
+}
+
+/** Fetch `llamacpp.version_info` (kodo/doc/WS_PROTOCOL.md §7.6) and fold its
+ * `installed_version`/`latest_version` into module state — this is the only
+ * place `llamaLatestVersionState` is ever set, and it re-confirms
+ * `llamaInstalledState`/`llamaVersionState` more freshly than `hello.ack`
+ * did. Returns the documented "unknown" shape (and shows a toast) only on a
+ * true WS-unreachable failure — a GitHub-fetch failure is instead reported
+ * server-side via the response's own `error` field, which just leaves
+ * `latestVersion` `null` here without erroring. */
+async function _fetchLlamaCppVersionInfo(): Promise<LlamaCppInfo> {
+  try {
+    const resp = await sendControlAwait('llamacpp.version_info');
+    llamaInstalledState = typeof resp.installed_version === 'string';
+    llamaVersionState = typeof resp.installed_version === 'string' ? resp.installed_version : '';
+    llamaLatestVersionState = typeof resp.latest_version === 'string' ? resp.latest_version : null;
+    return _llamaCppInfoForPanel();
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to check llama.cpp versions.');
+    return _llamaCppInfoForPanel();
+  }
+}
+
 /** Open (or reveal) the Kōdo Settings panel, seeded with the current global
- * rules fetched up-front.
+ * rules, stuck-detection settings, and llama.cpp version info fetched
+ * up-front.
  *
- * The rules are fetched BEFORE the panel is created so its webview is
- * constructed with fully-populated state — exactly like the local-inference
- * and cloud-ai panels. The previous approach opened the panel with an empty
- * list and relied on a later `security.rules.list` response arriving as an
- * async `update` postMessage; that message could race the freshly-created
- * webview's load and be dropped, leaving the panel showing nothing (the panel
- * has no static shell — every row is produced by the webview's `render()`,
- * which only ran on receipt of an `update`). Fetching first makes the initial
- * data ride the reliable `ready`→`update` handshake instead. */
+ * State is fetched BEFORE the panel is created so its webview is constructed
+ * with fully-populated state — exactly like the local-inference and cloud-ai
+ * panels. The previous approach opened the panel with an empty list and
+ * relied on a later `security.rules.list` response arriving as an async
+ * `update` postMessage; that message could race the freshly-created webview's
+ * load and be dropped, leaving the panel showing nothing (the panel has no
+ * static shell — every row is produced by the webview's `render()`, which
+ * only ran on receipt of an `update`). Fetching first makes the initial data
+ * ride the reliable `ready`→`update` handshake instead. */
 async function _openKodoSettings(): Promise<void> {
-  const rules = await _fetchGlobalRules();
-  const panel = KodoSettingsPanel.createOrShow({ rules }, (msg) => void _onKodoSettingsMessage(msg));
+  const [rules, stuckDetection, llamaCpp] = await Promise.all([
+    _fetchGlobalRules(),
+    _fetchStuckDetection(),
+    _fetchLlamaCppVersionInfo(),
+  ]);
+  const panel = KodoSettingsPanel.createOrShow(
+    { rules, stuckDetection, llamaCpp },
+    (msg) => void _onKodoSettingsMessage(msg),
+  );
   // For an already-open panel, createOrShow only revealed it (initialState is
-  // ignored) — push the freshly-fetched rules in explicitly so re-opening the
+  // ignored) — push the freshly-fetched state in explicitly so re-opening the
   // panel always reflects current state.
-  panel.update({ rules });
+  panel.update({ rules, stuckDetection, llamaCpp });
 }
 
 async function _onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
-  if (msg.type !== 'delete_rules') {
+  if (msg.type === 'delete_rules') {
+    try {
+      const resp = await sendControlAwait('security.rules.delete', { rules: msg.rules });
+      KodoSettingsPanel.instance?.update({ rules: _parseGlobalRules(resp.rules) });
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to delete the selected rule(s).');
+    }
     return;
   }
-  try {
-    const resp = await sendControlAwait('security.rules.delete', { rules: msg.rules });
-    KodoSettingsPanel.instance?.update({ rules: _parseGlobalRules(resp.rules) });
-  } catch {
-    vscode.window.showErrorMessage('Kōdo: could not reach the server to delete the selected rule(s).');
+  if (msg.type === 'set_stuck_detection') {
+    try {
+      const resp = await sendControlAwait('stuck_detection.set', {
+        active: msg.active,
+        scope: msg.scope,
+        auto_unstuck_interactive: msg.auto_unstuck_interactive,
+      });
+      KodoSettingsPanel.instance?.update({ stuckDetection: _parseStuckDetection(resp) });
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to update stuck-detection settings.');
+    }
+    return;
+  }
+  if (msg.type === 'install_llamacpp') {
+    _installLlamaCpp();
+    return;
+  }
+  if (msg.type === 'update_llamacpp') {
+    _updateLlamaCppToLatest();
+    return;
+  }
+  if (msg.type === 'uninstall_llamacpp') {
+    await _uninstallLlamaCpp();
+    return;
+  }
+  if (msg.type === 'install_llamacpp_version_prompt') {
+    await _promptInstallLlamaCppVersion();
   }
 }
 
