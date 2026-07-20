@@ -1,4 +1,4 @@
-import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer } from './types';
+import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, FileReviewFeedbackEntry } from './types';
 export function commitStreaming(state: State): SessionEntry[] {
   let session = state.session;
   if (state.streamingThinking) {
@@ -45,6 +45,10 @@ export function reducer(state: State, action: Action): State {
         pendingQuestion: null,
         pendingPermission: null,
         pendingStuckAlert: null,
+        pendingFileReview: null,
+        fileReviewSelection: null,
+        fileReviewDrafts: [],
+        fileReviewComposer: null,
         namingSession: false,
         attachedFiles: [],
       };
@@ -450,6 +454,96 @@ export function reducer(state: State, action: Action): State {
       };
     case 'stuck_alert_cleared':
       return { ...state, pendingStuckAlert: null };
+    case 'file_review_request':
+      // Edit Control wants an approve/reject/feedback decision for one
+      // create_file/edit_file call before it writes anything
+      // (WS_PROTOCOL.md §6.5b). Transient like pendingPermission: the gated
+      // tool_call card is already in the feed and its result records the
+      // outcome. Any selection left over from a previous review is stale.
+      return {
+        ...state,
+        pendingFileReview: {
+          requestId: action.requestId,
+          toolCallId: action.toolCallId,
+          toolName: action.toolName,
+          path: action.path,
+          mode: action.mode,
+          oldContent: action.oldContent,
+          newContent: action.newContent,
+        },
+        fileReviewSelection: null,
+        fileReviewDrafts: [],
+        fileReviewComposer: null,
+        streaming: false,
+        awaitingLlm: false,
+      };
+    case 'file_review_cleared':
+      return {
+        ...state,
+        pendingFileReview: null,
+        fileReviewSelection: null,
+        fileReviewDrafts: [],
+        fileReviewComposer: null,
+      };
+    case 'file_review_selection':
+      return {
+        ...state,
+        fileReviewSelection: {
+          hasSelection: action.hasSelection,
+          lineFrom: action.lineFrom,
+          lineTo: action.lineTo,
+          targetedCode: action.targetedCode,
+        },
+      };
+    case 'file_review_open_composer': {
+      // Sourced from the live selection already pushed by the host — both
+      // the in-panel "+ Add feedback" button and the editor/context menu
+      // command converge on this same action, no payload needed. No live
+      // selection (or an empty one) opens the composer in general-feedback
+      // mode instead of refusing — "+ Add feedback" is always enabled now.
+      const sel = state.fileReviewSelection;
+      return {
+        ...state,
+        fileReviewComposer:
+          sel && sel.hasSelection
+            ? { editingIndex: null, generalFeedback: false, lineFrom: sel.lineFrom, lineTo: sel.lineTo, targetedCode: sel.targetedCode, initialText: '' }
+            : { editingIndex: null, generalFeedback: true, initialText: '' },
+      };
+    }
+    case 'file_review_edit_draft': {
+      const d = state.fileReviewDrafts[action.index];
+      if (!d) {
+        return state;
+      }
+      return {
+        ...state,
+        fileReviewComposer: d.generalFeedback
+          ? { editingIndex: action.index, generalFeedback: true, initialText: d.feedback }
+          : { editingIndex: action.index, generalFeedback: false, lineFrom: d.lineFrom, lineTo: d.lineTo, targetedCode: d.targetedCode, initialText: d.feedback },
+      };
+    }
+    case 'file_review_close_composer':
+      return { ...state, fileReviewComposer: null };
+    case 'file_review_apply_draft': {
+      const composer = state.fileReviewComposer;
+      const text = action.text.trim();
+      if (!composer || !text) {
+        return state;
+      }
+      const entry: FileReviewFeedbackEntry = composer.generalFeedback
+        ? { generalFeedback: true, feedback: text }
+        : { generalFeedback: false, lineFrom: composer.lineFrom, lineTo: composer.lineTo, targetedCode: composer.targetedCode, feedback: text };
+      const fileReviewDrafts =
+        composer.editingIndex === null
+          ? [...state.fileReviewDrafts, entry]
+          : state.fileReviewDrafts.map((d, i) => (i === composer.editingIndex ? entry : d));
+      return { ...state, fileReviewDrafts, fileReviewComposer: null };
+    }
+    case 'file_review_remove_draft':
+      return {
+        ...state,
+        fileReviewDrafts: state.fileReviewDrafts.filter((_, i) => i !== action.index),
+      };
     case 'agent_unstuck_nudge':
       // The watchdog's continuation nudge just landed — a plain append,
       // mirroring 'security_rule_added': it fires right after the nudge is
@@ -813,6 +907,10 @@ export const initial: State = {
   pendingQuestion: null,
   pendingPermission: null,
   pendingStuckAlert: null,
+  pendingFileReview: null,
+  fileReviewSelection: null,
+  fileReviewDrafts: [],
+  fileReviewComposer: null,
   autonomous: false,
   effectiveAutonomous: false,
   workflowMode: 'problem_solving',

@@ -805,11 +805,11 @@ export const styles = {
     resize: 'none',
   },
   feedbackBtn: {
-    background: 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
-    color: 'var(--vscode-button-secondaryForeground, var(--vscode-button-foreground))',
+    background: 'var(--vscode-button-background)',
+    color: 'var(--vscode-button-foreground)',
     border: 'none',
     borderRadius: '2px',
-    padding: '6px 10px',
+    padding: '6px 16px',
     cursor: 'pointer',
     fontSize: '12px',
     alignSelf: 'stretch',
@@ -955,6 +955,162 @@ export const styles = {
     padding: '6px 12px',
     cursor: 'pointer',
     alignSelf: 'flex-start',
+  },
+  // Edit Control review gate (create_file/edit_file, WS_PROTOCOL.md §6.5b) —
+  // modeled on the permission card's layout. The gated call's read-only
+  // content/diff opens in a companion editor tab (session-controller.ts); this
+  // panel only ever holds the decision controls + feedback list.
+  fileReviewCard: {
+    border: '1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-focusBorder))',
+    borderRadius: '4px',
+    padding: '10px',
+    marginBottom: '8px',
+    background: 'var(--vscode-editor-background)',
+  },
+  fileReviewModeBadge: {
+    marginLeft: 'auto',
+    background: 'var(--vscode-badge-background)',
+    color: 'var(--vscode-badge-foreground)',
+    borderRadius: '3px',
+    padding: '1px 6px',
+    fontSize: '10px',
+    fontWeight: 'bold',
+    whiteSpace: 'nowrap',
+  },
+  fileReviewPath: {
+    fontSize: '12px',
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+    marginBottom: '8px',
+    wordBreak: 'break-all',
+  },
+  // Permanent "how to add feedback" instructions — always visible, not a
+  // hover-only tooltip, since the selection-driven flow isn't discoverable
+  // on its own.
+  fileReviewInstructions: {
+    fontSize: '12px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginBottom: '8px',
+    lineHeight: '1.4',
+  },
+  fileReviewFeedbackList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    marginBottom: '8px',
+    maxHeight: '220px',
+    overflowY: 'auto',
+  },
+  // One "yellow chip" per feedback note — same gold-outline, transparent-fill
+  // look as an attached-file chip. Clicking it (outside the trash icon)
+  // re-opens the composer modal to edit it.
+  fileReviewFeedbackChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    boxSizing: 'border-box' as const,
+    padding: '4px 8px',
+    border: '1px solid #c8a400',
+    borderRadius: '6px',
+    background: 'transparent',
+    fontSize: '11px',
+    cursor: 'pointer',
+  },
+  fileReviewFeedbackChipMeta: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+  },
+  fileReviewFeedbackChipLines: {
+    fontWeight: 'bold' as const,
+  },
+  fileReviewFeedbackChipRemove: {
+    flexShrink: 0,
+    background: 'transparent',
+    color: 'inherit',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '12px',
+    lineHeight: 1,
+    padding: 0,
+    opacity: 0.85,
+  },
+  fileReviewActionRow: {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+  },
+  // Modal dialogs (feedback composer + remove confirmation) — a centered box
+  // over a dimmed full-panel backdrop. No existing modal precedent elsewhere
+  // in the WebView, so styled fresh from VS Code theme vars to match the
+  // rest of the UI.
+  modalOverlay: {
+    position: 'fixed' as const,
+    inset: 0,
+    background: 'rgba(0, 0, 0, 0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2000,
+  },
+  modalBox: {
+    width: 'min(512px, 94vw)',
+    boxSizing: 'border-box' as const,
+    background: 'var(--vscode-editorWidget-background, var(--vscode-editor-background))',
+    color: 'var(--vscode-editorWidget-foreground, var(--vscode-foreground))',
+    border: '1px solid var(--vscode-widget-border, var(--vscode-focusBorder))',
+    borderRadius: '6px',
+    padding: '16px',
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+  },
+  modalTitle: {
+    fontWeight: 'bold' as const,
+    fontSize: '13px',
+    marginBottom: '8px',
+    wordBreak: 'break-word' as const,
+  },
+  modalInstructions: {
+    fontSize: '12px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginBottom: '8px',
+  },
+  modalTextarea: {
+    width: '100%',
+    height: '160px',
+    boxSizing: 'border-box' as const,
+    background: 'var(--vscode-input-background)',
+    color: 'var(--vscode-input-foreground)',
+    border: '1px solid var(--vscode-input-border)',
+    borderRadius: '2px',
+    padding: '6px 8px',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    resize: 'none' as const,
+    overflow: 'auto' as const,
+  },
+  modalButtonRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '8px',
+    marginTop: '10px',
+  },
+  modalApplyBtnDisabled: {
+    opacity: 0.5,
+    cursor: 'default' as const,
+  },
+  modalCancelBtn: {
+    background: 'transparent',
+    color: 'var(--vscode-foreground)',
+    border: '1px solid var(--vscode-panel-border)',
+    borderRadius: '2px',
+    padding: '6px 16px',
+    cursor: 'pointer',
+    fontWeight: 'bold' as const,
+  },
+  modalConfirmMessage: {
+    fontSize: '12px',
+    marginBottom: '4px',
   },
   // ask_user question panel (in-feed, interactive until confirmed)
   askUserPanel: {

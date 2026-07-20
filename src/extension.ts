@@ -27,6 +27,7 @@ import { CloudAiSettingsPanel } from './cloud-ai-settings-panel';
 import type { CloudAiSettingsMessage } from './cloud-ai-settings-panel';
 import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
+import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-provider';
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
 import { KodoSettingsPanel } from './kodo-settings-panel';
@@ -426,6 +427,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('kodo.useCloudLLMs', () => _setMode('cloud')),
     vscode.commands.registerCommand('kodo.useLocalLLM', () => _setMode('local')),
     vscode.commands.registerCommand('kodo.pickSession', () => pickSession()),
+  );
+
+  // Edit Control review gate (WS_PROTOCOL.md §6.5b) — the read-only content
+  // provider backing every session's companion tab, plus the window-wide
+  // listeners fanned out to every open session (each SessionController only
+  // reacts when the event matches its own pending review). Mirrors the
+  // linear-scan idiom `_findBySessionId`/`_findActiveSession` already use —
+  // session counts per window are small, so no dedicated registry is needed.
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      KODO_REVIEW_SCHEME,
+      new FileReviewContentProvider(),
+    ),
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      for (const s of sessions.values()) {
+        s.handleActiveSelectionChanged(editor);
+      }
+    }),
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      for (const s of sessions.values()) {
+        s.handleActiveSelectionChanged(e.textEditor);
+      }
+    }),
+    vscode.window.tabGroups.onDidChangeTabs((e) => {
+      for (const s of sessions.values()) {
+        s.handleTabsChanged(e.closed);
+      }
+    }),
+    vscode.commands.registerCommand('kodo.addFeedback', () => {
+      for (const s of sessions.values()) {
+        if (s.tryAddFeedbackFromActiveSelection()) {
+          break;
+        }
+      }
+    }),
   );
 }
 

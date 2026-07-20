@@ -15,6 +15,7 @@ import { ApprovalGate } from './gates';
 import { AskUserPanel } from './AskUserPanel';
 import { PermissionPanel } from './PermissionPanel';
 import { StuckAlertPanel } from './StuckAlertPanel';
+import { FileReviewPanel } from './FileReviewPanel';
 import { ModeControls } from './ModeControls';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { FooterButton } from './FooterButton';
@@ -310,6 +311,34 @@ export function App() {
         case 'agent_stuck_critical':
           dispatch({ type: 'agent_stuck_critical', message: String(msg.message ?? '') });
           break;
+        case 'file_review_request':
+          dispatch({
+            type: 'file_review_request',
+            requestId: String(msg.requestId ?? ''),
+            toolCallId: String(msg.toolCallId ?? ''),
+            toolName: String(msg.toolName ?? ''),
+            path: String(msg.path ?? ''),
+            mode: msg.mode === 'modification' ? 'modification' : 'new_file',
+            oldContent: String(msg.oldContent ?? ''),
+            newContent: String(msg.newContent ?? ''),
+          });
+          break;
+        case 'file_review_selection':
+          dispatch({
+            type: 'file_review_selection',
+            hasSelection: Boolean(msg.hasSelection),
+            lineFrom: Number(msg.lineFrom ?? 0),
+            lineTo: Number(msg.lineTo ?? 0),
+            targetedCode: String(msg.targetedCode ?? ''),
+          });
+          break;
+        case 'add_feedback_draft':
+          // Convergent second entry point (the editor/context "Add Feedback"
+          // command) for the exact same action the in-panel button uses —
+          // both open the composer modal off the live selection already
+          // pushed via file_review_selection.
+          dispatch({ type: 'file_review_open_composer' });
+          break;
         case 'mode_state':
           dispatch({
             type: 'mode_state',
@@ -382,7 +411,8 @@ export function App() {
     state.pendingGate !== null ||
     state.pendingQuestion !== null ||
     state.pendingPermission !== null ||
-    state.pendingStuckAlert !== null;
+    state.pendingStuckAlert !== null ||
+    state.pendingFileReview !== null;
 
   function handleStop() {
     vscode.postMessage({ type: 'stop' });
@@ -522,6 +552,27 @@ export function App() {
               action,
             });
             dispatch({ type: 'stuck_alert_cleared' });
+          }}
+        />
+      ) : state.pendingFileReview !== null ? (
+        <FileReviewPanel
+          review={state.pendingFileReview}
+          selection={state.fileReviewSelection}
+          drafts={state.fileReviewDrafts}
+          composer={state.fileReviewComposer}
+          onOpenComposer={() => dispatch({ type: 'file_review_open_composer' })}
+          onEditDraft={(index) => dispatch({ type: 'file_review_edit_draft', index })}
+          onCloseComposer={() => dispatch({ type: 'file_review_close_composer' })}
+          onApplyComposer={(text) => dispatch({ type: 'file_review_apply_draft', text })}
+          onRemoveDraft={(index) => dispatch({ type: 'file_review_remove_draft', index })}
+          onRespond={(action, feedback) => {
+            vscode.postMessage({
+              type: 'file_review_respond',
+              requestId: state.pendingFileReview!.requestId,
+              action,
+              feedback,
+            });
+            dispatch({ type: 'file_review_cleared' });
           }}
         />
       ) : state.pendingGate !== null ? (

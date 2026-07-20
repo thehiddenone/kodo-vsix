@@ -71,6 +71,10 @@
         "command": "kodo.pickSession",
         "title": "Kōdo: Open Session…",
         "icon": "images/kodo16px.svg"
+      },
+      {
+        "command": "kodo.addFeedback",
+        "title": "Kōdo: Add Feedback"
       }
     ],
     "menus": {
@@ -85,6 +89,13 @@
         {
           "command": "kodo.newSession",
           "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "kodo.addFeedback",
+          "when": "resourceScheme == kodo-review && editorHasSelection",
+          "group": "kodo"
         }
       ]
     }

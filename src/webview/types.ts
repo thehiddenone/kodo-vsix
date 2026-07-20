@@ -126,6 +126,73 @@ export interface StuckAlertData {
   reasons: string[];
 }
 
+/** `create_file` writes a brand-new file (no diff, just the proposed
+ *  content); `edit_file` is a genuine modification of an existing one
+ *  (rendered as a diff of old vs. new). */
+export type FileReviewMode = 'new_file' | 'modification';
+
+/** One note the user attached to a rejected review. A line-anchored note
+ *  (`generalFeedback: false`) always targets the new/proposed content — the
+ *  old/removed side of a diff is never selectable; a general note
+ *  (`generalFeedback: true`, added via "+ Add feedback" with nothing
+ *  selected) carries no line reference at all and applies to the file as a
+ *  whole. */
+export type FileReviewFeedbackEntry =
+  | { generalFeedback: true; feedback: string }
+  | { generalFeedback: false; lineFrom: number; lineTo: number; targetedCode: string; feedback: string };
+
+/** The outstanding prompt.edit_review request — the Edit Control review gate
+ *  (WS_PROTOCOL.md §6.5b) wants the user to approve or reject a
+ *  create_file/edit_file call before it writes anything. Transient (never a
+ *  session entry): once decided, the gated tool call's own card records the
+ *  outcome. The host opens a companion read-only editor tab (the full
+ *  content for a new file, a diff for a modification) alongside this panel —
+ *  see session-controller.ts's `_openReviewTab`. */
+export interface FileReviewData {
+  requestId: string;
+  /** The gated tool_use id (correlates with the tool_call feed entry). */
+  toolCallId: string;
+  toolName: string;
+  /** The agent-supplied path, verbatim. */
+  path: string;
+  mode: FileReviewMode;
+  /** Current file content; always "" for a new file. */
+  oldContent: string;
+  /** The proposed content. */
+  newContent: string;
+}
+
+/** Live selection state pushed from the extension host while the review's
+ *  companion tab has focus — drives the in-panel "Add feedback" button.
+ *  Only a selection on the new/proposed side is ever reported; the host
+ *  filters out the diff's old side entirely (see `handleActiveSelectionChanged`
+ *  in session-controller.ts), so this type carries no old-vs-new flag. */
+export interface FileReviewSelection {
+  hasSelection: boolean;
+  lineFrom: number;
+  lineTo: number;
+  targetedCode: string;
+}
+
+/** Drives the feedback composer modal in `FileReviewPanel`. `editingIndex`
+ *  is null while composing a brand-new draft or the target draft's index
+ *  when re-opened by clicking an existing feedback chip; `initialText` seeds
+ *  the modal's textarea (empty for a new draft, the draft's current text for
+ *  an edit). `generalFeedback: false` anchors the draft to the live
+ *  selection at the time "+ Add feedback" was clicked; `generalFeedback:
+ *  true` — clicked with nothing selected — carries no line reference, for a
+ *  note that applies to the file as a whole. */
+export type FileReviewComposerData =
+  | { editingIndex: number | null; generalFeedback: true; initialText: string }
+  | {
+      editingIndex: number | null;
+      generalFeedback: false;
+      lineFrom: number;
+      lineTo: number;
+      targetedCode: string;
+      initialText: string;
+    };
+
 /**
  * A session entry is a JSON object in the session array.
  *
@@ -308,6 +375,19 @@ export interface State {
   /** Outstanding stuck-agent alarm, or null. Replaces the prompt input (like
    *  pendingGate) until the user unsticks the agent or dismisses it. */
   pendingStuckAlert: StuckAlertData | null;
+  /** Outstanding create_file/edit_file review gate, or null. Replaces the
+   *  prompt input (like pendingGate) until the user approves, rejects, or
+   *  submits feedback. */
+  pendingFileReview: FileReviewData | null;
+  /** Live selection in the review's companion tab, pushed from the host;
+   *  null until the first selection-change event for a pending review. */
+  fileReviewSelection: FileReviewSelection | null;
+  /** Draft feedback entries for the pending review, in the order added; not
+   *  yet submitted. Cleared alongside pendingFileReview. */
+  fileReviewDrafts: FileReviewFeedbackEntry[];
+  /** Open feedback composer modal, or null when closed. Cleared alongside
+   *  pendingFileReview. */
+  fileReviewComposer: FileReviewComposerData | null;
   // The two *frozen* toggles are pairs: the user-facing *selected* value (flips
   // the instant the user clicks) and the per-turn frozen *effective* value the
   // server reports. While a turn runs and the two differ, the toggle is "queued
@@ -417,6 +497,14 @@ export type Action =
   | { type: 'permission_cleared' }
   | { type: 'stuck_alert_request'; requestId: string; agentName: string; displayName: string; reasons: string[] }
   | { type: 'stuck_alert_cleared' }
+  | { type: 'file_review_request'; requestId: string; toolCallId: string; toolName: string; path: string; mode: FileReviewMode; oldContent: string; newContent: string }
+  | { type: 'file_review_cleared' }
+  | { type: 'file_review_selection'; hasSelection: boolean; lineFrom: number; lineTo: number; targetedCode: string }
+  | { type: 'file_review_open_composer' }
+  | { type: 'file_review_edit_draft'; index: number }
+  | { type: 'file_review_close_composer' }
+  | { type: 'file_review_apply_draft'; text: string }
+  | { type: 'file_review_remove_draft'; index: number }
   | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string }
   | { type: 'agent_stuck_critical'; message: string }
   | {
