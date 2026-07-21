@@ -634,6 +634,20 @@ export function reducer(state: State, action: Action): State {
           entries.push({ type, content: String(e.content ?? ''), exclude_from_context: false });
         } else if (type === 'thinking_block') {
           entries.push({ type: 'thinking_block', content: String(e.content ?? ''), durationMs: typeof e.durationMs === 'number' ? e.durationMs : null, exclude_from_context: true });
+        } else if (type === 'status_response') {
+          // Persisted "Kodo responded in..." row (kodo doc/SESSIONS.md's
+          // `usage` marker) — now part of history in its correct
+          // chronological position, so no live-state splicing is needed for
+          // it (see the liveOnly filter below, which no longer carries this
+          // type).
+          entries.push({
+            type: 'status_response',
+            durationMs: typeof e.durationMs === 'number' ? e.durationMs : 0,
+            inputTokens: typeof e.inputTokens === 'number' ? e.inputTokens : 0,
+            outputTokens: typeof e.outputTokens === 'number' ? e.outputTokens : 0,
+            contextTokens: typeof e.contextTokens === 'number' ? e.contextTokens : 0,
+            exclude_from_context: true,
+          });
         } else if (type === 'tool_call') {
           const rawRows = Array.isArray(e.rows) ? e.rows : [];
           const rows: ToolCallDetailRow[] = rawRows.map((r) => {
@@ -785,16 +799,19 @@ export function reducer(state: State, action: Action): State {
       // session.history is (re-)sent on every reconnect, including one where
       // the webview never remounted (state.session already reflects the same
       // history plus more) — so this cannot simply replace state.session,
-      // only reconcile: history is authoritative for anything it can
-      // represent, and whatever it can't (a `tool_call` not yet persisted
-      // when the server read history, or a `status_response`/usage row —
-      // there is no history entry type for those) rides along after it.
+      // only reconcile: history is authoritative for everything it can
+      // represent (which now includes `status_response`/usage rows — see
+      // kodo's `EngineEmitters.emit_usage`/`HistoryProjector._marker_to_entries`
+      // — so they are no longer carried over here; doing so used to bunch
+      // every accumulated row into one trailing block instead of leaving
+      // each in its correct chronological position). What history can't yet
+      // represent — a genuinely dangling `tool_call`/`ask_user` not yet
+      // persisted when the server read history (e.g. a subsession's batch;
+      // subsession turns only persist once they complete) — still rides
+      // along after it.
       const liveOnly = state.session.filter(
         (e) =>
-          e.type === 'status_response' ||
           (e.type === 'tool_call' && !historicalToolCallIds.has(e.toolCallId)) ||
-          // A live ask_user panel not yet in history (a subsession's batch —
-          // subsession turns only persist after they complete) rides along.
           (e.type === 'ask_user' && !historicalAskUserIds.has(e.toolCallId)),
       );
       return { ...state, session: [...entries, ...liveOnly] };

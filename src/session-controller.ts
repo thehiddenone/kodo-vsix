@@ -193,6 +193,11 @@ export interface SessionDeps {
   addWorkspaceFolder: (folderPath: string, name: string) => void;
   /** Shared SecretStorage-backed API-key prompt; replies on this session's WS. */
   handleApiKeyRequest: (vendor: string, requestId: string, send: (env: Envelope) => void) => void;
+  /**
+   * Native folder-picker dialog for `create_new_project`'s interactive
+   * bootstrap path (no webview UI involved); replies on this session's WS.
+   */
+  chooseProjectFolder: (requestId: string, send: (env: Envelope) => void) => void;
   /** Forget whichever key is currently active for `vendor` (server-initiated revoke). */
   revokeApiKey: (vendor: string) => void;
   /** Called once the server assigns/confirms this session's id. */
@@ -285,6 +290,14 @@ export class SessionController {
   private thinkingLevel = '';
   private thinkingContext: ThinkingContext = { family: null, tiers: [], defaultTier: '' };
   private running = false;
+  // Server-authoritative twin of the webview's `awaitingLlm` ("Awaiting
+  // response" spinner) — true iff the server is between an `llm.turn_start`
+  // and that call's first chunk. Unlike `running` (which stays true for a
+  // whole multi-round tool-use turn), this narrows to the one sub-state the
+  // live `llm.turn_start`/token/thinking/toolgen events normally drive, so
+  // `_rehydrate()` can replay it after a reload that missed those live
+  // events (see the `state` handler below and doc/WS_PROTOCOL.md §5.1).
+  private awaitingLlm = false;
   // The last shown values pushed to the server, so we resend only on change
   // (`undefined` until the first sync forces an initial send).
   private sentEditControl: EditControl | undefined;
@@ -339,11 +352,15 @@ export class SessionController {
   /**
    * Send a `project.create` request over this session's connection and await
    * the server's `project.create.done` / `project.create.error` response.
-   * Backs the "Create Project" command, which already has a concrete folder
-   * from its own picker dialog and so always supplies `path`.
+   * Backs the "Create Project" command: `{ path }` when the user picked a
+   * concrete folder directly (that folder becomes the project root); `{ name
+   * }` alone when a workspace is already open (the server reserves a fresh
+   * sibling directory under the session's `physical_root` — the identical
+   * has-workspace placement `CreateNewProjectTool` uses, see
+   * `EngineCore._create_project`/doc/WS_PROTOCOL.md).
    */
   createProject(
-    payload: { path: string; force?: boolean },
+    payload: { path: string; force?: boolean } | { name: string },
     timeoutMs = 15_000,
   ): Promise<Record<string, unknown>> {
     const env = makeRequest('project.create', payload);
@@ -982,6 +999,20 @@ export class SessionController {
     if (this.lastPrompt) {
       this._post({ type: 'restore_prompt', text: this.lastPrompt });
     }
+    // Rehydration snapshot for the "Awaiting response" spinner: a fresh
+    // webview mount defaults `awaitingLlm` to false, and the live
+    // `llm.turn_start` event that would normally set it is not replayed by
+    // the server's outbox once already delivered — so without this, a
+    // reload that lands between turn_start and the first chunk (the turn
+    // itself keeps running server-side regardless of the WS connection,
+    // doc/WS_PROTOCOL.md §8) would leave the spinner permanently off even
+    // though the server is still genuinely working. `this.awaitingLlm` is
+    // kept current from the server-authoritative `state.awaiting_first_chunk`
+    // field (see the 'state' handler), so replaying it here as a synthetic
+    // 'llm_turn_start' just tells the reducer what it already missed.
+    if (this.awaitingLlm) {
+      this._post({ type: 'llm_turn_start' });
+    }
     if (this.tokens) {
       this._post({ type: 'token', text: this.tokens });
     }
@@ -1103,6 +1134,12 @@ export class SessionController {
       // authoritative signal the Edit/Command lock and the frozen-toggle "queued"
       // status hang off (the legacy `stage` field above is vestigial/always IDLE).
       this.running = phase === 'running';
+      // Server-authoritative snapshot for the "Awaiting response" spinner —
+      // see the field doc comment. Cached (not posted directly) so
+      // `_rehydrate()` can replay it as a synthetic `llm_turn_start` on a
+      // fresh webview mount; while connected, the live `llm.turn_start`/
+      // token/thinking/toolgen events already drive the spinner themselves.
+      this.awaitingLlm = Boolean(env.payload.awaiting_first_chunk ?? false);
       // Adopt the server's authoritative snapshot for the two *frozen* toggles —
       // both the selected values and the per-turn frozen effective values it just
       // froze/reported. Edit/Command are host-owned (never adopted from the
@@ -1565,6 +1602,14 @@ export class SessionController {
       return;
     }
 
+    // Server-initiated folder-picker request for `create_new_project`'s
+    // interactive bootstrap path (no project/workspace bound yet). Host-native
+    // dialog only, no webview UI involved.
+    if (env.kind === 'request' && evtType === 'prompt.choose_project_folder') {
+      this.deps.chooseProjectFolder(env.id, (e) => this._sendStamped(e));
+      return;
+    }
+
     if (env.kind === 'event' && evtType === 'api_key.revoke') {
       const vendor = String(env.payload.vendor ?? '');
       if (vendor) {
@@ -1782,6 +1827,7 @@ export class SessionController {
       this.autonomous = false;
       this.effectiveAutonomous = false;
       this.running = false;
+      this.awaitingLlm = false;
       this.editControl = 'smart';
       this.commandControl = 'smart';
       this._sendStamped(makeRequest('workflow.set', { mode: 'problem_solving' }));
@@ -1800,8 +1846,12 @@ export class SessionController {
       // Edit/Command selection from the persisted value only when *not* locked;
       // while locked the persisted value is the forced Allow All/Permissive, so
       // we leave the selection at its Smart default (it would otherwise show a
-      // stale forced value on the next unlock).
+      // stale forced value on the next unlock). Same default-then-correct
+      // treatment as `running`: if a turn is genuinely still going server-
+      // side, the fresh `state` event `_handle_session_hello` sends right
+      // after this ack corrects both fields from the live snapshot.
       this.running = false;
+      this.awaitingLlm = false;
       if (this.autonomous) {
         this.editControl = 'smart';
         this.commandControl = 'smart';

@@ -394,14 +394,6 @@ export function App() {
     }
   }
 
-  if (!state.hasWorkspace) {
-    return (
-      <div style={styles.root}>
-        <div style={styles.inactiveMsg}>Open a workspace to use Kōdo.</div>
-      </div>
-    );
-  }
-
   // A turn is in progress iff the server reports phase "running" (forwarded as
   // `state.running` via the `mode_state` message). The older `state.stage`
   // signal is dead — the server's `state` event no longer carries a `stage`

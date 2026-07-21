@@ -11,15 +11,6 @@ export const styles = {
     padding: '12px',
     boxSizing: 'border-box',
   },
-  inactiveMsg: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: 'var(--vscode-descriptionForeground)',
-    textAlign: 'center' as const,
-    padding: '24px',
-  },
   attachBtn: {
     background: 'transparent',
     color: '#c8a400',

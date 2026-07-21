@@ -228,13 +228,6 @@ function buildHtml(): string {
       padding: 8px 2px;
       line-height: 1.5;
     }
-    #inactive-msg {
-      display: none;
-      color: var(--vscode-descriptionForeground);
-      font-size: 0.9em;
-      padding: 16px 4px;
-      line-height: 1.5;
-    }
     .cloud-disclaimer {
       display: flex;
       gap: 8px;
@@ -274,7 +267,6 @@ function buildHtml(): string {
   </style>
 </head>
 <body>
-  <div id="inactive-msg">Open a workspace to use Kōdo.</div>
   <div id="main-controls">
     <div class="status-row">
       <div class="status">
@@ -655,13 +647,6 @@ function buildHtml(): string {
     // ----------------------------------------------------------------
     window.addEventListener('message', ({ data }) => {
       if (data.type !== 'update') { return; }
-
-      // Workspace gate
-      if (data.hasWorkspace !== undefined) {
-        const active = Boolean(data.hasWorkspace);
-        document.getElementById('inactive-msg').style.display = active ? 'none' : 'block';
-        document.getElementById('main-controls').style.display = active ? '' : 'none';
-      }
 
       // Unified status
       _state.connected = Boolean(data.connected);

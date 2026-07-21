@@ -57,6 +57,9 @@ let extensionContext: vscode.ExtensionContext | null = null;
 // Serial queue for api_key.request handling — at most one "enter key" dialog at
 // a time; later requests for the same vendor find the stored key immediately.
 let _apiKeyQueue: Promise<void> = Promise.resolve();
+// Serial queue for prompt.choose_project_folder handling — at most one native
+// folder-picker dialog at a time.
+let _chooseProjectFolderQueue: Promise<void> = Promise.resolve();
 
 let launcher: ServerLauncher | null = null;
 let wsUrl = '';
@@ -308,7 +311,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push({ dispose: () => _downloadPolling.dispose() });
 
-  if (hasWorkspace) {
+  {
     const port = readServerDiscovery()?.port ?? DEFAULT_PORT;
     wsUrl = `ws://127.0.0.1:${port}/ws`;
 
@@ -499,6 +502,11 @@ function _sessionDeps(): SessionDeps {
     handleApiKeyRequest: (vendor, requestId, send) => {
       _apiKeyQueue = _apiKeyQueue.then(() => _handleApiKeyRequest(vendor, requestId, send));
     },
+    chooseProjectFolder: (requestId, send) => {
+      _chooseProjectFolderQueue = _chooseProjectFolderQueue.then(() =>
+        _handleChooseProjectFolder(requestId, send),
+      );
+    },
     revokeApiKey: (vendor) => {
       void cloudCredentials.revokeActiveKey(extensionContext!, vendor).then(() => _pushCloudAiSettingsState());
     },
@@ -547,10 +555,6 @@ function _createPanel(): vscode.WebviewPanel {
 
 /** Open a blank session (interactive + problem-solving) in a new tab. */
 function newSession(): void {
-  if (!hasWorkspace) {
-    void vscode.window.showInformationMessage('Kōdo: open a workspace first.');
-    return;
-  }
   const controller = new SessionController(_sessionDeps(), _createPanel(), '');
   sessions.set(controller.key, controller);
 }
@@ -603,8 +607,8 @@ function adoptPanel(panel: vscode.WebviewPanel, sessionId: string): void {
 // tab reopened (and reconnects mid-turn via the server's channel replay).
 // ---------------------------------------------------------------------------
 
-function _openSessionsKey(): string {
-  return `kodo.openSessions.${windowId}`;
+function _openSessionsKey(id: string = windowId): string {
+  return `kodo.openSessions.${id}`;
 }
 
 function _rememberedOpenSessions(): string[] {
@@ -717,16 +721,49 @@ async function _reconcileOpenSessions(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Scaffold a new (or existing, picked) folder as a Kōdo project. Delegates the
- * actual filesystem work to the server's `project.create` message — the same
- * `WorkflowEngine.__create_project` path backing the LLM-facing
- * `create_new_project` tool — so the resulting layout (`specs/`, `src/`,
- * `test/`, `.kodo/kodo.md`) always matches. Requires an open, foreground
- * session tab to route the request through (the server scaffolds relative to
- * that session's engine and pushes `workspace.add_folder` back over its
- * socket).
+ * Show a native "open directory" dialog to pick a workspace-home *parent*
+ * folder — used both by `_handleChooseProjectFolder` (the `create_new_project`
+ * tool's interactive bootstrap round trip) and by the manual "Create Project"
+ * command's no-workspace path (`_promptOpenWorkspaceForNewProject`). No
+ * overwrite check is needed: the server always reserves a fresh, not-yet-
+ * existing, slug-named subdirectory under the picked folder for the actual
+ * project — it never writes into the picked folder itself, so there is
+ * nothing to overwrite.
  */
-async function createProject(): Promise<string | null> {
+async function _pickWorkspaceHomeFolder(): Promise<string | null> {
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'Select workspace folder',
+    title: 'Kōdo: Select a folder to create the new project in',
+  });
+  return picked && picked.length > 0 ? picked[0].fsPath : null;
+}
+
+/** Show an "open file" dialog restricted to `.code-workspace` files. */
+async function _pickCodeWorkspaceFile(): Promise<string | null> {
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { 'Code Workspace': ['code-workspace'] },
+    openLabel: 'Open workspace',
+    title: 'Kōdo: Select a .code-workspace file',
+  });
+  return picked && picked.length > 0 ? picked[0].fsPath : null;
+}
+
+/**
+ * Ask for a new project's name and create it inside the current workspace —
+ * the has-workspace half of the "Create Project" command, and also what the
+ * no-workspace half resumes into post-reload (`_resumePendingCreateProjectPrompt`).
+ * Sends `project.create` with `{ name }` alone (no `path`): the server
+ * reserves a fresh sibling directory under the session's `physical_root` —
+ * the identical placement `CreateNewProjectTool`'s has-workspace branch uses
+ * (`EngineCore._create_project`, doc/WS_PROTOCOL.md).
+ */
+async function _promptCreateProjectName(): Promise<string | null> {
   const active = _findActiveSession();
   if (!active) {
     vscode.window.showErrorMessage(
@@ -735,62 +772,206 @@ async function createProject(): Promise<string | null> {
     return null;
   }
 
-  const picked = await vscode.window.showOpenDialog({
-    canSelectFiles: false,
-    canSelectFolders: true,
-    canSelectMany: false,
-    openLabel: 'Select project folder',
-    title: 'Kōdo: Select or create a project folder',
+  const name = await vscode.window.showInputBox({
+    title: 'Kōdo: New project name',
+    prompt: 'Creates a new project folder inside the current workspace.',
+    placeHolder: 'my-project',
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.trim() ? null : 'Enter a project name.'),
   });
-
-  if (!picked || picked.length === 0) {
+  if (!name || !name.trim()) {
     return null;
   }
 
-  const root = picked[0].fsPath;
-  const kodoMd = path.join(root, '.kodo', 'kodo.md');
-
-  let force = false;
-  if (fs.existsSync(kodoMd)) {
-    const choice = await vscode.window.showWarningMessage(
-      `${kodoMd} already exists. Overwrite?`,
-      'Overwrite',
-      'Cancel',
-    );
-    if (choice !== 'Overwrite') {
-      return null;
-    }
-    force = true;
-  }
-
   try {
-    const resp = await active.createProject({ path: root, force });
+    const resp = await active.createProject({ name: name.trim() });
     if (resp.type === 'project.create.error' || resp.type === 'error') {
       const message = String(resp.message ?? 'unknown error');
-      vscode.window.showErrorMessage(`Kōdo: Init Project failed — ${message}`);
+      vscode.window.showErrorMessage(`Kōdo: Create Project failed — ${message}`);
       return null;
     }
 
-    const doc = await vscode.workspace.openTextDocument(kodoMd);
-    await vscode.window.showTextDocument(doc);
-
+    const root = String(resp.path ?? '');
+    const kodoMd = path.join(root, '.kodo', 'kodo.md');
+    if (root && fs.existsSync(kodoMd)) {
+      const doc = await vscode.workspace.openTextDocument(kodoMd);
+      await vscode.window.showTextDocument(doc);
+    }
     vscode.window.showInformationMessage(`Kōdo project initialised at ${root}`);
-    return root;
+    return root || null;
   } catch (err) {
-    vscode.window.showErrorMessage(`Kōdo: Init Project failed — ${String(err)}`);
+    vscode.window.showErrorMessage(`Kōdo: Create Project failed — ${String(err)}`);
     return null;
   }
 }
 
+// `globalState` (not `workspaceState`): opening a new workspace folder or
+// `.code-workspace` file always reloads the window, and for a currently
+// folder-less window that reload abandons `workspaceState` entirely (a new
+// workspace identity) — the same reason `window.rebind`'s open-session list
+// migration uses `globalState` (see `_rebindWindowForFirstFolder`). Not
+// window-id-scoped like that list is: predicting the *post-reload* window id
+// up front is straightforward for a plain folder (`_deriveWindowIdFromKey`)
+// but not for a `.code-workspace` file, whose first *declared* folder decides
+// the post-reload id and isn't known without parsing the file. Instead the
+// stored value is a timestamp, and a resuming window only honors it within
+// `_PENDING_CREATE_PROJECT_TTL_MS` — long enough to cover this window's own
+// reload, short enough that an unrelated window's *own* first `hello.ack`
+// (e.g. every open window's control connection reconnecting together after a
+// server restart) essentially never lands inside someone else's window.
+const _PENDING_CREATE_PROJECT_KEY = 'kodo.pendingCreateProjectArmedAt';
+const _PENDING_CREATE_PROJECT_TTL_MS = 30_000;
+
+async function _armPendingCreateProjectPrompt(): Promise<void> {
+  await extensionContext?.globalState.update(_PENDING_CREATE_PROJECT_KEY, Date.now());
+}
+
 /**
- * Add a directory the server has just scaffolded — via the `create_new_project`
- * tool or the "Create Project" command's `project.create` message — to the
- * open workspace. The folder already exists on disk; this only registers it
- * as a VS Code workspace folder, so the agent's subsequent file edits are
- * visible and the extension re-pushes `workspace.folders` to the server.
- * No-op when the folder is already part of the workspace.
+ * Called once per activation, after the control connection's `hello.ack`
+ * (so `hasWorkspace` and any sticky-tab-restored session are both settled).
+ * Consumes the flag `_armPendingCreateProjectPrompt` set right before a
+ * no-workspace "Create Project" reload, and resumes exactly where the
+ * has-workspace path picks up: ask for a name, create it.
  */
-function addWorkspaceFolder(folderPath: string, name: string): void {
+async function _resumePendingCreateProjectPrompt(): Promise<void> {
+  const armedAt = extensionContext?.globalState.get<number>(_PENDING_CREATE_PROJECT_KEY);
+  if (armedAt === undefined) {
+    return;
+  }
+  await extensionContext?.globalState.update(_PENDING_CREATE_PROJECT_KEY, undefined);
+  if (Date.now() - armedAt > _PENDING_CREATE_PROJECT_TTL_MS) {
+    return;
+  }
+  if (hasWorkspace) {
+    await _promptCreateProjectName();
+  }
+  // No workspace even now (e.g. the user cancelled VS Code's own folder/
+  // workspace-open flow after the reload) — nothing to resume into; the
+  // flag is already consumed, so re-running the command starts fresh.
+}
+
+/**
+ * No-workspace half of "Create Project": explains why a workspace is needed
+ * and offers to open one — a plain folder (added as this window's first
+ * workspace folder, reusing the same `addWorkspaceFolder`/window-rebind path
+ * `create_new_project`'s bootstrap already uses) or an existing multi-root
+ * `.code-workspace` file (a genuine VS Code workspace switch, via the
+ * `vscode.openFolder` command — it accepts a workspace-file URI directly).
+ * Either way VS Code reloads the window; `_resumePendingCreateProjectPrompt`
+ * picks the flow back up on the other side.
+ */
+async function _promptOpenWorkspaceForNewProject(): Promise<void> {
+  const SELECT_FOLDER = 'Select Folder for New Workspace…';
+  const OPEN_WORKSPACE_FILE = 'Open .code-workspace File…';
+  const choice = await vscode.window.showInformationMessage(
+    'Kōdo needs a workspace to create a project in.',
+    {
+      modal: true,
+      detail:
+        'Pick a folder to use as a new workspace, or open an existing multi-root ' +
+        '.code-workspace file. VS Code reloads this window into it, then Kōdo asks ' +
+        "for the new project's name.",
+    },
+    SELECT_FOLDER,
+    OPEN_WORKSPACE_FILE,
+    'Cancel',
+  );
+
+  if (choice === SELECT_FOLDER) {
+    const picked = await _pickWorkspaceHomeFolder();
+    if (!picked) {
+      return;
+    }
+    await _armPendingCreateProjectPrompt();
+    await addWorkspaceFolder(picked, '');
+  } else if (choice === OPEN_WORKSPACE_FILE) {
+    const picked = await _pickCodeWorkspaceFile();
+    if (!picked) {
+      return;
+    }
+    await _armPendingCreateProjectPrompt();
+    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(picked), {
+      forceReuseWindow: true,
+    });
+  }
+  // 'Cancel' or dismissed: nothing to do.
+}
+
+/**
+ * "Kōdo: Create Project" command. A workspace already open → ask only for a
+ * project name and create it there. No workspace → `_promptOpenWorkspaceForNewProject`
+ * (a reload-spanning flow resumed by `_resumePendingCreateProjectPrompt`).
+ * Both halves require an open, foreground session tab to route the eventual
+ * `project.create` request through — checked up front so a doomed no-
+ * workspace flow fails before putting the user through a pointless reload.
+ */
+async function createProject(): Promise<string | null> {
+  if (!_findActiveSession()) {
+    vscode.window.showErrorMessage(
+      'Kōdo: open a session tab before creating a project, then try again.',
+    );
+    return null;
+  }
+  if (hasWorkspace) {
+    return _promptCreateProjectName();
+  }
+  await _promptOpenWorkspaceForNewProject();
+  return null;
+}
+
+/**
+ * Sequenced hand-off run *before* a folder-less window gains its first
+ * folder — the one transition `_stableWindowId` cannot survive on its own
+ * (see its doc comment): VS Code restarts the extension host once
+ * `workspaceFolders[0]` changes, and the freshly computed id (derived from
+ * the new folder path) can never match whatever id this window held before
+ * (a persisted random value, scoped to storage this transition abandons).
+ *
+ * Computes the id the restarted extension host *will* derive, tells the
+ * server to re-key any session this window owns onto it (awaited — see
+ * `SessionManager.rebind_window`), and migrates the local
+ * `kodo.openSessions.<windowId>` list to the new key — all before the
+ * caller triggers `updateWorkspaceFolders`. By the time the reload
+ * completes, both sides already agree on the new id, so `_reconcileOpenSessions`
+ * finds its sessions waiting under it instead of racing a derivation match.
+ *
+ * Best-effort on the server round trip: if the control connection is
+ * unreachable, we still migrate `globalState` locally and proceed — no
+ * worse than today's behavior, which has no rebind at all.
+ */
+async function _rebindWindowForFirstFolder(newFirstFolderPath: string): Promise<void> {
+  const newWindowId = _deriveWindowIdFromKey(newFirstFolderPath);
+  if (newWindowId === windowId) {
+    return;
+  }
+  try {
+    await sendControlAwait('window.rebind', {
+      old_window_id: windowId,
+      new_window_id: newWindowId,
+    });
+  } catch {
+    // Control connection unreachable — proceed with the local migration
+    // anyway; see doc comment above.
+  }
+  const remembered = _rememberedOpenSessions();
+  if (remembered.length > 0) {
+    await extensionContext?.globalState.update(_openSessionsKey(newWindowId), remembered);
+    await extensionContext?.globalState.update(_openSessionsKey(windowId), undefined);
+  }
+}
+
+/**
+ * Add an already-existing directory to the open workspace — either one the
+ * server has just scaffolded (via the `create_new_project` tool or the
+ * "Create Project" command's `project.create` message, so the agent's
+ * subsequent file edits are visible) or, for a currently folder-less window,
+ * a raw folder the user picked to become the new workspace home
+ * (`_promptOpenWorkspaceForNewProject`) before any project exists in it yet.
+ * Either way this only registers it as a VS Code workspace folder and
+ * re-pushes `workspace.folders` to the server. No-op when the folder is
+ * already part of the workspace.
+ */
+async function addWorkspaceFolder(folderPath: string, name: string): Promise<void> {
   const folderUri = vscode.Uri.file(folderPath);
   const alreadyInWorkspace =
     vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === folderUri.fsPath) ?? false;
@@ -798,6 +979,9 @@ function addWorkspaceFolder(folderPath: string, name: string): void {
     return;
   }
   const insertAt = vscode.workspace.workspaceFolders?.length ?? 0;
+  if (insertAt === 0) {
+    await _rebindWindowForFirstFolder(folderPath);
+  }
   vscode.workspace.updateWorkspaceFolders(
     insertAt,
     0,
@@ -1076,6 +1260,9 @@ function handleControlEnvelope(env: Envelope): void {
     // sessions that the panel serializer could not restore (see the
     // open-session memory block above).
     void _reconcileOpenSessions();
+    // Resume a "Create Project" flow that reloaded this window to open its
+    // first workspace folder/file — see `_promptOpenWorkspaceForNewProject`.
+    void _resumePendingCreateProjectPrompt();
     return;
   }
 
@@ -1148,11 +1335,20 @@ function _newId(): string {
  * folder-less window (which cannot host sessions anyway) falls back to a
  * persisted random id.
  */
+/** Shared derivation formula: must match exactly everywhere a window id is
+ * computed from a folder/workspace-file path (see `_stableWindowId` and the
+ * `window.rebind` pre-check in `addWorkspaceFolder`) — a mismatch here would
+ * silently reintroduce the id-instability bug the rebind handshake exists
+ * to close. */
+function _deriveWindowIdFromKey(key: string): string {
+  return 'w-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
 function _stableWindowId(context: vscode.ExtensionContext): string {
   const firstFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const key = firstFolder ?? vscode.workspace.workspaceFile?.fsPath;
   if (key) {
-    return 'w-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+    return _deriveWindowIdFromKey(key);
   }
   const existing = context.workspaceState.get<string>('kodo.windowId');
   if (existing) {
@@ -1927,4 +2123,23 @@ async function _handleApiKeyRequest(
       'Alternatively, you can configure Kōdo to use a local model running on your machine (e.g., llama.cpp).',
   );
   send(makeResponse(requestId, { error: 'cancelled' }));
+}
+
+// ---------------------------------------------------------------------------
+// prompt.choose_project_folder: the `create_new_project` tool's interactive
+// bootstrap path (no project/workspace bound yet, session not autonomous).
+// Host-native dialog only, no webview UI involved — same shape as
+// `_handleApiKeyRequest` above.
+// ---------------------------------------------------------------------------
+
+async function _handleChooseProjectFolder(
+  requestId: string,
+  send: (env: Envelope) => void,
+): Promise<void> {
+  const picked = await _pickWorkspaceHomeFolder();
+  if (!picked) {
+    send(makeResponse(requestId, { error: 'cancelled' }));
+    return;
+  }
+  send(makeResponse(requestId, { path: picked }));
 }
