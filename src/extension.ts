@@ -556,9 +556,10 @@ function _createPanel(): vscode.WebviewPanel {
 }
 
 /** Open a blank session (interactive + problem-solving) in a new tab. */
-function newSession(): void {
+function newSession(): SessionController {
   const controller = new SessionController(_sessionDeps(), _createPanel(), '');
   sessions.set(controller.key, controller);
+  return controller;
 }
 
 /** Reveal the most recent open session, or start a new one if none are open. */
@@ -839,6 +840,24 @@ async function _pickCodeWorkspaceFile(): Promise<string | null> {
 }
 
 /**
+ * Poll `controller.isActiveAndReady` until it's true (WS connected + the
+ * server's `hello.ack` assigned a session id) or `timeoutMs` elapses. Used
+ * right after `newSession()` to know when a freshly opened tab is actually
+ * usable for `project.create`, since both connecting and the id assignment
+ * are async.
+ */
+async function _waitForSessionReady(controller: SessionController, timeoutMs = 15_000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (controller.isActiveAndReady) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return controller.isActiveAndReady;
+}
+
+/**
  * Ask for a new project's name and create it inside the current workspace —
  * the has-workspace half of the "Create Project" command, and also what the
  * no-workspace half resumes into post-reload (`_resumePendingCreateProjectPrompt`).
@@ -846,14 +865,21 @@ async function _pickCodeWorkspaceFile(): Promise<string | null> {
  * reserves a fresh sibling directory under the session's `physical_root` —
  * the identical placement `CreateNewProjectTool`'s has-workspace branch uses
  * (`EngineCore._create_project`, doc/WS_PROTOCOL.md).
+ *
+ * `project.create` needs an open, foreground, ready session tab to route the
+ * request through. If none is open, one is opened here (rather than failing)
+ * so "Create Project" works from a bare window with no session tab yet.
  */
 async function _promptCreateProjectName(): Promise<string | null> {
-  const active = _findActiveSession();
+  let active = _findActiveSession();
   if (!active) {
-    vscode.window.showErrorMessage(
-      'Kōdo: open a session tab before creating a project, then try again.',
-    );
-    return null;
+    active = newSession();
+    if (!(await _waitForSessionReady(active))) {
+      vscode.window.showErrorMessage(
+        'Kōdo: could not start a new session to create the project in — try again.',
+      );
+      return null;
+    }
   }
 
   const name = await vscode.window.showInputBox({
@@ -988,7 +1014,6 @@ async function _promptOpenWorkspaceForNewProject(): Promise<void> {
     },
     SELECT_FOLDER,
     OPEN_WORKSPACE_FILE,
-    'Cancel',
   );
 
   if (choice === SELECT_FOLDER) {
@@ -1020,18 +1045,11 @@ async function _promptOpenWorkspaceForNewProject(): Promise<void> {
 /**
  * "Kōdo: Create Project" command. A workspace already open → ask only for a
  * project name and create it there. No workspace → `_promptOpenWorkspaceForNewProject`
- * (a reload-spanning flow resumed by `_resumePendingCreateProjectPrompt`).
- * Both halves require an open, foreground session tab to route the eventual
- * `project.create` request through — checked up front so a doomed no-
- * workspace flow fails before putting the user through a pointless reload.
+ * (a reload-spanning flow resumed by `_resumePendingCreateProjectPrompt`). Both
+ * halves converge on `_promptCreateProjectName`, which opens a session tab of
+ * its own if none is open yet.
  */
 async function createProject(): Promise<string | null> {
-  if (!_findActiveSession()) {
-    vscode.window.showErrorMessage(
-      'Kōdo: open a session tab before creating a project, then try again.',
-    );
-    return null;
-  }
   if (hasWorkspace) {
     return _promptCreateProjectName();
   }
