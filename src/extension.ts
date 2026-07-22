@@ -43,8 +43,8 @@ import type {
 import { hardwareFitWarningForFlavor, isDownloadableLocalEntry } from './llm-registry-types';
 import { startLocalDownloadPolling } from './local-model-downloads';
 import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from './reconcile-policy';
-import { resumeTarget, resumeTargetMatchesCurrent } from './workspace-resume-policy';
-import type { RememberedWorkspace } from './workspace-resume-policy';
+import { requiresWorkspaceSwitchConfirmation, resumeTarget, resumeTargetMatchesCurrent } from './workspace-resume-policy';
+import type { RememberedWorkspace, ResumeTarget } from './workspace-resume-policy';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
@@ -1172,7 +1172,8 @@ function _parseRememberedWorkspace(raw: unknown): RememberedWorkspace | null {
     }
   }
   const codeWorkspaceFile = typeof r.code_workspace_file === 'string' ? r.code_workspace_file : null;
-  return { physicalRoot, folders, codeWorkspaceFile };
+  const locked = r.locked === true;
+  return { physicalRoot, folders, codeWorkspaceFile, locked };
 }
 
 /** Render an ISO-8601 timestamp as a short local date/time, or "unknown". */
@@ -1235,7 +1236,9 @@ async function pickSession(): Promise<void> {
         folderPaths: loaded,
       };
       if (!resumeTargetMatchesCurrent(target, current)) {
-        workspaceNote = ' · will reopen this window’s workspace';
+        workspaceNote = remembered.locked
+          ? ' · will ask to reopen this window’s workspace'
+          : ' · will reopen this window’s workspace';
       }
     }
 
@@ -1278,6 +1281,19 @@ async function pickSession(): Promise<void> {
   }
 }
 
+/** Human-readable description of a `ResumeTarget`, for the workspace-switch
+ *  confirmation dialog's detail text. */
+function _describeResumeTarget(target: ResumeTarget): string {
+  if (target.kind === 'file') {
+    return `the workspace "${path.basename(target.path)}"`;
+  }
+  if (target.kind === 'folders') {
+    const names = target.entries.map(([name]) => name);
+    return names.length === 1 ? `the folder "${names[0]}"` : `the folders ${names.map((n) => `"${n}"`).join(', ')}`;
+  }
+  return 'a different workspace';
+}
+
 /**
  * Resume a session picked via `pickSession()`, opening its remembered
  * workspace into the CURRENT window first if it doesn't already match —
@@ -1313,6 +1329,27 @@ async function _resumeSessionIntoWorkspace(
   if (resumeTargetMatchesCurrent(target, current)) {
     openExistingSession(sessionId);
     return;
+  }
+
+  // A session with a locked folder has an irreversible link to its
+  // workspace — reloading into a different one needs the user's explicit
+  // go-ahead first. An unlocked session has nothing legitimate to protect
+  // yet, so it keeps the pre-existing silent-reopen behaviour.
+  if (requiresWorkspaceSwitchConfirmation(remembered?.locked ?? false, target, current)) {
+    const choice = await vscode.window.showWarningMessage(
+      'Open this session in a different workspace?',
+      {
+        modal: true,
+        detail:
+          `This session is linked to ${_describeResumeTarget(target)}, ` +
+          'which is different from this window’s current workspace. Opening it will replace ' +
+          'this window’s workspace with that one.',
+      },
+      'Open',
+    );
+    if (choice !== 'Open') {
+      return;
+    }
   }
 
   // Mismatch: this reload is at least as disruptive as the `insertAt <= 1`

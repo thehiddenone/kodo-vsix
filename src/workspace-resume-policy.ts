@@ -21,6 +21,17 @@ export interface RememberedWorkspace {
   physicalRoot: string;
   folders: Record<string, string>;
   codeWorkspaceFile: string | null;
+  /**
+   * True once at least one of this session's folders has earned a checkpoint
+   * commit (`kodo`'s `TransientStore.workspace_locked_paths` is non-empty).
+   * Server-enforced and irreversible: a locked folder can never again be
+   * dropped from `folders`, even if the live VS Code workspace stops
+   * reporting it (see `WorkflowEngine.handle_workspace_folders`). Drives two
+   * things here: `resumeTarget` ignoring a remembered `.code-workspace` file
+   * once locked (see its doc comment) and `requiresWorkspaceSwitchConfirmation`
+   * gating the resume confirmation dialog to locked sessions only.
+   */
+  locked: boolean;
 }
 
 /** What resuming a session should do to the current window's workspace. */
@@ -39,6 +50,14 @@ export type ResumeTarget =
  * `fs.existsSync` check) — this function stays pure/no I/O. A remembered
  * `.code-workspace` file that no longer exists on disk falls back to the
  * folder list rather than erroring (explicit product decision).
+ *
+ * Once `remembered.locked` is true, the `.code-workspace` file is skipped
+ * entirely — even if it exists — and this always resolves to the folder
+ * list. A locked folder that's since been edited out of that file on disk
+ * would otherwise be silently dropped by reopening via the file, defeating
+ * the whole point of the lock; the folder map is the only structure the
+ * server's reconciliation (`WorkflowEngine.handle_workspace_folders`)
+ * actually guarantees to still contain it.
  */
 export function resumeTarget(
   remembered: RememberedWorkspace | null,
@@ -47,7 +66,7 @@ export function resumeTarget(
   if (!remembered || (!remembered.physicalRoot && Object.keys(remembered.folders).length === 0)) {
     return { kind: 'none' };
   }
-  if (remembered.codeWorkspaceFile && codeWorkspaceFileExists) {
+  if (!remembered.locked && remembered.codeWorkspaceFile && codeWorkspaceFileExists) {
     return { kind: 'file', path: remembered.codeWorkspaceFile };
   }
   return { kind: 'folders', entries: Object.entries(remembered.folders) };
@@ -79,4 +98,20 @@ export function resumeTargetMatchesCurrent(
   const a = [...targetPaths].sort();
   const b = [...current.folderPaths].sort();
   return a.every((p, i) => p === b[i]);
+}
+
+/**
+ * Whether resuming a session into `target` needs the user's explicit
+ * confirmation before this window's workspace is reloaded.
+ *
+ * Only sessions with at least one locked folder require it — an unlocked
+ * session has no legitimate workspace link to protect yet, so it keeps the
+ * pre-existing silent-reopen behaviour (`_resumeSessionIntoWorkspace`).
+ */
+export function requiresWorkspaceSwitchConfirmation(
+  locked: boolean,
+  target: ResumeTarget,
+  current: { workspaceFile: string | undefined; folderPaths: string[] },
+): boolean {
+  return locked && !resumeTargetMatchesCurrent(target, current);
 }
