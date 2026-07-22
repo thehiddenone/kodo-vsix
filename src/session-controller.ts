@@ -183,6 +183,14 @@ export interface SessionDeps {
   getProjectRoot: () => string;
   hasWorkspace: () => boolean;
   buildFolderMap: () => Record<string, string>;
+  /**
+   * Absolute path of the `.code-workspace` file the window was opened from,
+   * or `undefined` for a plain folder workspace — including VS Code's own
+   * in-memory `untitled:` multi-root workspace, which has no file on disk a
+   * future session could reopen. Pushed alongside `workspace.folders` so the
+   * server can remember it for session-resume (WS_PROTOCOL.md).
+   */
+  getCodeWorkspaceFile: () => string | undefined;
   /** Guided project picker (returns {root,name} or null if cancelled). */
   pickProject: () => Promise<{ root: string; name: string } | null>;
   /**
@@ -1827,6 +1835,7 @@ export class SessionController {
       makeRequest('workspace.folders', {
         physical_root: this.deps.getPhysicalRoot(),
         folders: this.deps.buildFolderMap(),
+        code_workspace_file: this.deps.getCodeWorkspaceFile(),
       }),
     );
 
@@ -1896,6 +1905,7 @@ export class SessionController {
       makeRequest('workspace.folders', {
         physical_root: this.deps.getPhysicalRoot(),
         folders: this.deps.buildFolderMap(),
+        code_workspace_file: this.deps.getCodeWorkspaceFile(),
       }),
     );
   }

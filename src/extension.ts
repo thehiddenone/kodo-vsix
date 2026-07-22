@@ -43,6 +43,8 @@ import type {
 import { hardwareFitWarningForFlavor, isDownloadableLocalEntry } from './llm-registry-types';
 import { startLocalDownloadPolling } from './local-model-downloads';
 import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from './reconcile-policy';
+import { resumeTarget, resumeTargetMatchesCurrent } from './workspace-resume-policy';
+import type { RememberedWorkspace } from './workspace-resume-policy';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
@@ -498,6 +500,7 @@ function _sessionDeps(): SessionDeps {
     getProjectRoot: () => projectRoot,
     hasWorkspace: () => hasWorkspace,
     buildFolderMap: _buildFolderMap,
+    getCodeWorkspaceFile: _codeWorkspaceFile,
     pickProject,
     addWorkspaceFolder,
     getThinkingContext: _currentThinkingContext,
@@ -1149,6 +1152,27 @@ interface SessionPickItem extends vscode.QuickPickItem {
   sessionId?: string;
   isNew?: boolean;
   disabledReason?: string;
+  remembered?: RememberedWorkspace | null;
+}
+
+/** Parse `session.list`'s per-entry `workspace` field (`null` or
+ * `{physical_root, folders, code_workspace_file}`) into `RememberedWorkspace`. */
+function _parseRememberedWorkspace(raw: unknown): RememberedWorkspace | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const r = raw as Record<string, unknown>;
+  const physicalRoot = typeof r.physical_root === 'string' ? r.physical_root : '';
+  const folders: Record<string, string> = {};
+  if (r.folders && typeof r.folders === 'object') {
+    for (const [k, v] of Object.entries(r.folders as Record<string, unknown>)) {
+      if (typeof v === 'string') {
+        folders[k] = v;
+      }
+    }
+  }
+  const codeWorkspaceFile = typeof r.code_workspace_file === 'string' ? r.code_workspace_file : null;
+  return { physicalRoot, folders, codeWorkspaceFile };
 }
 
 /** Render an ISO-8601 timestamp as a short local date/time, or "unknown". */
@@ -1189,12 +1213,30 @@ async function pickSession(): Promise<void> {
     const root = typeof s.project_root === 'string' ? s.project_root : null;
     const taken = Boolean(s.taken);
     const openHere = _findBySessionId(id) !== undefined;
+    const remembered = _parseRememberedWorkspace(s.workspace);
 
-    let disabledReason: string | undefined;
-    if (taken && !openHere) {
-      disabledReason = 'Opened in another window';
-    } else if (root && !loaded.includes(root)) {
-      disabledReason = 'Guided Development project is not loaded into current workspace';
+    // Opened in another window is the only thing that still blocks picking a
+    // session outright — a workspace mismatch is no longer disabling: picking
+    // it reopens the remembered workspace into this window first (see
+    // `_resumeSessionIntoWorkspace`). `openHere` always wins (just reveal the
+    // live tab) regardless of what's remembered.
+    const disabledReason = taken && !openHere ? 'Opened in another window' : undefined;
+
+    let workspaceNote = '';
+    if (remembered && !openHere && !disabledReason) {
+      const codeWorkspaceFileExists = Boolean(
+        remembered.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
+      );
+      const target = resumeTarget(remembered, codeWorkspaceFileExists);
+      const current = {
+        workspaceFile: vscode.workspace.workspaceFile?.scheme === 'file'
+          ? vscode.workspace.workspaceFile.fsPath
+          : undefined,
+        folderPaths: loaded,
+      };
+      if (!resumeTargetMatchesCurrent(target, current)) {
+        workspaceNote = ' · will reopen this window’s workspace';
+      }
     }
 
     const kindLabel = root ? `Guided · ${path.basename(root)}` : 'Problem solving';
@@ -1204,9 +1246,10 @@ async function pickSession(): Promise<void> {
     items.push({
       label: (disabledReason ? '$(circle-slash) ' : '$(comment-discussion) ') + name,
       description: openHere ? `${kindLabel} · (opened here)` : kindLabel,
-      detail: disabledReason ? `${disabledReason} · ${timeLabel}` : timeLabel,
+      detail: disabledReason ? `${disabledReason} · ${timeLabel}` : `${timeLabel}${workspaceNote}`,
       sessionId: id,
       disabledReason,
+      remembered,
     });
   }
 
@@ -1226,8 +1269,123 @@ async function pickSession(): Promise<void> {
     return;
   }
   if (choice.sessionId) {
-    openExistingSession(choice.sessionId);
+    if (_findBySessionId(choice.sessionId)) {
+      // Already open here — just reveal the live tab, no workspace dance.
+      openExistingSession(choice.sessionId);
+    } else {
+      await _resumeSessionIntoWorkspace(choice.sessionId, choice.remembered ?? null);
+    }
   }
+}
+
+/**
+ * Resume a session picked via `pickSession()`, opening its remembered
+ * workspace into the CURRENT window first if it doesn't already match —
+ * exact-match folder replacement or a `.code-workspace` open, reusing the
+ * window rather than spawning a new one (product decisions, see the
+ * `project_kodo_workspace_session_linkage` memory). If the window's
+ * workspace already matches (or nothing was ever remembered), the session
+ * opens immediately with no reload.
+ *
+ * Mirrors `_promptOpenWorkspaceForNewProject`'s reload-and-resume pattern:
+ * a workspace switch reloads the extension host, so continuing "open this
+ * session" on the other side needs `_armPendingResumeSession` +
+ * `_resumePendingResumeSession` (consumed from the control connection's next
+ * `hello.ack`), exactly like `_armPendingCreateProjectPrompt`/
+ * `_resumePendingCreateProjectPrompt`.
+ */
+async function _resumeSessionIntoWorkspace(
+  sessionId: string,
+  remembered: RememberedWorkspace | null,
+): Promise<void> {
+  const codeWorkspaceFileExists = Boolean(
+    remembered?.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
+  );
+  const target = resumeTarget(remembered, codeWorkspaceFileExists);
+
+  const current = {
+    workspaceFile: vscode.workspace.workspaceFile?.scheme === 'file'
+      ? vscode.workspace.workspaceFile.fsPath
+      : undefined,
+    folderPaths: (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+  };
+
+  if (resumeTargetMatchesCurrent(target, current)) {
+    openExistingSession(sessionId);
+    return;
+  }
+
+  // Mismatch: this reload is at least as disruptive as the `insertAt <= 1`
+  // cases `reloadWipesSerializerState` guards (the whole folder set or the
+  // workspace file changes) — always arm the dead-serializer marker, and
+  // stash which session to resume opening on the other side.
+  await _armPendingResumeSession(sessionId);
+  await _armSerializerDead();
+
+  if (target.kind === 'file') {
+    if (extensionContext) {
+      const futureKey = _resolveFutureWindowKeyForCodeWorkspace(target.path);
+      if (futureKey) {
+        await _armWindowIdContinuity(extensionContext, futureKey);
+      }
+    }
+    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target.path), {
+      forceReuseWindow: true,
+    });
+    return;
+  }
+  if (target.kind === 'none') {
+    return; // unreachable — resumeTargetMatchesCurrent already treats 'none' as a match
+  }
+
+  if (extensionContext && target.entries.length > 0) {
+    await _armWindowIdContinuity(extensionContext, target.entries[0][1]);
+  }
+  const currentCount = vscode.workspace.workspaceFolders?.length ?? 0;
+  vscode.workspace.updateWorkspaceFolders(
+    0,
+    currentCount,
+    ...target.entries.map(
+      ([entryName, entryPath]: [string, string]) => ({ uri: vscode.Uri.file(entryPath), name: entryName }),
+    ),
+  );
+}
+
+// `globalState`, mirroring `_PENDING_CREATE_PROJECT_KEY` exactly: resuming a
+// picked session whose remembered workspace differs from the current one
+// reloads the window (`_resumeSessionIntoWorkspace`), so "open this session"
+// can't continue synchronously — it's picked back up from the next
+// activation's `hello.ack`, same recency-bound pattern (not window-id-scoped;
+// session continuity itself is handled precisely by `_armWindowIdContinuity`).
+const _PENDING_RESUME_SESSION_KEY = 'kodo.pendingResumeSessionId';
+const _PENDING_RESUME_SESSION_TTL_MS = 30_000;
+
+async function _armPendingResumeSession(sessionId: string): Promise<void> {
+  await extensionContext?.globalState.update(_PENDING_RESUME_SESSION_KEY, {
+    sessionId,
+    armedAt: Date.now(),
+  });
+}
+
+/**
+ * Called once per activation, after the control connection's `hello.ack`
+ * (so `hasWorkspace` is settled), alongside `_resumePendingCreateProjectPrompt`.
+ * Consumes the flag `_armPendingResumeSession` set right before a
+ * workspace-switching session resume, and finishes the job: open the session
+ * now that its remembered workspace is loaded.
+ */
+async function _resumePendingResumeSession(): Promise<void> {
+  const pending = extensionContext?.globalState.get<{ sessionId: string; armedAt: number }>(
+    _PENDING_RESUME_SESSION_KEY,
+  );
+  if (!pending) {
+    return;
+  }
+  await extensionContext?.globalState.update(_PENDING_RESUME_SESSION_KEY, undefined);
+  if (Date.now() - pending.armedAt > _PENDING_RESUME_SESSION_TTL_MS || !hasWorkspace) {
+    return;
+  }
+  openExistingSession(pending.sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1372,6 +1530,9 @@ function handleControlEnvelope(env: Envelope): void {
     // Resume a "Create Project" flow that reloaded this window to open its
     // first workspace folder/file — see `_promptOpenWorkspaceForNewProject`.
     void _resumePendingCreateProjectPrompt();
+    // Resume a `pickSession()` flow that reloaded this window into a picked
+    // session's remembered workspace — see `_resumeSessionIntoWorkspace`.
+    void _resumePendingResumeSession();
     return;
   }
 
@@ -1581,6 +1742,19 @@ function _buildFolderMap(): Record<string, string> {
     }
   }
   return map;
+}
+
+/**
+ * Absolute path of the `.code-workspace` file the window was opened from, or
+ * `undefined` for a plain folder workspace. Deliberately excludes VS Code's
+ * own in-memory `untitled:` scheme (minted for a brand-new multi-root
+ * workspace, e.g. right after `addWorkspaceFolder` promotes a folder-less
+ * window past its first folder) — there is no file on disk a future session
+ * could reopen, so remembering it would be actively wrong.
+ */
+function _codeWorkspaceFile(): string | undefined {
+  const file = vscode.workspace.workspaceFile;
+  return file?.scheme === 'file' ? file.fsPath : undefined;
 }
 
 function _readMode(): 'local' | 'cloud' {
