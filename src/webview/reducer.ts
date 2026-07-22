@@ -1,4 +1,208 @@
 import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, FileReviewFeedbackEntry } from './types';
+
+/** Shared, mutable bookkeeping threaded through every `wireEntryToSessionEntry`
+ *  call while processing one `session_history` delivery — populated from BOTH
+ *  the main entries and every spliced-in subsession's entries, so the
+ *  `liveOnly` carry-forward below can tell a genuinely-still-in-flight
+ *  tool_call/ask_user (not yet in either file) from one already covered by
+ *  history, regardless of which file it came from. */
+interface HistoryConversionContext {
+  historicalToolCallIds: Set<string>;
+  historicalAskUserIds: Set<string>;
+  localAnswers: Map<string, AskUserAnswer[]>;
+}
+
+/**
+ * Convert one wire history entry (from either the main `entries` array or a
+ * subsession's own array — both use the identical shapes) into a
+ * `SessionEntry`, or `null` for a divider/unrecognized type the caller
+ * handles itself. Factored out so the main log and every subsession's log
+ * are rendered by the exact same logic — the server hydrates one file at a
+ * time (doc/SESSIONS.md), and this is the client's one-time, unambiguous
+ * placement of that content, never a guess-based merge.
+ */
+function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConversionContext): SessionEntry | null {
+  const type = String(e.type ?? '');
+  if (type === 'user_message') {
+    // The server persists attachments as links (name + absolute path of the
+    // session's stored copy), never inline content, so rebuild the clickable
+    // chips from those links.
+    const rawAtts = Array.isArray(e.attachments) ? e.attachments : [];
+    const attachments = rawAtts.map((a) => {
+      const rec = a as Record<string, unknown>;
+      return { name: String(rec.name ?? ''), path: String(rec.path ?? '') };
+    });
+    return { type: 'user_message', content: String(e.content ?? ''), attachments, exclude_from_context: false };
+  }
+  if (type === 'assistant_response') {
+    return { type: 'assistant_response', content: String(e.content ?? ''), exclude_from_context: false };
+  }
+  if (type === 'thinking_block') {
+    return { type: 'thinking_block', content: String(e.content ?? ''), durationMs: typeof e.durationMs === 'number' ? e.durationMs : null, exclude_from_context: true };
+  }
+  if (type === 'status_response') {
+    // Persisted "Kodo responded in..." row (kodo doc/SESSIONS.md's `usage`
+    // marker) — part of history in its correct chronological position, so no
+    // live-state splicing is needed for it (see the liveOnly filter below,
+    // which no longer carries this type).
+    return {
+      type: 'status_response',
+      durationMs: typeof e.durationMs === 'number' ? e.durationMs : 0,
+      inputTokens: typeof e.inputTokens === 'number' ? e.inputTokens : 0,
+      outputTokens: typeof e.outputTokens === 'number' ? e.outputTokens : 0,
+      contextTokens: typeof e.contextTokens === 'number' ? e.contextTokens : 0,
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'tool_call') {
+    const rawRows = Array.isArray(e.rows) ? e.rows : [];
+    const rows: ToolCallDetailRow[] = rawRows.map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        name: String(row.name ?? ''),
+        value: String(row.value ?? ''),
+        source: row.source === 'output' ? 'output' : 'input',
+        visibility: row.visibility === 'always' ? 'always' : 'visible',
+      };
+    });
+    const rawDiff = e.diff as Record<string, unknown> | null | undefined;
+    const diff: DiffLinkData | null =
+      rawDiff && typeof rawDiff === 'object'
+        ? {
+            label: String(rawDiff.label ?? ''),
+            prevPath: String(rawDiff.prevPath ?? ''),
+            newPath: String(rawDiff.newPath ?? ''),
+          }
+        : null;
+    const rawCheckpoint = e.checkpoint as Record<string, unknown> | null | undefined;
+    const checkpoint: CheckpointData | null =
+      rawCheckpoint && typeof rawCheckpoint === 'object'
+        ? {
+            root: String(rawCheckpoint.root ?? ''),
+            sha: String(rawCheckpoint.sha ?? ''),
+            parent: String(rawCheckpoint.parent ?? ''),
+            index: typeof rawCheckpoint.index === 'number' ? rawCheckpoint.index : 0,
+            currentIndex: typeof rawCheckpoint.current_index === 'number' ? rawCheckpoint.current_index : 0,
+            undone: rawCheckpoint.undone === true,
+          }
+        : null;
+    const toolCallId = String(e.toolCallId ?? '');
+    ctx.historicalToolCallIds.add(toolCallId);
+    const rawNotes = Array.isArray(e.webSearchNotes) ? e.webSearchNotes : [];
+    return {
+      type: 'tool_call',
+      toolName: String(e.toolName ?? ''),
+      description: String(e.description ?? ''),
+      toolCallId,
+      rows,
+      detailFile: typeof e.detailFile === 'string' ? e.detailFile : null,
+      schemaCompliance: typeof e.schemaCompliance === 'boolean' ? e.schemaCompliance : null,
+      success: typeof e.success === 'boolean' ? e.success : null,
+      // History: the call already finished, so no live progress bar.
+      timeoutSeconds: null,
+      startedAt: null,
+      diff,
+      checkpoint,
+      // Generation timing is a live-only nicety; not persisted to history.
+      toolgenDurationMs: null,
+      toolgenChars: null,
+      webSearchNotes: rawNotes.map(String),
+      exclude_from_context: false,
+    };
+  }
+  if (type === 'ask_user') {
+    const toolCallId = String(e.toolCallId ?? '');
+    ctx.historicalAskUserIds.add(toolCallId);
+    const rawQuestions = Array.isArray(e.questions) ? e.questions : [];
+    const questions: AskUserQuestion[] = rawQuestions.map((q) => {
+      const rec = q as Record<string, unknown>;
+      return {
+        question: String(rec.question ?? ''),
+        kind: rec.kind === 'multi_choice' ? 'multi_choice' : 'single_choice',
+        options: Array.isArray(rec.options) ? rec.options.map((o) => String(o)) : [],
+      };
+    });
+    const rawAnswers = Array.isArray(e.answers) ? e.answers : null;
+    const answers: AskUserAnswer[] | null =
+      rawAnswers?.map((a) => {
+        const rec = a as Record<string, unknown>;
+        return {
+          selected: Array.isArray(rec.selected) ? rec.selected.map((s) => String(s)) : [],
+          free_text: typeof rec.free_text === 'string' ? rec.free_text : null,
+        };
+      }) ?? ctx.localAnswers.get(toolCallId) ?? null;
+    return { type: 'ask_user', toolCallId, questions, answers, exclude_from_context: false };
+  }
+  if (type === 'subagent_task') {
+    return { type: 'subagent_task', content: String(e.content ?? ''), exclude_from_context: true };
+  }
+  if (type === 'interrupted') {
+    // Replay of the server's stopped-turn notice (see
+    // WorkflowEngine.__persist_interrupted_turn) — same callout the live
+    // 'interrupted' action renders, so a reload shows it exactly where the
+    // Stop happened instead of dropping it from history.
+    return { type: 'interrupted', exclude_from_context: true };
+  }
+  if (type === 'context_compacted') {
+    return {
+      type: 'compaction_divider',
+      summaryExcerpt: String(e.summaryExcerpt ?? ''),
+      summary: String(e.summary ?? e.summaryExcerpt ?? ''),
+      tokensBefore: typeof e.tokensBefore === 'number' ? e.tokensBefore : 0,
+      tokensAfter: typeof e.tokensAfter === 'number' ? e.tokensAfter : 0,
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'runtime_error') {
+    // Replay of the server's persisted "error" marker (see
+    // EngineEmitters.emit_error) — same card the live 'runtime_error' action
+    // renders, so a reload doesn't lose the failure notice.
+    return {
+      type: 'error_notice',
+      message: String(e.message ?? ''),
+      recoverable: e.recoverable !== false,
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'security_rule_added') {
+    // Replay of the server's persisted "security_rule_added" marker (see
+    // EngineEmitters.emit_security_rule_added) — same card the live action
+    // renders, so a reload doesn't lose the record.
+    return {
+      type: 'security_rule_added',
+      scope: e.scope === 'global' ? 'global' : 'session',
+      offer: { executable: String(e.executable ?? ''), subcommand: String(e.subcommand ?? '') },
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'agent_unstuck_nudge') {
+    // Replay of a persisted "agent_unstuck_nudge"-kind message
+    // (doc/STUCK_DETECTION.md) — same notice the live 'agent_unstuck_nudge'
+    // action renders, so a reload doesn't lose the record of why the agent
+    // kept going.
+    const reasons = Array.isArray(e.reasons) ? e.reasons.map((r) => String(r)) : [];
+    return {
+      type: 'agent_unstuck_nudge',
+      note: String(e.note ?? ''),
+      reasons,
+      mode: String(e.mode ?? ''),
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'agent_stuck_critical') {
+    // Replay of the server's persisted "agent_stuck_critical" marker (see
+    // EngineEmitters.emit_agent_stuck_critical) — same callout the live
+    // 'agent_stuck_critical' action renders, so a reload doesn't lose the
+    // record of why the watchdog stopped trying.
+    return {
+      type: 'agent_stuck_critical',
+      message: String(e.message ?? ''),
+      exclude_from_context: true,
+    };
+  }
+  return null;
+}
+
 export function commitStreaming(state: State): SessionEntry[] {
   let session = state.session;
   if (state.streamingThinking) {
@@ -605,7 +809,14 @@ export function reducer(state: State, action: Action): State {
     case 'resume_dismissed':
       return { ...state, resumeSessionId: null };
     case 'session_history': {
-      const entries: SessionEntry[] = [];
+      // Hydration is one file at a time (kodo doc/SESSIONS.md): `action.entries`
+      // mirrors the main session log alone — a `subsession_start` there is a
+      // divider only, never inline content. `action.subsessions[id]` is that
+      // one subsession's own entries, read from exactly its own file. This
+      // reducer does the one-time, unambiguous placement of each subsession's
+      // block right after its start divider — never a merge of several files
+      // pre-flattened by the server, and never a guess based on ids already
+      // present in the live feed.
       const historicalToolCallIds = new Set<string>();
       const historicalAskUserIds = new Set<string>();
       // Answers the webview already holds locally (confirmed, response still
@@ -618,122 +829,11 @@ export function reducer(state: State, action: Action): State {
           e.type === 'ask_user' && e.answers !== null ? [[e.toolCallId, e.answers] as const] : [],
         ),
       );
+      const ctx: HistoryConversionContext = { historicalToolCallIds, historicalAskUserIds, localAnswers };
+      const entries: SessionEntry[] = [];
       for (const e of action.entries) {
         const type = String(e.type ?? '');
-        if (type === 'user_message') {
-          // The server persists attachments as links (name + absolute path of
-          // the session's stored copy), never inline content, so rebuild the
-          // clickable chips from those links.
-          const rawAtts = Array.isArray(e.attachments) ? e.attachments : [];
-          const attachments = rawAtts.map((a) => {
-            const rec = a as Record<string, unknown>;
-            return { name: String(rec.name ?? ''), path: String(rec.path ?? '') };
-          });
-          entries.push({ type, content: String(e.content ?? ''), attachments, exclude_from_context: false });
-        } else if (type === 'assistant_response') {
-          entries.push({ type, content: String(e.content ?? ''), exclude_from_context: false });
-        } else if (type === 'thinking_block') {
-          entries.push({ type: 'thinking_block', content: String(e.content ?? ''), durationMs: typeof e.durationMs === 'number' ? e.durationMs : null, exclude_from_context: true });
-        } else if (type === 'status_response') {
-          // Persisted "Kodo responded in..." row (kodo doc/SESSIONS.md's
-          // `usage` marker) — now part of history in its correct
-          // chronological position, so no live-state splicing is needed for
-          // it (see the liveOnly filter below, which no longer carries this
-          // type).
-          entries.push({
-            type: 'status_response',
-            durationMs: typeof e.durationMs === 'number' ? e.durationMs : 0,
-            inputTokens: typeof e.inputTokens === 'number' ? e.inputTokens : 0,
-            outputTokens: typeof e.outputTokens === 'number' ? e.outputTokens : 0,
-            contextTokens: typeof e.contextTokens === 'number' ? e.contextTokens : 0,
-            exclude_from_context: true,
-          });
-        } else if (type === 'tool_call') {
-          const rawRows = Array.isArray(e.rows) ? e.rows : [];
-          const rows: ToolCallDetailRow[] = rawRows.map((r) => {
-            const row = r as Record<string, unknown>;
-            return {
-              name: String(row.name ?? ''),
-              value: String(row.value ?? ''),
-              source: row.source === 'output' ? 'output' : 'input',
-              visibility: row.visibility === 'always' ? 'always' : 'visible',
-            };
-          });
-          const rawDiff = e.diff as Record<string, unknown> | null | undefined;
-          const diff: DiffLinkData | null =
-            rawDiff && typeof rawDiff === 'object'
-              ? {
-                  label: String(rawDiff.label ?? ''),
-                  prevPath: String(rawDiff.prevPath ?? ''),
-                  newPath: String(rawDiff.newPath ?? ''),
-                }
-              : null;
-          const rawCheckpoint = e.checkpoint as Record<string, unknown> | null | undefined;
-          const checkpoint: CheckpointData | null =
-            rawCheckpoint && typeof rawCheckpoint === 'object'
-              ? {
-                  root: String(rawCheckpoint.root ?? ''),
-                  sha: String(rawCheckpoint.sha ?? ''),
-                  parent: String(rawCheckpoint.parent ?? ''),
-                  index: typeof rawCheckpoint.index === 'number' ? rawCheckpoint.index : 0,
-                  currentIndex: typeof rawCheckpoint.current_index === 'number' ? rawCheckpoint.current_index : 0,
-                  undone: rawCheckpoint.undone === true,
-                }
-              : null;
-          const toolCallId = String(e.toolCallId ?? '');
-          historicalToolCallIds.add(toolCallId);
-          const rawNotes = Array.isArray(e.webSearchNotes) ? e.webSearchNotes : [];
-          entries.push({
-            type: 'tool_call',
-            toolName: String(e.toolName ?? ''),
-            description: String(e.description ?? ''),
-            toolCallId,
-            rows,
-            detailFile: typeof e.detailFile === 'string' ? e.detailFile : null,
-            schemaCompliance: typeof e.schemaCompliance === 'boolean' ? e.schemaCompliance : null,
-            success: typeof e.success === 'boolean' ? e.success : null,
-            // History: the call already finished, so no live progress bar.
-            timeoutSeconds: null,
-            startedAt: null,
-            diff,
-            checkpoint,
-            // Generation timing is a live-only nicety; not persisted to history.
-            toolgenDurationMs: null,
-            toolgenChars: null,
-            webSearchNotes: rawNotes.map(String),
-            exclude_from_context: false,
-          });
-        } else if (type === 'ask_user') {
-          const toolCallId = String(e.toolCallId ?? '');
-          historicalAskUserIds.add(toolCallId);
-          const rawQuestions = Array.isArray(e.questions) ? e.questions : [];
-          const questions: AskUserQuestion[] = rawQuestions.map((q) => {
-            const rec = q as Record<string, unknown>;
-            return {
-              question: String(rec.question ?? ''),
-              kind: rec.kind === 'multi_choice' ? 'multi_choice' : 'single_choice',
-              options: Array.isArray(rec.options) ? rec.options.map((o) => String(o)) : [],
-            };
-          });
-          const rawAnswers = Array.isArray(e.answers) ? e.answers : null;
-          const answers: AskUserAnswer[] | null =
-            rawAnswers?.map((a) => {
-              const rec = a as Record<string, unknown>;
-              return {
-                selected: Array.isArray(rec.selected) ? rec.selected.map((s) => String(s)) : [],
-                free_text: typeof rec.free_text === 'string' ? rec.free_text : null,
-              };
-            }) ?? localAnswers.get(toolCallId) ?? null;
-          entries.push({ type: 'ask_user', toolCallId, questions, answers, exclude_from_context: false });
-        } else if (type === 'subagent_task') {
-          entries.push({ type: 'subagent_task', content: String(e.content ?? ''), exclude_from_context: true });
-        } else if (type === 'interrupted') {
-          // Replay of the server's stopped-turn notice (see
-          // WorkflowEngine.__persist_interrupted_turn) — same callout the
-          // live 'interrupted' action renders, so a reload shows it exactly
-          // where the Stop happened instead of dropping it from history.
-          entries.push({ type: 'interrupted', exclude_from_context: true });
-        } else if (type === 'subsession_start' || type === 'subsession_end') {
+        if (type === 'subsession_start' || type === 'subsession_end') {
           entries.push({
             type: 'subsession_divider',
             phase: type === 'subsession_start' ? 'start' : 'end',
@@ -742,73 +842,31 @@ export function reducer(state: State, action: Action): State {
             failed: e.failed === true,
             exclude_from_context: true,
           });
-        } else if (type === 'context_compacted') {
-          entries.push({
-            type: 'compaction_divider',
-            summaryExcerpt: String(e.summaryExcerpt ?? ''),
-            summary: String(e.summary ?? e.summaryExcerpt ?? ''),
-            tokensBefore: typeof e.tokensBefore === 'number' ? e.tokensBefore : 0,
-            tokensAfter: typeof e.tokensAfter === 'number' ? e.tokensAfter : 0,
-            exclude_from_context: true,
-          });
-        } else if (type === 'runtime_error') {
-          // Replay of the server's persisted "error" marker (see
-          // EngineEmitters.emit_error) — same card the live 'runtime_error'
-          // action renders, so a reload doesn't lose the failure notice.
-          entries.push({
-            type: 'error_notice',
-            message: String(e.message ?? ''),
-            recoverable: e.recoverable !== false,
-            exclude_from_context: true,
-          });
-        } else if (type === 'security_rule_added') {
-          // Replay of the server's persisted "security_rule_added" marker
-          // (see EngineEmitters.emit_security_rule_added) — same card the
-          // live action renders, so a reload doesn't lose the record.
-          entries.push({
-            type: 'security_rule_added',
-            scope: e.scope === 'global' ? 'global' : 'session',
-            offer: { executable: String(e.executable ?? ''), subcommand: String(e.subcommand ?? '') },
-            exclude_from_context: true,
-          });
-        } else if (type === 'agent_unstuck_nudge') {
-          // Replay of a persisted "agent_unstuck_nudge"-kind message
-          // (doc/STUCK_DETECTION.md) — same notice the live
-          // 'agent_unstuck_nudge' action renders, so a reload doesn't lose
-          // the record of why the agent kept going.
-          const reasons = Array.isArray(e.reasons) ? e.reasons.map((r) => String(r)) : [];
-          entries.push({
-            type: 'agent_unstuck_nudge',
-            note: String(e.note ?? ''),
-            reasons,
-            mode: String(e.mode ?? ''),
-            exclude_from_context: true,
-          });
-        } else if (type === 'agent_stuck_critical') {
-          // Replay of the server's persisted "agent_stuck_critical" marker
-          // (see EngineEmitters.emit_agent_stuck_critical) — same callout the
-          // live 'agent_stuck_critical' action renders, so a reload doesn't
-          // lose the record of why the watchdog stopped trying.
-          entries.push({
-            type: 'agent_stuck_critical',
-            message: String(e.message ?? ''),
-            exclude_from_context: true,
-          });
+          if (type === 'subsession_start') {
+            const subsessionId = String(e.subsessionId ?? '');
+            const subEntries = action.subsessions[subsessionId] ?? [];
+            for (const sub of subEntries) {
+              const converted = wireEntryToSessionEntry(sub, ctx);
+              if (converted) {
+                entries.push(converted);
+              }
+            }
+          }
+          continue;
+        }
+        const converted = wireEntryToSessionEntry(e, ctx);
+        if (converted) {
+          entries.push(converted);
         }
       }
       // session.history is (re-)sent on every reconnect, including one where
       // the webview never remounted (state.session already reflects the same
       // history plus more) — so this cannot simply replace state.session,
-      // only reconcile: history is authoritative for everything it can
-      // represent (which now includes `status_response`/usage rows — see
-      // kodo's `EngineEmitters.emit_usage`/`HistoryProjector._marker_to_entries`
-      // — so they are no longer carried over here; doing so used to bunch
-      // every accumulated row into one trailing block instead of leaving
-      // each in its correct chronological position). What history can't yet
-      // represent — a genuinely dangling `tool_call`/`ask_user` not yet
-      // persisted when the server read history (e.g. a subsession's batch;
-      // subsession turns only persist once they complete) — still rides
-      // along after it.
+      // only reconcile: history (main log + every spliced subsession) is
+      // authoritative for everything it can represent. What it can never
+      // represent — a genuinely dangling `tool_call`/`ask_user` still in
+      // flight in the currently active subsession, which only persists at
+      // turn boundaries — still rides along after it, unchanged.
       const liveOnly = state.session.filter(
         (e) =>
           (e.type === 'tool_call' && !historicalToolCallIds.has(e.toolCallId)) ||

@@ -126,7 +126,11 @@ export function App() {
           });
           break;
         case 'session_history':
-          dispatch({ type: 'session_history', entries: (msg.entries as Record<string, unknown>[]) ?? [] });
+          dispatch({
+            type: 'session_history',
+            entries: (msg.entries as Record<string, unknown>[]) ?? [],
+            subsessions: (msg.subsessions as Record<string, Record<string, unknown>[]>) ?? {},
+          });
           break;
         case 'tool_call':
           dispatch({ type: 'tool_call', toolName: String(msg.toolName ?? ''), description: String(msg.description ?? ''), toolCallId: String(msg.toolCallId ?? ''), timeoutSeconds: typeof msg.timeoutSeconds === 'number' ? msg.timeoutSeconds : null });

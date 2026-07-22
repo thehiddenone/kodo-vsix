@@ -534,7 +534,7 @@ export type Action =
   | { type: 'context_stats'; currentTokens: number; limitTokens: number; percent: number; canCompact: boolean }
   | { type: 'context_compacting'; active: boolean }
   | { type: 'context_compacted'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number }
-  | { type: 'session_history'; entries: Record<string, unknown>[] }
+  | { type: 'session_history'; entries: Record<string, unknown>[]; subsessions: Record<string, Record<string, unknown>[]> }
   | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] }
   | { type: 'interrupted' }
   | { type: 'runtime_error'; message: string; recoverable: boolean }

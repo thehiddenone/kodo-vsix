@@ -260,7 +260,15 @@ export class SessionController {
   /** URIs backing the pending review's companion tab (its content provider
    *  entries + open-tab tracking), or null when no review is pending. */
   private fileReviewUris: { oldUri?: vscode.Uri; newUri: vscode.Uri } | null = null;
-  private sessionHistory: Record<string, unknown>[] | null = null;
+  /**
+   * The last `session.history` payload, hydrated one file at a time (never
+   * pre-merged server-side): `entries` mirrors the main session log alone
+   * (subsession_start/end are dividers only, carrying `subsessionId`);
+   * `subsessions` maps each referenced id to that subsession's own entries,
+   * read from exactly its own file. The webview reducer does the one-time
+   * splice of `subsessions[id]` right after that id's start divider.
+   */
+  private sessionHistory: { entries: Record<string, unknown>[]; subsessions: Record<string, Record<string, unknown>[]> } | null = null;
   private sessionName = '';
   // The two *frozen* toggles come in pairs: the user-facing *selected* value
   // (flips the instant the user clicks) and the per-turn frozen *effective*
@@ -988,7 +996,7 @@ export class SessionController {
     this._post({ type: 'stage', stage: this.stage, agent: this.agent });
     this._postModeState();
     if (this.sessionHistory !== null) {
-      this._post({ type: 'session_history', entries: this.sessionHistory });
+      this._post({ type: 'session_history', entries: this.sessionHistory.entries, subsessions: this.sessionHistory.subsessions });
     }
     if (this.sessionName) {
       this._post({ type: 'session_name', name: this.sessionName });
@@ -1184,9 +1192,18 @@ export class SessionController {
 
     if (env.kind === 'event' && evtType === 'session.history') {
       const entries = env.payload.entries;
+      const rawSubsessions = env.payload.subsessions;
       if (Array.isArray(entries)) {
-        this.sessionHistory = entries as Record<string, unknown>[];
-        this._post({ type: 'session_history', entries: this.sessionHistory });
+        const subsessions: Record<string, Record<string, unknown>[]> = {};
+        if (rawSubsessions && typeof rawSubsessions === 'object') {
+          for (const [sid, subEntries] of Object.entries(rawSubsessions as Record<string, unknown>)) {
+            if (Array.isArray(subEntries)) {
+              subsessions[sid] = subEntries as Record<string, unknown>[];
+            }
+          }
+        }
+        this.sessionHistory = { entries: entries as Record<string, unknown>[], subsessions };
+        this._post({ type: 'session_history', entries: this.sessionHistory.entries, subsessions: this.sessionHistory.subsessions });
       }
       return;
     }

@@ -42,6 +42,7 @@ import type {
 } from './llm-registry-types';
 import { hardwareFitWarningForFlavor, isDownloadableLocalEntry } from './llm-registry-types';
 import { startLocalDownloadPolling } from './local-model-downloads';
+import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from './reconcile-policy';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
@@ -282,6 +283,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   hasWorkspace = projectRoot.length > 0;
 
   windowId = _stableWindowId(context);
+  _consumeSerializerDead();
 
   // Window-global, independent of the WS connection/session model — polls
   // manager-state.json directly off disk (see local-model-downloads.ts) so a
@@ -636,6 +638,70 @@ function _forgetOpenSession(sessionId: string): void {
 
 let _reconciledOpenSessions = false;
 
+// True when THIS activation follows a reload that changed the workspace
+// identity (empty→first-folder, or single-folder→multi-root — the two
+// transitions `updateWorkspaceFolders` reloads for). Such a reload lands in a
+// *new* workspace-storage identity, so the webview-panel serializer's state
+// (which lives in workspace storage) is gone: any native `kodoPanel` tab that
+// carried over in the tab-strip layout is a DEAD GHOST — VS Code never calls
+// `deserializeWebviewPanel` for it, not even on click (confirmed empirically:
+// the tab is present but clicking it does nothing). Set from a one-shot
+// globalState marker armed by `addWorkspaceFolder` right before it triggers
+// that reload (see `_armSerializerDead` / `_consumeSerializerDead`).
+//
+// This is the precise discriminator `_reconcileOpenSessions`'s tab-count guard
+// was missing: `tabCount > sessions.size` looks identical for a dead ghost
+// (this flow — must reconcile now) and a genuine background sticky placeholder
+// that WILL revive on click (ordinary reload — must NOT race it). Only the
+// former arms this marker, so ordinary reloads keep deferring safely.
+let _serializerStateIsDead = false;
+
+function _serializerDeadKey(id: string = windowId): string {
+  return `kodo.serializerDeadOnReload.${id}`;
+}
+
+/** Arm the "serializer state dies on the next reload" marker under the id this
+ * window will still hold post-reload (windowId is preserved across both
+ * reload-inducing transitions — via continuity for empty→first-folder, and
+ * unchanged folders[0] for single→multi-root). Local globalState write, durable
+ * before the caller triggers the reload. */
+async function _armSerializerDead(): Promise<void> {
+  await extensionContext?.globalState.update(_serializerDeadKey(), true);
+}
+
+/** One-shot consume of the marker on activation → `_serializerStateIsDead`. */
+function _consumeSerializerDead(): void {
+  const armed = extensionContext?.globalState.get<boolean>(_serializerDeadKey()) === true;
+  _serializerStateIsDead = armed;
+  if (armed) {
+    void extensionContext?.globalState.update(_serializerDeadKey(), undefined);
+  }
+}
+
+/** Close every native `kodoPanel` tab currently in the window. Called only in
+ * the `_serializerStateIsDead` branch, where all such tabs are dead ghosts
+ * (serializer state died with the workspace-identity change), so closing them
+ * before reconcile reopens the real sessions is always correct and removes the
+ * confusing dead tab the user would otherwise be left staring at. */
+async function _closeGhostKodoTabs(): Promise<void> {
+  const ghosts: vscode.Tab[] = [];
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (tab.input instanceof vscode.TabInputWebview && tab.input.viewType.includes('kodoPanel')) {
+        ghosts.push(tab);
+      }
+    }
+  }
+  if (ghosts.length === 0) {
+    return;
+  }
+  try {
+    await vscode.window.tabGroups.close(ghosts);
+  } catch {
+    /* best-effort — a ghost may already be gone */
+  }
+}
+
 /**
  * Count native `kodoPanel` tabs in this window, including ones VS Code has not
  * deserialized yet. Per the `WebviewPanelSerializer` docs, `deserializeWebviewPanel`
@@ -678,29 +744,47 @@ function _kodoPanelTabCount(): number {
  * this round rather than guess which ones are real vs. actually lost (the
  * `create_new_project` reload this exists for leaves zero native tabs behind,
  * so it is unaffected by this guard).
+ *
+ * `_reconciledOpenSessions` only latches `true` on a branch that is genuinely
+ * done (nothing remembered, everything already adopted, or the reopen loop
+ * ran) — the tab-count guard and a `session.list` failure both leave it
+ * `false` so a *later* `hello.ack` (the control connection reconnecting
+ * within the same activation is routine, not just a fresh activation) gets
+ * another chance instead of this window silently never reconciling again.
  */
 async function _reconcileOpenSessions(): Promise<void> {
   if (_reconciledOpenSessions) {
     return;
   }
-  _reconciledOpenSessions = true;
   const remembered = _rememberedOpenSessions();
   if (remembered.length === 0) {
+    _reconciledOpenSessions = true;
     return;
   }
   const notYetAdopted = remembered.filter((id) => !_findBySessionId(id));
   if (notYetAdopted.length === 0) {
+    _reconciledOpenSessions = true;
     return;
   }
-  if (_kodoPanelTabCount() > sessions.size) {
-    return; // some native tabs are still un-revived placeholders — don't guess
+  const tabAction = reconcileTabAction(_serializerStateIsDead, _kodoPanelTabCount(), sessions.size);
+  if (tabAction === 'defer') {
+    return; // un-revived sticky placeholders — the serializer will adopt them
+  }
+  if (tabAction === 'close-ghosts') {
+    // This reload changed the workspace identity, so the serializer's state is
+    // gone: the extra native kodoPanel tab(s) are dead ghosts that will NEVER
+    // be adopted (VS Code won't re-fire the serializer for them). The ordinary
+    // guard would defer on them forever — instead, drop them and reconcile
+    // from globalState, the only working recovery path here.
+    await _closeGhostKodoTabs();
   }
   let resp: Record<string, unknown>;
   try {
     resp = await sendControlAwait('session.list');
   } catch {
-    return; // server unreachable — leave the list for the next activation
+    return; // server unreachable — retry on the next hello.ack
   }
+  _reconciledOpenSessions = true;
   const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
   const byId = new Map(list.map((s) => [String(s.id ?? ''), s]));
   for (const id of notYetAdopted) {
@@ -708,7 +792,7 @@ async function _reconcileOpenSessions(): Promise<void> {
       continue; // serializer restored this tab while session.list was in flight
     }
     const info = byId.get(id);
-    if (!info || Boolean(info.taken)) {
+    if (reconcileSessionAction(Boolean(info), Boolean(info?.taken)) === 'forget') {
       _forgetOpenSession(id); // deleted, or now owned by a live window
       continue;
     }
@@ -808,17 +892,16 @@ async function _promptCreateProjectName(): Promise<string | null> {
 // `globalState` (not `workspaceState`): opening a new workspace folder or
 // `.code-workspace` file always reloads the window, and for a currently
 // folder-less window that reload abandons `workspaceState` entirely (a new
-// workspace identity) — the same reason `window.rebind`'s open-session list
-// migration uses `globalState` (see `_rebindWindowForFirstFolder`). Not
-// window-id-scoped like that list is: predicting the *post-reload* window id
-// up front is straightforward for a plain folder (`_deriveWindowIdFromKey`)
-// but not for a `.code-workspace` file, whose first *declared* folder decides
-// the post-reload id and isn't known without parsing the file. Instead the
-// stored value is a timestamp, and a resuming window only honors it within
-// `_PENDING_CREATE_PROJECT_TTL_MS` — long enough to cover this window's own
+// workspace identity). This flag is deliberately a plain timestamp rather
+// than window-id-scoped: it resumes a UI prompt (ask for a project name),
+// not session ownership, so a coarse recency bound is enough and it's kept
+// simple on purpose — a resuming window only honors it within
+// `_PENDING_CREATE_PROJECT_TTL_MS`, long enough to cover this window's own
 // reload, short enough that an unrelated window's *own* first `hello.ack`
 // (e.g. every open window's control connection reconnecting together after a
 // server restart) essentially never lands inside someone else's window.
+// (Session continuity itself — a *different* concern — is handled precisely,
+// not by recency bound, via `_armWindowIdContinuity`.)
 const _PENDING_CREATE_PROJECT_KEY = 'kodo.pendingCreateProjectArmedAt';
 const _PENDING_CREATE_PROJECT_TTL_MS = 30_000;
 
@@ -851,9 +934,40 @@ async function _resumePendingCreateProjectPrompt(): Promise<void> {
 }
 
 /**
+ * Resolve the key `_stableWindowId` will derive its id from once *fileUri* (a
+ * `.code-workspace` file) is open: its first declared folder's path if any,
+ * resolved relative to the workspace file's own directory (per the
+ * `.code-workspace` schema — a bare `path` is relative to the file), else the
+ * workspace file's own path (mirroring `_stableWindowId`'s `workspaceFile`
+ * fallback for a folder-less-but-has-a-workspace-file window). Lets
+ * `_armWindowIdContinuity` cover this reload too — previously an accepted
+ * gap (doc/WS_PROTOCOL.md's old §7.1a), since predicting the post-reload id
+ * needed parsing the file and nothing did.
+ *
+ * Returns `undefined` if the file can't be read or isn't valid JSON — the
+ * caller just skips arming continuity for it, same as the old gap.
+ */
+function _resolveFutureWindowKeyForCodeWorkspace(fileUri: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(fileUri, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  const folders = (parsed as { folders?: unknown } | null)?.folders;
+  if (Array.isArray(folders) && folders.length > 0) {
+    const first = folders[0] as { path?: unknown } | null;
+    if (first && typeof first.path === 'string' && first.path) {
+      return path.resolve(path.dirname(fileUri), first.path);
+    }
+  }
+  return fileUri;
+}
+
+/**
  * No-workspace half of "Create Project": explains why a workspace is needed
  * and offers to open one — a plain folder (added as this window's first
- * workspace folder, reusing the same `addWorkspaceFolder`/window-rebind path
+ * workspace folder, reusing the same `addWorkspaceFolder` path
  * `create_new_project`'s bootstrap already uses) or an existing multi-root
  * `.code-workspace` file (a genuine VS Code workspace switch, via the
  * `vscode.openFolder` command — it accepts a workspace-file URI directly).
@@ -890,6 +1004,12 @@ async function _promptOpenWorkspaceForNewProject(): Promise<void> {
       return;
     }
     await _armPendingCreateProjectPrompt();
+    if (extensionContext) {
+      const futureKey = _resolveFutureWindowKeyForCodeWorkspace(picked);
+      if (futureKey) {
+        await _armWindowIdContinuity(extensionContext, futureKey);
+      }
+    }
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(picked), {
       forceReuseWindow: true,
     });
@@ -920,47 +1040,6 @@ async function createProject(): Promise<string | null> {
 }
 
 /**
- * Sequenced hand-off run *before* a folder-less window gains its first
- * folder — the one transition `_stableWindowId` cannot survive on its own
- * (see its doc comment): VS Code restarts the extension host once
- * `workspaceFolders[0]` changes, and the freshly computed id (derived from
- * the new folder path) can never match whatever id this window held before
- * (a persisted random value, scoped to storage this transition abandons).
- *
- * Computes the id the restarted extension host *will* derive, tells the
- * server to re-key any session this window owns onto it (awaited — see
- * `SessionManager.rebind_window`), and migrates the local
- * `kodo.openSessions.<windowId>` list to the new key — all before the
- * caller triggers `updateWorkspaceFolders`. By the time the reload
- * completes, both sides already agree on the new id, so `_reconcileOpenSessions`
- * finds its sessions waiting under it instead of racing a derivation match.
- *
- * Best-effort on the server round trip: if the control connection is
- * unreachable, we still migrate `globalState` locally and proceed — no
- * worse than today's behavior, which has no rebind at all.
- */
-async function _rebindWindowForFirstFolder(newFirstFolderPath: string): Promise<void> {
-  const newWindowId = _deriveWindowIdFromKey(newFirstFolderPath);
-  if (newWindowId === windowId) {
-    return;
-  }
-  try {
-    await sendControlAwait('window.rebind', {
-      old_window_id: windowId,
-      new_window_id: newWindowId,
-    });
-  } catch {
-    // Control connection unreachable — proceed with the local migration
-    // anyway; see doc comment above.
-  }
-  const remembered = _rememberedOpenSessions();
-  if (remembered.length > 0) {
-    await extensionContext?.globalState.update(_openSessionsKey(newWindowId), remembered);
-    await extensionContext?.globalState.update(_openSessionsKey(windowId), undefined);
-  }
-}
-
-/**
  * Add an already-existing directory to the open workspace — either one the
  * server has just scaffolded (via the `create_new_project` tool or the
  * "Create Project" command's `project.create` message, so the agent's
@@ -970,6 +1049,11 @@ async function _rebindWindowForFirstFolder(newFirstFolderPath: string): Promise<
  * Either way this only registers it as a VS Code workspace folder and
  * re-pushes `workspace.folders` to the server. No-op when the folder is
  * already part of the workspace.
+ *
+ * When this is about to become the window's first folder, VS Code restarts
+ * the extension host for it — `_armWindowIdContinuity` (awaited, before
+ * `updateWorkspaceFolders`) preserves this window's id across that restart;
+ * see its doc comment.
  */
 async function addWorkspaceFolder(folderPath: string, name: string): Promise<void> {
   const folderUri = vscode.Uri.file(folderPath);
@@ -979,8 +1063,15 @@ async function addWorkspaceFolder(folderPath: string, name: string): Promise<voi
     return;
   }
   const insertAt = vscode.workspace.workspaceFolders?.length ?? 0;
-  if (insertAt === 0) {
-    await _rebindWindowForFirstFolder(folderPath);
+  if (insertAt === 0 && extensionContext) {
+    await _armWindowIdContinuity(extensionContext, folderPath);
+  }
+  // Both reload-inducing transitions land in a fresh workspace-storage identity
+  // that kills the webview-panel serializer's state — arm the dead-serializer
+  // marker so the post-reload reconcile treats leftover kodoPanel tabs as dead
+  // ghosts instead of deferring on them forever (see `_serializerStateIsDead`).
+  if (reloadWipesSerializerState(insertAt)) {
+    await _armSerializerDead();
   }
   vscode.workspace.updateWorkspaceFolders(
     insertAt,
@@ -1313,20 +1404,26 @@ function _newId(): string {
  *
  * The server uses this id to let a briefly-disconnected window reclaim its
  * sessions within the 5s grace (SessionManager.open refuses a *different*
- * window), and per-window session bookkeeping (globalState reopen list,
- * owner.json) is keyed by it. A reload must therefore present the same id the
- * window held before.
+ * window), and per-window session bookkeeping (globalState reopen list) is
+ * keyed by it. A reload must therefore present the same id the window held
+ * before.
  *
  * The id must be DERIVED, never stored per-workspace: `workspaceState` is
  * per-workspace storage, and the `create_new_project` flow converts a
  * single-folder window into an *untitled multi-root workspace* — a brand-new
- * workspace identity with empty storage (this is exactly how the id used to
- * change on every such reload, breaking session reclaim). For the same reason
- * the key must be the FIRST workspace folder, not `workspaceFile` and not the
- * folder *set*: that transition mints an `untitled:` workspaceFile and appends
- * the new folder, but folders[0] — the folder the window was opened on —
- * survives it (both `addWorkspaceFolder` here and VS Code's own "Add Folder to
- * Workspace" append at the end).
+ * workspace identity with empty storage. Deriving from the FIRST workspace
+ * folder (not `workspaceFile`, not the folder *set*) is what makes the id
+ * survive that specific transition on its own: it mints an `untitled:`
+ * workspaceFile and appends the new folder, but folders[0] — the folder the
+ * window was opened on — is unaffected (both `addWorkspaceFolder` here and
+ * VS Code's own "Add Folder to Workspace" append at the end).
+ *
+ * That derivation formula is naturally stable for every reload EXCEPT one:
+ * the very first folder ever added to a previously folder-less window, where
+ * the id transitions from a `workspaceState`-persisted random value (no
+ * folder to derive from yet) to `hash(thatFolder)` — two unrelated strings,
+ * no formula bridges them. `_recoverWindowIdContinuity` closes that one gap;
+ * see its doc comment for how.
  *
  * Trade-off: two windows whose workspaces share the same first folder would
  * collide (VS Code refuses to open the *same* workspace twice, but a folder
@@ -1335,20 +1432,12 @@ function _newId(): string {
  * folder-less window (which cannot host sessions anyway) falls back to a
  * persisted random id.
  */
-/** Shared derivation formula: must match exactly everywhere a window id is
- * computed from a folder/workspace-file path (see `_stableWindowId` and the
- * `window.rebind` pre-check in `addWorkspaceFolder`) — a mismatch here would
- * silently reintroduce the id-instability bug the rebind handshake exists
- * to close. */
-function _deriveWindowIdFromKey(key: string): string {
-  return 'w-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
-}
-
 function _stableWindowId(context: vscode.ExtensionContext): string {
   const firstFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const key = firstFolder ?? vscode.workspace.workspaceFile?.fsPath;
   if (key) {
-    return _deriveWindowIdFromKey(key);
+    const candidate = _deriveWindowIdFromKey(key);
+    return _recoverWindowIdContinuity(context, candidate) ?? candidate;
   }
   const existing = context.workspaceState.get<string>('kodo.windowId');
   if (existing) {
@@ -1357,6 +1446,76 @@ function _stableWindowId(context: vscode.ExtensionContext): string {
   const id = _newId();
   void context.workspaceState.update('kodo.windowId', id);
   return id;
+}
+
+/** Shared derivation formula: must match exactly everywhere a window id is
+ * computed from a folder/workspace-file path (`_stableWindowId` and
+ * `_armWindowIdContinuity`'s preview of the post-reload id) — a mismatch
+ * here would silently reintroduce the id-instability bug this file exists
+ * to close. */
+function _deriveWindowIdFromKey(key: string): string {
+  return 'w-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+function _windowIdContinuityStateKey(candidateId: string): string {
+  return `kodo.windowIdContinuity.${candidateId}`;
+}
+
+/**
+ * The local, message-free replacement for the old `window.rebind` WS
+ * handshake. Call this BEFORE triggering a reload that will make
+ * `_stableWindowId` derive a *different* id than the one this window holds
+ * right now (today, only the "folder-less window gains its first folder"
+ * transition — see `addWorkspaceFolder` and `_promptOpenWorkspaceForNewProject`).
+ *
+ * Previously this problem was closed by telling the SERVER to re-key
+ * ownership onto a freshly-computed id, awaited over the WS control
+ * connection before the reload. That required the round trip to complete
+ * before VS Code tore down the extension host — a race with no hard
+ * guarantee, and it needed a dedicated `window.rebind` message + server-side
+ * handler + `SessionManager.rebind_window` just to move a value that never
+ * needed to change in the first place.
+ *
+ * This version never changes the id's VALUE at all: it stashes the CURRENT
+ * (still-valid) window id in `globalState` — extension-scoped, so unlike
+ * `workspaceState` it survives the workspace-identity flip — under a key
+ * derived from the id `_stableWindowId` will independently (re)compute
+ * post-reload. `_recoverWindowIdContinuity` looks that key up and, if
+ * present, hands back the OLD id verbatim instead of the freshly-derived
+ * one. Since the id string itself never changes, the server's ownership map
+ * never goes stale and needs no message telling it otherwise — there is
+ * nothing to rebind.
+ *
+ * A plain `globalState.update` is a local, in-process write (no network),
+ * so unlike the WS round trip it cannot race the extension-host teardown in
+ * any way that matters: by the time this promise resolves, the marker is
+ * durable, and the very next line of code is free to trigger the reload.
+ */
+async function _armWindowIdContinuity(context: vscode.ExtensionContext, futureKey: string): Promise<void> {
+  const futureId = _deriveWindowIdFromKey(futureKey);
+  if (futureId === windowId) {
+    return; // already the id we'd derive post-reload — nothing to preserve
+  }
+  await context.globalState.update(_windowIdContinuityStateKey(futureId), windowId);
+}
+
+/**
+ * One-shot consumption of a marker `_armWindowIdContinuity` left behind.
+ * Returns the preserved id if found (and clears the marker), else `undefined`
+ * so the caller falls back to `candidate` — the ordinary, no-continuity-
+ * needed case (e.g. a folder opened by means other than Kōdo's own
+ * bootstrap, where there was never a prior id worth preserving).
+ */
+function _recoverWindowIdContinuity(
+  context: vscode.ExtensionContext,
+  candidate: string,
+): string | undefined {
+  const stateKey = _windowIdContinuityStateKey(candidate);
+  const recovered = context.globalState.get<string>(stateKey);
+  if (recovered) {
+    void context.globalState.update(stateKey, undefined);
+  }
+  return recovered;
 }
 
 function _kodoHomeDir(): string {
