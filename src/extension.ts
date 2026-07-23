@@ -31,7 +31,7 @@ import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-pro
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
 import { KodoSettingsPanel } from './kodo-settings-panel';
-import type { GlobalRuleEntry, KodoSettingsMessage, LlamaCppInfo, StuckDetectionSettings } from './kodo-settings-panel';
+import type { GlobalRuleEntry, KodoSettingsMessage, LlamaCppInfo, SessionListEntry, StuckDetectionSettings } from './kodo-settings-panel';
 import type {
   CloudRegistry,
   EffortLevel,
@@ -1203,7 +1203,6 @@ async function pickSession(): Promise<void> {
     return;
   }
   const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
-  const loaded = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
 
   const items: SessionPickItem[] = [
     { label: '$(add) New session', isNew: true, detail: 'Start a fresh session in this window' },
@@ -1223,33 +1222,20 @@ async function pickSession(): Promise<void> {
     // live tab) regardless of what's remembered.
     const disabledReason = taken && !openHere ? 'Opened in another window' : undefined;
 
-    let workspaceNote = '';
-    if (remembered && !openHere && !disabledReason) {
-      const codeWorkspaceFileExists = Boolean(
-        remembered.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
-      );
-      const target = resumeTarget(remembered, codeWorkspaceFileExists);
-      const current = {
-        workspaceFile: vscode.workspace.workspaceFile?.scheme === 'file'
-          ? vscode.workspace.workspaceFile.fsPath
-          : undefined,
-        folderPaths: loaded,
-      };
-      if (!resumeTargetMatchesCurrent(target, current)) {
-        workspaceNote = remembered.locked
-          ? ' · will ask to reopen this window’s workspace'
-          : ' · will reopen this window’s workspace';
-      }
-    }
-
     const kindLabel = root ? `Guided · ${path.basename(root)}` : 'Problem solving';
     const created = typeof s.created_at === 'string' ? s.created_at : '';
     const lastModified = typeof s.last_modified === 'string' ? s.last_modified : '';
     const timeLabel = `created ${formatTimestamp(created)}, last modified ${formatTimestamp(lastModified)}`;
+    // Third detail line — VS Code renders `\n` inside `detail` as an extra
+    // wrapped line, so label+description (line 1) and detail (lines 2-3)
+    // together give each entry three visual lines.
+    const workspaceLine = remembered
+      ? remembered.codeWorkspaceFile || remembered.physicalRoot || 'Not bound to any workspace'
+      : 'Not bound to any workspace';
     items.push({
       label: (disabledReason ? '$(circle-slash) ' : '$(comment-discussion) ') + name,
       description: openHere ? `${kindLabel} · (opened here)` : kindLabel,
-      detail: disabledReason ? `${disabledReason} · ${timeLabel}` : `${timeLabel}${workspaceNote}`,
+      detail: `${disabledReason ? `${disabledReason} · ${timeLabel}` : timeLabel}\n${workspaceLine}`,
       sessionId: id,
       disabledReason,
       remembered,
@@ -2056,10 +2042,10 @@ function _openCloudAiSettings(): void {
   );
 }
 
-/** Parse a `security.rules.list.ack`/`.delete.ack` `rules` payload
- * (kodo/doc/WS_PROTOCOL.md §7.6c) — malformed/unknown entries are dropped
- * rather than shown as broken rows. */
-function _parseGlobalRules(raw: unknown): GlobalRuleEntry[] {
+/** Parse a `rules` payload shared by both the global and session-scoped rule
+ * commands' `.list.ack`/`.delete.ack` (kodo/doc/WS_PROTOCOL.md §7.6c/§7.6e)
+ * — malformed/unknown entries are dropped rather than shown as broken rows. */
+function _parseRuleEntries(raw: unknown): GlobalRuleEntry[] {
   if (!Array.isArray(raw)) {
     return [];
   }
@@ -2085,9 +2071,31 @@ function _parseGlobalRules(raw: unknown): GlobalRuleEntry[] {
 async function _fetchGlobalRules(): Promise<GlobalRuleEntry[]> {
   try {
     const resp = await sendControlAwait('security.rules.list');
-    return _parseGlobalRules(resp.rules);
+    return _parseRuleEntries(resp.rules);
   } catch {
     vscode.window.showErrorMessage('Kōdo: could not reach the server to load global allow-rules.');
+    return [];
+  }
+}
+
+/** Fetch `session.list` and shape it for the Kōdo Settings panel's
+ * "Sessions" list — the same data `pickSession()` parses (reusing
+ * `_parseRememberedWorkspace`), so opening the panel needs only this one
+ * `session.list` round-trip. Returns `[]` (and shows a toast) if the server
+ * is unreachable. */
+async function _fetchSessionsForPanel(): Promise<SessionListEntry[]> {
+  try {
+    const resp = await sendControlAwait('session.list');
+    const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
+    return list.map((s) => ({
+      id: String(s.id ?? ''),
+      name: String(s.name ?? s.id ?? ''),
+      projectRoot: typeof s.project_root === 'string' ? s.project_root : null,
+      taken: Boolean(s.taken),
+      workspace: _parseRememberedWorkspace(s.workspace),
+    }));
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to list sessions.');
     return [];
   }
 }
@@ -2103,7 +2111,7 @@ const DEFAULT_STUCK_DETECTION: StuckDetectionSettings = {
 
 /** Parse a `stuck_detection.get.ack`/`.set.ack` payload (kodo/doc/WS_PROTOCOL.md
  * §7.6d) — an unrecognised/missing field falls back to its documented default,
- * same defensive style as `_parseGlobalRules`. */
+ * same defensive style as `_parseRuleEntries`. */
 function _parseStuckDetection(raw: Record<string, unknown>): StuckDetectionSettings {
   const active = raw.active;
   const scope = raw.scope;
@@ -2175,26 +2183,99 @@ async function _fetchLlamaCppVersionInfo(): Promise<LlamaCppInfo> {
  * only ran on receipt of an `update`). Fetching first makes the initial data
  * ride the reliable `ready`→`update` handshake instead. */
 async function _openKodoSettings(): Promise<void> {
-  const [rules, stuckDetection, llamaCpp] = await Promise.all([
+  const [rules, stuckDetection, llamaCpp, sessions] = await Promise.all([
     _fetchGlobalRules(),
     _fetchStuckDetection(),
     _fetchLlamaCppVersionInfo(),
+    _fetchSessionsForPanel(),
   ]);
   const panel = KodoSettingsPanel.createOrShow(
-    { rules, stuckDetection, llamaCpp },
+    { rules, stuckDetection, llamaCpp, sessions, sessionRules: null },
     (msg) => void _onKodoSettingsMessage(msg),
   );
   // For an already-open panel, createOrShow only revealed it (initialState is
   // ignored) — push the freshly-fetched state in explicitly so re-opening the
-  // panel always reflects current state.
-  panel.update({ rules, stuckDetection, llamaCpp });
+  // panel always reflects current state. `sessionRules` is deliberately left
+  // untouched here (omitted from the patch) — closing and reopening the panel
+  // while the "Session Settings" modal state is stale just means its next
+  // gear-icon click re-fetches, no need to blow away a matching one.
+  panel.update({ rules, stuckDetection, llamaCpp, sessions });
+}
+
+/** Delete a session by id from the Kōdo Settings panel's "Sessions" list —
+ * same confirmation copy as `session-controller.ts`'s `_confirmAndDelete`,
+ * but travels over the control connection via `session.delete_by_id`
+ * (kodo/doc/WS_PROTOCOL.md §7.6e) rather than `session.delete`, since the
+ * panel isn't that session's own tab connection (and the session may not
+ * even be live). The panel's trash icon already disables itself for a
+ * `taken` session, so this only ever fires for one this window doesn't own. */
+async function _deleteSessionFromSettingsPanel(sessionId: string): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    'Delete this Kōdo session?',
+    {
+      modal: true,
+      detail: 'This is a destructive action that cannot be undone. All agent history '
+        + 'associated with this session will be permanently deleted.\n\n'
+        + 'The project this session was working on will not be affected.',
+    },
+    'Yes',
+  );
+  if (choice !== 'Yes') {
+    return;
+  }
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('session.delete_by_id', { session_id: sessionId });
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to delete this session.');
+    return;
+  }
+  if (resp.type === 'session.delete_by_id.error') {
+    const message = typeof resp.message === 'string' ? resp.message : 'Unknown error.';
+    vscode.window.showErrorMessage(`Kōdo: failed to delete this session — ${message}`);
+    return;
+  }
+  KodoSettingsPanel.instance?.update({ sessions: await _fetchSessionsForPanel() });
+}
+
+/** Open a session from the Kōdo Settings panel's "Sessions" list — the same
+ * decision tree as `pickSession()`'s "existing session" branch (reveal if
+ * already open in this window, `_resumeSessionIntoWorkspace` otherwise, an
+ * error toast if it's `taken` by another window), just triggered from the
+ * new open-folder icon instead of the command-palette picker. Re-fetches
+ * `session.list` rather than trusting the panel's cached row, since
+ * `taken`/`workspace` can go stale while the panel sits open. */
+async function _openSessionFromSettingsPanel(sessionId: string): Promise<void> {
+  if (_findBySessionId(sessionId)) {
+    openExistingSession(sessionId);
+    return;
+  }
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('session.list');
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to open this session.');
+    return;
+  }
+  const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
+  const entry = list.find((s) => String(s.id ?? '') === sessionId);
+  if (!entry) {
+    vscode.window.showErrorMessage('Kōdo: this session no longer exists.');
+    KodoSettingsPanel.instance?.update({ sessions: await _fetchSessionsForPanel() });
+    return;
+  }
+  if (Boolean(entry.taken)) {
+    vscode.window.showInformationMessage('Cannot open this session: opened in another window.');
+    return;
+  }
+  await _resumeSessionIntoWorkspace(sessionId, _parseRememberedWorkspace(entry.workspace));
 }
 
 async function _onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   if (msg.type === 'delete_rules') {
     try {
       const resp = await sendControlAwait('security.rules.delete', { rules: msg.rules });
-      KodoSettingsPanel.instance?.update({ rules: _parseGlobalRules(resp.rules) });
+      KodoSettingsPanel.instance?.update({ rules: _parseRuleEntries(resp.rules) });
     } catch {
       vscode.window.showErrorMessage('Kōdo: could not reach the server to delete the selected rule(s).');
     }
@@ -2227,6 +2308,39 @@ async function _onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'install_llamacpp_version_prompt') {
     await _promptInstallLlamaCppVersion();
+    return;
+  }
+  if (msg.type === 'delete_session') {
+    await _deleteSessionFromSettingsPanel(msg.sessionId);
+    return;
+  }
+  if (msg.type === 'open_session') {
+    await _openSessionFromSettingsPanel(msg.sessionId);
+    return;
+  }
+  if (msg.type === 'fetch_session_rules') {
+    try {
+      const resp = await sendControlAwait('session.security_rules.list', { session_id: msg.sessionId });
+      KodoSettingsPanel.instance?.update({
+        sessionRules: { sessionId: msg.sessionId, rules: _parseRuleEntries(resp.rules) },
+      });
+    } catch {
+      vscode.window.showErrorMessage("Kōdo: could not reach the server to load this session's allow-rules.");
+    }
+    return;
+  }
+  if (msg.type === 'delete_session_rules') {
+    try {
+      const resp = await sendControlAwait('session.security_rules.delete', {
+        session_id: msg.sessionId,
+        rules: msg.rules,
+      });
+      KodoSettingsPanel.instance?.update({
+        sessionRules: { sessionId: msg.sessionId, rules: _parseRuleEntries(resp.rules) },
+      });
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to delete the selected rule(s).');
+    }
   }
 }
 

@@ -1,13 +1,35 @@
 import * as vscode from 'vscode';
+import type { RememberedWorkspace } from './workspace-resume-policy';
 
-/** A globally-granted "always allow" rule (doc/SECURITY_RULES_PLAN.md §2.7,
- * kodo/doc/WS_PROTOCOL.md §7.6c). `kind: "command"` is an (executable,
+/** A granted "always allow" rule (doc/SECURITY_RULES_PLAN.md §2.7,
+ * kodo/doc/WS_PROTOCOL.md §7.6c/§7.6e). `kind: "command"` is an (executable,
  * subcommand) pair; `kind: "path"` is a workspace-escape (executable,
- * resolved absolute path) pair. */
+ * resolved absolute path) pair. Same shape for both the global store
+ * (`security.rules.*`) and a single session's store
+ * (`session.security_rules.*`). */
 export interface GlobalRuleEntry {
   kind: 'command' | 'path';
   executable: string;
   value: string;
+}
+
+/** One row of the Kōdo Settings panel's "Sessions" list — the same data
+ * `pickSession()` already parses from `session.list` (kodo/doc/WS_PROTOCOL.md
+ * § "New client→server: session.list"), reused here so opening the panel
+ * needs no extra round-trip beyond the one `session.list` fetch. */
+export interface SessionListEntry {
+  id: string;
+  name: string;
+  projectRoot: string | null;
+  taken: boolean;
+  workspace: RememberedWorkspace | null;
+}
+
+/** The session-scoped allow-rules currently shown in the "Session Settings"
+ * modal — `null` while no modal is open or its fetch hasn't resolved yet. */
+export interface SessionRulesState {
+  sessionId: string;
+  rules: GlobalRuleEntry[];
 }
 
 /** The `stuck_detection` settings block (kodo/doc/SETTINGS.md §2.6,
@@ -34,6 +56,8 @@ export interface KodoSettingsState {
   rules: GlobalRuleEntry[];
   stuckDetection: StuckDetectionSettings;
   llamaCpp: LlamaCppInfo;
+  sessions: SessionListEntry[];
+  sessionRules: SessionRulesState | null;
 }
 
 export type KodoSettingsMessage =
@@ -44,6 +68,10 @@ export type KodoSettingsMessage =
   | { type: 'uninstall_llamacpp' }
   | { type: 'update_llamacpp' }
   | { type: 'install_llamacpp_version_prompt' }
+  | { type: 'delete_session'; sessionId: string }
+  | { type: 'open_session'; sessionId: string }
+  | { type: 'fetch_session_rules'; sessionId: string }
+  | { type: 'delete_session_rules'; sessionId: string; rules: GlobalRuleEntry[] }
   | { type: 'close' };
 
 /** Singleton settings panel — reveals the existing one instead of opening a second. */
@@ -261,11 +289,11 @@ function buildHtml(): string {
       display: inline-block;
       width: auto;
     }
-    #delete-btn:not(:disabled) {
+    .delete-rules-btn:not(:disabled) {
       background: var(--vscode-errorForeground, #f44336);
       color: #fff;
     }
-    #delete-btn:not(:disabled):hover { opacity: 0.9; }
+    .delete-rules-btn:not(:disabled):hover { opacity: 0.9; }
     .rule-table {
       border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
       border-radius: 4px;
@@ -310,6 +338,84 @@ function buildHtml(): string {
       padding: 10px 2px;
       line-height: 1.5;
     }
+    .session-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .session-row:first-child { border-top: none; }
+    .session-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .session-name {
+      font-weight: 600;
+      font-size: 0.95em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .session-meta, .session-workspace {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .session-icons {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      background: transparent;
+      color: var(--vscode-foreground);
+      font-size: 2em;
+    }
+    .icon-btn:hover:not(:disabled) {
+      background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+    }
+    .readonly-list {
+      margin: 0 0 4px;
+    }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+    .modal-box {
+      width: min(640px, 92vw);
+      max-height: 86vh;
+      overflow-y: auto;
+      background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+      border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, #444));
+      border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      padding: 18px 20px;
+      box-sizing: border-box;
+    }
+    .modal-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .modal-toolbar button {
+      display: inline-block;
+      width: auto;
+    }
   </style>
 </head>
 <body>
@@ -319,6 +425,7 @@ function buildHtml(): string {
       <p id="content-placeholder" style="color:var(--vscode-descriptionForeground);padding:16px 24px;">Loading Kōdo settings…</p>
     </div>
   </div>
+  <div id="modal-root"></div>
 
   <script nonce="${nonce}">
     const vsc = acquireVsCodeApi();
@@ -326,6 +433,7 @@ function buildHtml(): string {
 
     const NAV = [
       { key: 'general', label: 'General' },
+      { key: 'sessions', label: 'Sessions' },
       { key: 'global-rules', label: 'Global Allow-Rules' },
     ];
 
@@ -333,9 +441,13 @@ function buildHtml(): string {
       rules: [],
       stuckDetection: { active: 'local_only', scope: 'top_level', auto_unstuck_interactive: false },
       llamaCpp: { installedVersion: null, latestVersion: null, busy: false },
+      sessions: [],
+      sessionRules: null,
     };
     let _selectedKey = 'general';
     const _checked = new Set();
+    const _sessionChecked = new Set();
+    let _sessionSettingsFor = null; // session id the "Session Settings" modal is open for, or null
 
     function ruleKey(rule) {
       return rule.kind + '|' + rule.executable + '|' + rule.value;
@@ -356,16 +468,19 @@ function buildHtml(): string {
       });
     }
 
-    function renderToolbar(section) {
+    // Shared by the "Global Allow-Rules" section and the "Session Settings"
+    // modal's rules list — same buttons, checkboxes, and labels either way
+    // (only the rule set, checked-set, and delete/close callbacks differ).
+    function renderRuleToolbar({ className, rules, checkedSet, onDeleteSelected, onClose }) {
       const toolbar = document.createElement('div');
-      toolbar.className = 'toolbar';
+      toolbar.className = className;
 
       const selectAllBtn = document.createElement('button');
       selectAllBtn.className = 'secondary-btn';
       selectAllBtn.textContent = 'Select All';
-      selectAllBtn.disabled = _state.rules.length === 0;
+      selectAllBtn.disabled = rules.length === 0;
       selectAllBtn.addEventListener('click', () => {
-        _state.rules.forEach(r => _checked.add(ruleKey(r)));
+        rules.forEach(r => checkedSet.add(ruleKey(r)));
         render();
       });
       toolbar.appendChild(selectAllBtn);
@@ -373,46 +488,44 @@ function buildHtml(): string {
       const clearBtn = document.createElement('button');
       clearBtn.className = 'secondary-btn';
       clearBtn.textContent = 'Clear Selection';
-      clearBtn.disabled = _checked.size === 0;
+      clearBtn.disabled = checkedSet.size === 0;
       clearBtn.addEventListener('click', () => {
-        _checked.clear();
+        checkedSet.clear();
         render();
       });
       toolbar.appendChild(clearBtn);
 
       const deleteBtn = document.createElement('button');
-      deleteBtn.id = 'delete-btn';
+      deleteBtn.className = 'delete-rules-btn';
       deleteBtn.textContent = 'Delete Selected';
-      deleteBtn.disabled = _checked.size === 0;
+      deleteBtn.disabled = checkedSet.size === 0;
       deleteBtn.addEventListener('click', () => {
-        const rules = _state.rules.filter(r => _checked.has(ruleKey(r)));
-        if (rules.length === 0) { return; }
-        vsc.postMessage({ type: 'delete_rules', rules });
-        _checked.clear();
+        const selected = rules.filter(r => checkedSet.has(ruleKey(r)));
+        if (selected.length === 0) { return; }
+        onDeleteSelected(selected);
+        checkedSet.clear();
       });
       toolbar.appendChild(deleteBtn);
 
       const closeBtn = document.createElement('button');
       closeBtn.className = 'secondary-btn';
       closeBtn.textContent = 'Close';
-      closeBtn.addEventListener('click', () => {
-        vsc.postMessage({ type: 'close' });
-      });
+      closeBtn.addEventListener('click', onClose);
       toolbar.appendChild(closeBtn);
 
-      section.appendChild(toolbar);
+      return toolbar;
     }
 
-    function renderRuleRow(rule) {
+    function renderRuleRow(rule, checkedSet) {
       const row = document.createElement('div');
       row.className = 'rule-row';
 
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
-      checkbox.checked = _checked.has(ruleKey(rule));
+      checkbox.checked = checkedSet.has(ruleKey(rule));
       checkbox.addEventListener('change', () => {
-        if (checkbox.checked) { _checked.add(ruleKey(rule)); }
-        else { _checked.delete(ruleKey(rule)); }
+        if (checkbox.checked) { checkedSet.add(ruleKey(rule)); }
+        else { checkedSet.delete(ruleKey(rule)); }
         render();
       });
       row.appendChild(checkbox);
@@ -437,6 +550,19 @@ function buildHtml(): string {
       return row;
     }
 
+    function renderRuleList(rules, checkedSet, emptyText) {
+      if (rules.length === 0) {
+        const msg = document.createElement('div');
+        msg.id = 'empty-msg';
+        msg.textContent = emptyText;
+        return msg;
+      }
+      const table = document.createElement('div');
+      table.className = 'rule-table';
+      rules.forEach(rule => table.appendChild(renderRuleRow(rule, checkedSet)));
+      return table;
+    }
+
     function renderGlobalRulesSection() {
       const wrap = document.createElement('div');
 
@@ -451,23 +577,269 @@ function buildHtml(): string {
         + "on this machine and are never asked about again until you delete them here.";
       wrap.appendChild(intro);
 
-      renderToolbar(wrap);
+      wrap.appendChild(renderRuleToolbar({
+        className: 'toolbar',
+        rules: _state.rules,
+        checkedSet: _checked,
+        onDeleteSelected: (rules) => vsc.postMessage({ type: 'delete_rules', rules }),
+        onClose: () => vsc.postMessage({ type: 'close' }),
+      }));
 
-      if (_state.rules.length === 0) {
+      wrap.appendChild(renderRuleList(
+        _state.rules,
+        _checked,
+        "No global allow-rules yet — they're added from a permission "
+          + "prompt's 'always allow' checkbox when you choose the 'global' scope.",
+      ));
+
+      return wrap;
+    }
+
+    function basename(p) {
+      const trimmed = String(p).replace(/[\\/]+$/, '');
+      const parts = trimmed.split(/[\\/]/);
+      return parts[parts.length - 1] || trimmed;
+    }
+
+    function sessionWorkspaceLine(session) {
+      const ws = session.workspace;
+      if (!ws) { return 'Not bound to any workspace'; }
+      return ws.codeWorkspaceFile || ws.physicalRoot || 'Not bound to any workspace';
+    }
+
+    function renderSessionRow(session) {
+      const row = document.createElement('div');
+      row.className = 'session-row';
+
+      const info = document.createElement('div');
+      info.className = 'session-info';
+
+      const name = document.createElement('div');
+      name.className = 'session-name';
+      name.textContent = session.name;
+      name.title = session.name;
+      info.appendChild(name);
+
+      const meta = document.createElement('div');
+      meta.className = 'session-meta';
+      const kindLabel = session.projectRoot ? 'Guided · ' + basename(session.projectRoot) : 'Problem solving';
+      meta.textContent = kindLabel + (session.taken ? ' · Open in another window' : '');
+      info.appendChild(meta);
+
+      const wsLine = document.createElement('div');
+      wsLine.className = 'session-workspace';
+      wsLine.textContent = sessionWorkspaceLine(session);
+      wsLine.title = wsLine.textContent;
+      info.appendChild(wsLine);
+
+      row.appendChild(info);
+
+      const icons = document.createElement('div');
+      icons.className = 'session-icons';
+
+      const openBtn = document.createElement('button');
+      openBtn.className = 'icon-btn secondary-btn';
+      openBtn.textContent = '📂';
+      openBtn.title = 'Open this session';
+      openBtn.addEventListener('click', () => {
+        vsc.postMessage({ type: 'open_session', sessionId: session.id });
+      });
+      icons.appendChild(openBtn);
+
+      const gearBtn = document.createElement('button');
+      gearBtn.className = 'icon-btn secondary-btn';
+      gearBtn.textContent = '⚙';
+      gearBtn.title = 'Session Settings';
+      gearBtn.addEventListener('click', () => {
+        _sessionSettingsFor = session.id;
+        _sessionChecked.clear();
+        vsc.postMessage({ type: 'fetch_session_rules', sessionId: session.id });
+        render();
+      });
+      icons.appendChild(gearBtn);
+
+      const trashBtn = document.createElement('button');
+      trashBtn.className = 'icon-btn secondary-btn';
+      trashBtn.textContent = '🗑';
+      trashBtn.disabled = session.taken;
+      trashBtn.title = session.taken
+        ? 'Close this session in its window before deleting it'
+        : 'Delete this session';
+      trashBtn.addEventListener('click', () => {
+        if (session.taken) { return; }
+        vsc.postMessage({ type: 'delete_session', sessionId: session.id });
+      });
+      icons.appendChild(trashBtn);
+
+      row.appendChild(icons);
+
+      return row;
+    }
+
+    function renderSessionsSection() {
+      const wrap = document.createElement('div');
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'Sessions';
+      wrap.appendChild(heading);
+
+      const intro = document.createElement('p');
+      intro.className = 'intro-text';
+      intro.textContent = 'Every Kōdo session on this machine. Use the open-folder icon to open (or '
+        + "activate) a session's tab, the gear icon to review a session's bound workspace and its own "
+        + 'allow-rules, or the trash icon to delete it.';
+      wrap.appendChild(intro);
+
+      if (_state.sessions.length === 0) {
         const msg = document.createElement('div');
         msg.id = 'empty-msg';
-        msg.textContent = "No global allow-rules yet — they're added from a permission "
-          + "prompt's 'always allow' checkbox when you choose the 'global' scope.";
+        msg.textContent = 'No sessions yet.';
         wrap.appendChild(msg);
         return wrap;
       }
 
       const table = document.createElement('div');
       table.className = 'rule-table';
-      _state.rules.forEach(rule => table.appendChild(renderRuleRow(rule)));
+      _state.sessions.forEach(session => table.appendChild(renderSessionRow(session)));
       wrap.appendChild(table);
 
       return wrap;
+    }
+
+    function closeSessionSettings() {
+      _sessionSettingsFor = null;
+      _sessionChecked.clear();
+      renderModal();
+    }
+
+    function renderSessionSettingsModal() {
+      const session = _state.sessions.find(s => s.id === _sessionSettingsFor);
+      if (!session) { return null; }
+
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) { closeSessionSettings(); }
+      });
+
+      const box = document.createElement('div');
+      box.className = 'modal-box';
+      box.addEventListener('click', (e) => e.stopPropagation());
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'Session Settings';
+      box.appendChild(heading);
+
+      const titleHeading = document.createElement('div');
+      titleHeading.className = 'section-subheading';
+      titleHeading.textContent = 'Title';
+      box.appendChild(titleHeading);
+
+      const titleLine = document.createElement('p');
+      titleLine.className = 'value-line';
+      const titleValue = document.createElement('span');
+      titleValue.className = 'value-code';
+      titleValue.textContent = session.name;
+      titleLine.appendChild(titleValue);
+      box.appendChild(titleLine);
+
+      const dividerTitle = document.createElement('hr');
+      dividerTitle.className = 'section-divider';
+      box.appendChild(dividerTitle);
+
+      const ws = session.workspace;
+      const boundHeading = document.createElement('div');
+      boundHeading.className = 'section-subheading';
+      boundHeading.textContent = ws && ws.codeWorkspaceFile ? '.code-workspace file' : 'Bound workspace root';
+      box.appendChild(boundHeading);
+
+      const boundLine = document.createElement('p');
+      boundLine.className = 'value-line';
+      const boundValue = document.createElement('span');
+      boundValue.className = 'value-code';
+      boundValue.textContent = sessionWorkspaceLine(session);
+      boundLine.appendChild(boundValue);
+      box.appendChild(boundLine);
+
+      const divider1 = document.createElement('hr');
+      divider1.className = 'section-divider';
+      box.appendChild(divider1);
+
+      const lockedHeading = document.createElement('div');
+      lockedHeading.className = 'section-subheading';
+      lockedHeading.textContent = 'Working directories';
+      box.appendChild(lockedHeading);
+
+      const lockedPaths = ws && ws.folders ? Object.values(ws.folders) : [];
+      const lockedWrap = document.createElement('div');
+      lockedWrap.className = 'readonly-list';
+      if (lockedPaths.length === 0) {
+        const none = document.createElement('p');
+        none.className = 'value-line';
+        none.textContent = 'No working directories — no files in this session have been modified yet.';
+        lockedWrap.appendChild(none);
+      } else {
+        lockedPaths.forEach(p => {
+          const line = document.createElement('p');
+          line.className = 'value-line';
+          const code = document.createElement('span');
+          code.className = 'value-code';
+          code.textContent = p;
+          line.appendChild(code);
+          lockedWrap.appendChild(line);
+        });
+      }
+      box.appendChild(lockedWrap);
+
+      const divider2 = document.createElement('hr');
+      divider2.className = 'section-divider';
+      box.appendChild(divider2);
+
+      const rulesHeading = document.createElement('div');
+      rulesHeading.className = 'section-subheading';
+      rulesHeading.textContent = 'Session Allow-Rules';
+      box.appendChild(rulesHeading);
+
+      const rulesLoaded = Boolean(_state.sessionRules) && _state.sessionRules.sessionId === session.id;
+      const rules = rulesLoaded ? _state.sessionRules.rules : [];
+
+      if (!rulesLoaded) {
+        const loading = document.createElement('div');
+        loading.id = 'empty-msg';
+        loading.textContent = 'Loading…';
+        box.appendChild(loading);
+      } else {
+        box.appendChild(renderRuleList(
+          rules,
+          _sessionChecked,
+          "No allow-rules for this session yet — they're added from a permission "
+            + "prompt's 'always allow' checkbox when you choose the 'session' scope.",
+        ));
+      }
+
+      const divider3 = document.createElement('hr');
+      divider3.className = 'section-divider';
+      box.appendChild(divider3);
+
+      box.appendChild(renderRuleToolbar({
+        className: 'modal-toolbar',
+        rules,
+        checkedSet: _sessionChecked,
+        onDeleteSelected: (selected) => vsc.postMessage({
+          type: 'delete_session_rules', sessionId: session.id, rules: selected,
+        }),
+        onClose: closeSessionSettings,
+      }));
+
+      overlay.appendChild(box);
+      return overlay;
+    }
+
+    function renderModal() {
+      const root = document.getElementById('modal-root');
+      root.innerHTML = '';
+      const modal = renderSessionSettingsModal();
+      if (modal) { root.appendChild(modal); }
     }
 
     const LLAMACPP_RELEASES_URL = 'https://github.com/ggml-org/llama.cpp/releases';
@@ -668,9 +1040,12 @@ function buildHtml(): string {
       content.innerHTML = '';
       if (_selectedKey === 'general') {
         content.appendChild(renderGeneralSection());
+      } else if (_selectedKey === 'sessions') {
+        content.appendChild(renderSessionsSection());
       } else {
         content.appendChild(renderGlobalRulesSection());
       }
+      renderModal();
     }
 
     window.addEventListener('message', ({ data }) => {
@@ -686,7 +1061,28 @@ function buildHtml(): string {
       if (data.llamaCpp && typeof data.llamaCpp === 'object') {
         _state.llamaCpp = data.llamaCpp;
       }
+      if (Array.isArray(data.sessions)) {
+        _state.sessions = data.sessions;
+        // A deleted (or otherwise vanished) session can't keep its modal open.
+        if (_sessionSettingsFor && !data.sessions.some(s => s.id === _sessionSettingsFor)) {
+          _sessionSettingsFor = null;
+          _sessionChecked.clear();
+        }
+      }
+      if (data.sessionRules === null || (data.sessionRules && typeof data.sessionRules === 'object')) {
+        _state.sessionRules = data.sessionRules;
+        if (data.sessionRules) {
+          const keys = new Set(data.sessionRules.rules.map(ruleKey));
+          [..._sessionChecked].forEach(k => { if (!keys.has(k)) { _sessionChecked.delete(k); } });
+        }
+      }
       render();
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && _sessionSettingsFor) {
+        closeSessionSettings();
+      }
     });
 
     // Render the initial structure synchronously on script load rather than
