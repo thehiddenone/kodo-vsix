@@ -379,5 +379,16 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
       // stall right after its one nudge, so the turn ended instead of trying
       // again. Rendered like error_notice: a red <kodo_crit> callout.
       return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
+    case 'cyclic_thinking_notice':
+      // Strike 1 of the mid-stream cyclic-thinking detector
+      // (doc/STUCK_DETECTION.md §2.7) — a thinking block degenerated into a
+      // repetition loop and the stream was aborted. Same single-artifact
+      // shape as the message itself (the agent reads this back as real
+      // context next round); rendered as a red <kodo_crit> callout here too.
+      return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
+    case 'agent_cyclic_thinking_critical':
+      // Strike 2: a second detected repetition loop right after the notice
+      // above, so the turn ended instead of trying again.
+      return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
   }
 }

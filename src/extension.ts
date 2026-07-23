@@ -1225,17 +1225,11 @@ async function pickSession(): Promise<void> {
     const kindLabel = root ? `Guided · ${path.basename(root)}` : 'Problem solving';
     const created = typeof s.created_at === 'string' ? s.created_at : '';
     const lastModified = typeof s.last_modified === 'string' ? s.last_modified : '';
-    const timeLabel = `created ${formatTimestamp(created)}, last modified ${formatTimestamp(lastModified)}`;
-    // Third detail line — VS Code renders `\n` inside `detail` as an extra
-    // wrapped line, so label+description (line 1) and detail (lines 2-3)
-    // together give each entry three visual lines.
-    const workspaceLine = remembered
-      ? remembered.codeWorkspaceFile || remembered.physicalRoot || 'Not bound to any workspace'
-      : 'Not bound to any workspace';
+    const timeLabel = `created ${formatTimestamp(created)}, last modified ${formatTimestamp(lastModified)}${remembered ? ', in workspace' : ''}`;
     items.push({
       label: (disabledReason ? '$(circle-slash) ' : '$(comment-discussion) ') + name,
       description: openHere ? `${kindLabel} · (opened here)` : kindLabel,
-      detail: `${disabledReason ? `${disabledReason} · ${timeLabel}` : timeLabel}\n${workspaceLine}`,
+      detail: disabledReason ? `${disabledReason} · ${timeLabel}` : timeLabel,
       sessionId: id,
       disabledReason,
       remembered,

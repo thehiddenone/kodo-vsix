@@ -727,7 +727,7 @@ function buildHtml(): string {
       box.addEventListener('click', (e) => e.stopPropagation());
 
       const heading = document.createElement('h2');
-      heading.textContent = 'Session Settings';
+      heading.textContent = 'Session Details';
       box.appendChild(heading);
 
       const titleHeading = document.createElement('div');
@@ -775,7 +775,7 @@ function buildHtml(): string {
       lockedWrap.className = 'readonly-list';
       if (lockedPaths.length === 0) {
         const none = document.createElement('p');
-        none.className = 'value-line';
+        none.className = 'value-code';
         none.textContent = 'No working directories — no files in this session have been modified yet.';
         lockedWrap.appendChild(none);
       } else {

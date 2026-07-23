@@ -315,6 +315,15 @@ export function App() {
         case 'agent_stuck_critical':
           dispatch({ type: 'agent_stuck_critical', message: String(msg.message ?? '') });
           break;
+        case 'cyclic_thinking_notice':
+          dispatch({ type: 'cyclic_thinking_notice', message: String(msg.message ?? '') });
+          break;
+        case 'agent_cyclic_thinking_critical':
+          dispatch({
+            type: 'agent_cyclic_thinking_critical',
+            message: String(msg.message ?? ''),
+          });
+          break;
         case 'file_review_request':
           dispatch({
             type: 'file_review_request',
@@ -409,6 +418,7 @@ export function App() {
     state.pendingPermission !== null ||
     state.pendingStuckAlert !== null ||
     state.pendingFileReview !== null;
+  const inputDisabled = !state.connected || isRunning || isBlocked;
 
   function handleStop() {
     vscode.postMessage({ type: 'stop' });
@@ -588,13 +598,13 @@ export function App() {
         <div style={styles.inputArea}>
           <textarea
             ref={inputRef}
-            style={styles.input}
+            style={inputDisabled ? styles.input : { ...styles.input, ...styles.inputActive }}
             placeholder={
               state.pendingQuestion !== null
                 ? 'Answer the questions above, then Confirm and Send…'
                 : 'Type a prompt and press Enter…'
             }
-            disabled={!state.connected || isRunning || isBlocked}
+            disabled={inputDisabled}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
           />
@@ -619,7 +629,7 @@ export function App() {
               <FooterButton
                 style={styles.sendBtn}
                 onClick={sendPrompt}
-                disabled={!state.connected || isRunning || isBlocked}
+                disabled={inputDisabled}
                 title="Send prompt (Enter)"
               >
                 {isRunning ? '…' : '↑'}

@@ -253,9 +253,8 @@ export const styles = {
     minHeight: '80px',
   },
   userPrompt: {
-    // Shrink-to-fit chat bubble pinned to the right edge (marginLeft:auto), so
-    // it no longer spans the full WebView width and grows with its content
-    // (including any attached-file chips below the text).
+    // Chat bubble pinned to the right edge (marginLeft:auto), sized to a fixed
+    // share of the WebView width rather than shrinking to fit its content.
     background: 'var(--vscode-input-background)',
     // Yellow-ish accent matching the active prompt edit box / attach-file chips.
     border: '1px solid #c8a400',
@@ -264,14 +263,13 @@ export const styles = {
     marginTop: '40px',
     marginBottom: '40px',
     marginLeft: 'auto',
-    width: 'fit-content',
-    maxWidth: '85%',
+    width: '80%',
     boxSizing: 'border-box' as const,
     color: 'var(--vscode-input-foreground)',
     // Match the agent-response font (inherited editor font), one notch larger.
     fontFamily: 'var(--vscode-editor-font-family, monospace)',
     fontSize: 'calc(var(--vscode-editor-font-size, 13px) + 2px)',
-    textAlign: 'right',
+    textAlign: 'left',
   },
   userPromptText: {
     whiteSpace: 'pre-wrap' as const,
@@ -281,7 +279,7 @@ export const styles = {
     display: 'flex',
     flexWrap: 'wrap' as const,
     gap: '4px',
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     marginTop: '8px',
   },
   sentAttachChip: {
@@ -1199,16 +1197,25 @@ export const styles = {
     width: '100%',
     background: 'var(--vscode-input-background)',
     color: 'var(--vscode-input-foreground)',
+    // Grey when disabled/not-yet-connected (unchanged); overridden to the gold
+    // accent below (inputActive) while the box is actually usable, so it reads
+    // as the same "yellow rectangle" as the sent-prompt bubble (userPrompt).
     border: '1px solid var(--vscode-input-border)',
-    borderRadius: '2px',
-    padding: '4px 6px',
+    borderRadius: '6px',
+    padding: '12px 20px',
     fontFamily: 'inherit',
     fontSize: 'inherit',
     resize: 'none',
-    minHeight: '40px',
+    minHeight: '56px',
     maxHeight: '180px',
     overflowY: 'auto',
     boxSizing: 'border-box',
+  },
+  // Merged onto `input` only while it's enabled — matches userPrompt's gold
+  // border exactly. Left out of `input` itself so the disabled state keeps
+  // its plain grey vscode-input-border, unchanged.
+  inputActive: {
+    border: '1px solid #c8a400',
   },
   inputFooter: {
     display: 'flex',

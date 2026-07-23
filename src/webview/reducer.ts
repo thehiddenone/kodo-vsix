@@ -200,6 +200,27 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
       exclude_from_context: true,
     };
   }
+  if (type === 'cyclic_thinking_notice') {
+    // Replay of a persisted "cyclic_thinking_notice"-kind message
+    // (doc/STUCK_DETECTION.md §2.7) — same notice the live
+    // 'cyclic_thinking_notice' action renders, so a reload doesn't lose the
+    // record of the detected repetition loop.
+    return {
+      type: 'cyclic_thinking_notice',
+      message: String(e.message ?? ''),
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'agent_cyclic_thinking_critical') {
+    // Replay of the server's persisted "agent_cyclic_thinking_critical"
+    // marker (see EngineEmitters.emit_cyclic_thinking_critical) — same
+    // callout the live 'agent_cyclic_thinking_critical' action renders.
+    return {
+      type: 'agent_cyclic_thinking_critical',
+      message: String(e.message ?? ''),
+      exclude_from_context: true,
+    };
+  }
   return null;
 }
 
@@ -789,6 +810,68 @@ export function reducer(state: State, action: Action): State {
           { type: 'agent_stuck_critical', message: action.message, exclude_from_context: true },
         ],
       };
+    case 'cyclic_thinking_notice': {
+      // Strike 1 of the mid-stream cyclic-thinking detector
+      // (doc/STUCK_DETECTION.md §2.7): unlike 'agent_unstuck_nudge'/
+      // 'agent_stuck_critical' above, this does NOT fire after a round ended
+      // naturally — the stream was cancelled mid-round, with the repeated
+      // thinking content still live in `streamingThinking` (every fragment
+      // was forwarded to the client before the detector ever saw it). The
+      // turn is not ending either: _run_agent_turn immediately starts round
+      // 2, which sends a fresh llm_turn_start (which does NOT clear
+      // streamingThinking/streamingTokens) followed by that round's own
+      // genuine thinking_token events. Committing+clearing the buffer here
+      // (mirroring 'toolgen_token's "starting" branch, which has the same
+      // "more streaming is still coming" shape) is what keeps round 2's
+      // thinking display from silently inheriting round 1's garbage as a
+      // prefix. Deliberately does NOT touch awaitingLlm/streaming/llmWaiting
+      // — round 2's imminent llm_turn_start will set those correctly, and
+      // clearing them here too would just flicker the "awaiting response"
+      // indicator off and back on within one turn.
+      const session = commitStreaming(state);
+      return {
+        ...state,
+        session: [
+          ...session,
+          { type: 'cyclic_thinking_notice', message: action.message, exclude_from_context: true },
+        ],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+      };
+    }
+    case 'agent_cyclic_thinking_critical': {
+      // Strike 2: the entry-agent's thinking hit a *second* detected
+      // repetition loop right after the notice above, so the turn ends here
+      // for good (no round 3 coming) — unlike strike 1, this DOES mirror
+      // 'interrupted'/'runtime_error' fully, clearing every waiting
+      // indicator. No dangling tool_call to patch (success === null): a
+      // cyclic abort only ever fires within the thinking-delta phase of a
+      // round, before any tool call for that round can exist.
+      return {
+        ...state,
+        session: [
+          ...commitStreaming(state),
+          {
+            type: 'agent_cyclic_thinking_critical',
+            message: action.message,
+            exclude_from_context: true,
+          },
+        ],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        streaming: false,
+        awaitingLlm: false,
+        llmWaiting: null,
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
+      };
+    }
     case 'mode_state':
       return {
         ...state,

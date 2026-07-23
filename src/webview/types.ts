@@ -340,7 +340,23 @@ export type SessionEntry =
   // nudging (or asking) again. Display-only, like error_notice — rendered as
   // a <kodo_crit> callout. Persisted as an "agent_stuck_critical" marker and
   // replayed via session_history on reload.
-  | { type: 'agent_stuck_critical'; message: string; exclude_from_context: true };
+  | { type: 'agent_stuck_critical'; message: string; exclude_from_context: true }
+  // The mid-stream cyclic-thinking detector's strike-1 notice
+  // (doc/STUCK_DETECTION.md §2.7): a thinking block degenerated into a
+  // repetition loop and the stream was aborted before it could burn through
+  // the rest of the budget. `message` is the same real, LLM-visible
+  // course-correction turn the agent reads back next round — rendered here
+  // as a <kodo_crit> callout, not a fake user-typed bubble, mirroring
+  // 'agent_unstuck_nudge'. Persisted as a "cyclic_thinking_notice"-kind
+  // message and replayed via session_history.
+  | { type: 'cyclic_thinking_notice'; message: string; exclude_from_context: true }
+  // Strike 2: the entry-agent's thinking hit a *second* detected repetition
+  // loop right after the notice above, so the turn ended instead of trying
+  // again. Display-only, mirroring 'agent_stuck_critical' — a distinct type
+  // (not a reuse of that one) since the root cause and message differ.
+  // Persisted as an "agent_cyclic_thinking_critical" marker and replayed via
+  // session_history on reload.
+  | { type: 'agent_cyclic_thinking_critical'; message: string; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -507,6 +523,8 @@ export type Action =
   | { type: 'file_review_remove_draft'; index: number }
   | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string }
   | { type: 'agent_stuck_critical'; message: string }
+  | { type: 'cyclic_thinking_notice'; message: string }
+  | { type: 'agent_cyclic_thinking_critical'; message: string }
   | {
       type: 'mode_state';
       autonomous: boolean;

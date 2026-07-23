@@ -1596,6 +1596,19 @@ export class SessionController {
       return;
     }
 
+    if (env.kind === 'event' && evtType === 'agent.cyclic_thinking_notice') {
+      this._post({ type: 'cyclic_thinking_notice', message: String(env.payload.message ?? '') });
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'agent.cyclic_thinking_critical') {
+      this._post({
+        type: 'agent_cyclic_thinking_critical',
+        message: String(env.payload.message ?? ''),
+      });
+      return;
+    }
+
     if (env.kind === 'event' && evtType === 'error') {
       const message = String(env.payload.message ?? 'Unknown server error');
       const recoverable = Boolean(env.payload.recoverable ?? true);
