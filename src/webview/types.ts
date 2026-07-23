@@ -16,6 +16,46 @@ export function coerceCommandControl(value: unknown): CommandControl {
   return value === 'defensive' || value === 'permissive' ? value : 'smart';
 }
 
+/** One "Clock format" preset offered by the Show Timestamps settings section —
+ *  `ymd`/`mdy`/`dmy` is the date field order, `_12h`/`_24h` the clock style.
+ *  Rendered by {@link formatTimestamp} in `format.ts`; the same six keys are
+ *  hardcoded (value + label) into `kodo-settings-panel.ts`'s inline script,
+ *  which can't import this module (see that file's `CLOCK_FORMAT_OPTIONS`). */
+export type ClockFormatPreset = 'ymd_24h' | 'ymd_12h' | 'mdy_24h' | 'mdy_12h' | 'dmy_24h' | 'dmy_12h';
+
+/** Coerce an untyped wire value into a valid {@link ClockFormatPreset} (default `ymd_24h`). */
+export function coerceClockFormatPreset(value: unknown): ClockFormatPreset {
+  return value === 'ymd_24h' || value === 'ymd_12h' || value === 'mdy_24h'
+    || value === 'mdy_12h' || value === 'dmy_24h' || value === 'dmy_12h'
+    ? value
+    : 'ymd_24h';
+}
+
+/**
+ * The "Show Timestamps" flags (kodo-vsix-only — never sent to or read by the
+ * kodo server): whether a timestamp line is rendered above each primary
+ * content block, which IANA zone to render it in (`'system'` resolves to the
+ * runtime's local zone; `'UTC'` or any curated zone id from
+ * `kodo-settings-panel.ts`'s `TIMEZONE_OPTIONS` list is used as-is), and which
+ * {@link ClockFormatPreset} to render it with. Persisted host-side to
+ * `~/.kodo/etc/ui-settings.json` (extension.ts's `_readUiSettings`/
+ * `_writeUiSettings`) and pushed to every open session webview as a
+ * `ui_settings` message (see `session-controller.ts`'s `postUiSettings`).
+ */
+export interface UiSettings {
+  showTimestamps: boolean;
+  timezone: string;
+  clockFormat: ClockFormatPreset;
+}
+
+/** Flags-off, system-zone, ISO-order-24h default — matches extension.ts's
+ *  `_DEFAULT_UI_SETTINGS` and kodo-settings-panel.ts's initial `uiSettings`. */
+export const DEFAULT_UI_SETTINGS: UiSettings = {
+  showTimestamps: false,
+  timezone: 'system',
+  clockFormat: 'ymd_24h',
+};
+
 export interface LastCallTokens {
   input: number;
   output: number;
@@ -252,14 +292,32 @@ export interface CheckpointData {
 }
 
 export type SessionEntry =
-  | { type: 'user_message'; content: string; attachments: AttachedFileRef[]; exclude_from_context: false }
-  | { type: 'assistant_response'; content: string; exclude_from_context: false }
+  | {
+      type: 'user_message';
+      content: string;
+      attachments: AttachedFileRef[];
+      /** Client epoch-ms clock when sent (live) or the server's persisted `ts`
+       *  parsed via `Date.parse` (history) — null only if that parse fails.
+       *  Backs the opt-in "Show Timestamps" line; see `UiSettings`. */
+      ts: number | null;
+      exclude_from_context: false;
+    }
+  | {
+      type: 'assistant_response';
+      content: string;
+      /** See `user_message.ts`. */
+      ts: number | null;
+      exclude_from_context: false;
+    }
   | {
       type: 'tool_call';
       toolName: string;
       description: string;
       /** Correlates the post-dispatch detail event back to this entry. */
       toolCallId: string;
+      /** See `user_message.ts` — stamped when the call entry is created (live)
+       *  or read from history; never updated once set. */
+      ts: number | null;
       /** Customer-visible input/output rows (empty until the detail arrives). */
       rows: ToolCallDetailRow[];
       /** Absolute path to the persisted Markdown doc, or null if not yet known. */
@@ -453,6 +511,9 @@ export interface State {
   contextStats: ContextStats | null;
   /** True while the engine is running the compactor (shows a "Compacting…" banner). */
   compacting: boolean;
+  /** "Show Timestamps" flags from `~/.kodo/etc/ui-settings.json` (kodo-vsix-only,
+   *  see `UiSettings`) — pushed on rehydrate and whenever changed in Kōdo Settings. */
+  uiSettings: UiSettings;
 }
 
 /** Header context-window gauge: current/limit tokens, percent, and whether a manual compaction is allowed right now. */
@@ -556,4 +617,5 @@ export type Action =
   | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] }
   | { type: 'interrupted' }
   | { type: 'runtime_error'; message: string; recoverable: boolean }
-  | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer };
+  | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer }
+  | ({ type: 'ui_settings' } & UiSettings);

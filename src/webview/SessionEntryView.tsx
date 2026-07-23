@@ -1,10 +1,23 @@
 import { styles } from './styles';
 import { vscode } from './vscode';
-import type { SessionEntry, DiffLinkData, CheckpointData } from './types';
+import type { SessionEntry, DiffLinkData, CheckpointData, UiSettings } from './types';
 import { Markdown } from './markdown';
 import { ThinkingBlock, CompactionBlock, WebSearchBlock } from './StreamingBlocks';
 import { RunCommandProgress } from './indicators';
-import { completionLabel, APPROX_TOKENS_TITLE } from './format';
+import { completionLabel, APPROX_TOKENS_TITLE, formatTimestamp } from './format';
+
+/**
+ * The opt-in "Show Timestamps" line rendered above a user_message/
+ * assistant_response/tool_call block — null (renders nothing) while the
+ * feature is off or this particular entry has no `ts` (e.g. a parse failure
+ * on an old/malformed history line). See `UiSettings`/`styles.timestampLine`.
+ */
+function TimestampLine({ ts, uiSettings }: { ts: number | null; uiSettings: UiSettings }) {
+  if (!uiSettings.showTimestamps || ts === null) {
+    return null;
+  }
+  return <div style={styles.timestampLine}>{formatTimestamp(ts, uiSettings)}</div>;
+}
 /** Crop a `visible` parameter value to at most 3 lines / 200 characters. */
 function cropVisibleValue(value: string): string {
   const lines = value.split('\n');
@@ -207,34 +220,48 @@ function openablePath(entry: Extract<SessionEntry, { type: 'tool_call' }>): stri
 }
 interface SessionEntryViewProps {
   entry: SessionEntry;
+  uiSettings: UiSettings;
 }
 
-export function SessionEntryView({ entry }: SessionEntryViewProps) {
+export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
   switch (entry.type) {
-    case 'user_message':
+    case 'user_message': {
+      const showTs = uiSettings.showTimestamps && entry.ts !== null;
       return (
-        <div style={styles.userPrompt}>
-          <div style={styles.userPromptText}>{entry.content}</div>
-          {entry.attachments.length > 0 && (
-            <div style={styles.userPromptAttachments}>
-              {entry.attachments.map((a, i) => (
-                <div
-                  key={i}
-                  style={styles.sentAttachChip}
-                  title={`Open ${a.path}`}
-                  role="button"
-                  onClick={() => vscode.postMessage({ type: 'open_file', path: a.path })}
-                >
-                  <span style={styles.sentAttachIcon}>📄</span>
-                  <span style={styles.attachChipName}>{a.name}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <>
+          <TimestampLine ts={entry.ts} uiSettings={uiSettings} />
+          {/* marginTop dropped when a timestamp line precedes it — the
+              timestamp's own marginTop already carries the "gap from the
+              previous block" spacing this bubble normally supplies itself. */}
+          <div style={showTs ? { ...styles.userPrompt, marginTop: 0 } : styles.userPrompt}>
+            <div style={styles.userPromptText}>{entry.content}</div>
+            {entry.attachments.length > 0 && (
+              <div style={styles.userPromptAttachments}>
+                {entry.attachments.map((a, i) => (
+                  <div
+                    key={i}
+                    style={styles.sentAttachChip}
+                    title={`Open ${a.path}`}
+                    role="button"
+                    onClick={() => vscode.postMessage({ type: 'open_file', path: a.path })}
+                  >
+                    <span style={styles.sentAttachIcon}>📄</span>
+                    <span style={styles.attachChipName}>{a.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
       );
+    }
     case 'assistant_response':
-      return <div style={styles.agentTokens}><Markdown content={entry.content} /></div>;
+      return (
+        <>
+          <TimestampLine ts={entry.ts} uiSettings={uiSettings} />
+          <div style={styles.agentTokens}><Markdown content={entry.content} /></div>
+        </>
+      );
     case 'status_response': {
       const mins = Math.floor(entry.durationMs / 60000);
       const secs = Math.round((entry.durationMs % 60000) / 1000);
@@ -261,6 +288,7 @@ export function SessionEntryView({ entry }: SessionEntryViewProps) {
       const openPath = openablePath(entry);
       return (
         <div>
+          <TimestampLine ts={entry.ts} uiSettings={uiSettings} />
           {entry.toolgenDurationMs !== null && (
             <div style={styles.toolgenDone} title={APPROX_TOKENS_TITLE}>
               {completionLabel(`Generated content for ${entry.toolName}`, entry.toolgenChars ?? 0, entry.toolgenDurationMs)}

@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
 import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart } from './types';
-import { coerceEditControl, coerceCommandControl } from './types';
+import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset } from './types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
 import { UsagePanel } from './UsagePanel';
@@ -225,6 +225,14 @@ export function App() {
           });
           break;
         }
+        case 'ui_settings':
+          dispatch({
+            type: 'ui_settings',
+            showTimestamps: Boolean(msg.showTimestamps),
+            timezone: typeof msg.timezone === 'string' && msg.timezone ? msg.timezone : 'system',
+            clockFormat: coerceClockFormatPreset(msg.clockFormat),
+          });
+          break;
         case 'file_change':
           dispatch({
             type: 'file_change',
@@ -500,7 +508,7 @@ export function App() {
               }}
             />
           ) : (
-            <SessionEntryView key={i} entry={entry} />
+            <SessionEntryView key={i} entry={entry} uiSettings={state.uiSettings} />
           ),
         )}
         {state.streamingThinking && (

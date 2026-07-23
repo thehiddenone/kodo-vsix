@@ -31,7 +31,7 @@ import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-pro
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
 import { KodoSettingsPanel } from './kodo-settings-panel';
-import type { GlobalRuleEntry, KodoSettingsMessage, LlamaCppInfo, SessionListEntry, StuckDetectionSettings } from './kodo-settings-panel';
+import type { GlobalRuleEntry, KodoSettingsMessage, LlamaCppInfo, SessionListEntry, StuckDetectionSettings, UiSettings } from './kodo-settings-panel';
 import type {
   CloudRegistry,
   EffortLevel,
@@ -504,6 +504,7 @@ function _sessionDeps(): SessionDeps {
     pickProject,
     addWorkspaceFolder,
     getThinkingContext: _currentThinkingContext,
+    getUiSettings: _readUiSettings,
     handleApiKeyRequest: (vendor, requestId, send) => {
       _apiKeyQueue = _apiKeyQueue.then(() => _handleApiKeyRequest(vendor, requestId, send));
     },
@@ -1738,6 +1739,55 @@ function _writeSettings(patch: Record<string, unknown>): void {
   fs.writeFileSync(_settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
 }
 
+const _DEFAULT_UI_SETTINGS: UiSettings = { showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h' };
+
+/**
+ * `~/.kodo/etc/ui-settings.json` — kodo-vsix's own "Show Timestamps" flags
+ * (Kōdo Settings' "General" section). Deliberately a **separate file** from
+ * `settings.json`/`_settingsPath()`: that one mirrors state the kodo server
+ * also reads/writes (mode, active models, …); this one is pure client-side
+ * display preference the server never sees, so it gets its own file rather
+ * than sharing that wire-format-adjacent one.
+ */
+function _uiSettingsPath(): string {
+  return path.join(_kodoHomeDir(), 'etc', 'ui-settings.json');
+}
+
+/** Read `ui-settings.json`, filling in defaults for a missing file or any
+ *  malformed/missing field (never throws). */
+function _readUiSettings(): UiSettings {
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(_uiSettingsPath(), 'utf8')) as Record<string, unknown>;
+  } catch {
+    return _DEFAULT_UI_SETTINGS;
+  }
+  return {
+    showTimestamps: typeof raw.showTimestamps === 'boolean' ? raw.showTimestamps : _DEFAULT_UI_SETTINGS.showTimestamps,
+    timezone: typeof raw.timezone === 'string' && raw.timezone ? raw.timezone : _DEFAULT_UI_SETTINGS.timezone,
+    clockFormat: typeof raw.clockFormat === 'string' && raw.clockFormat ? raw.clockFormat : _DEFAULT_UI_SETTINGS.clockFormat,
+  };
+}
+
+/** Overwrite `ui-settings.json` with `settings` (the whole object — unlike
+ *  `_writeSettings`'s patch-merge, there are no other keys in this file to
+ *  preserve) and return it, so the caller can push the same value onward
+ *  without a redundant re-read. */
+function _writeUiSettings(settings: UiSettings): UiSettings {
+  fs.mkdirSync(path.dirname(_uiSettingsPath()), { recursive: true });
+  fs.writeFileSync(_uiSettingsPath(), JSON.stringify(settings, null, 2), 'utf8');
+  return settings;
+}
+
+/** Push the current "Show Timestamps" flags to every open session tab in
+ *  this window — called right after `set_ui_settings` writes them, mirroring
+ *  `_broadcastThinkingContext`. */
+function _broadcastUiSettings(settings: UiSettings): void {
+  for (const s of sessions.values()) {
+    s.updateUiSettings(settings);
+  }
+}
+
 /** Logical-root folder map: VS-Code-disambiguated name → physical path. */
 function _buildFolderMap(): Record<string, string> {
   const folders = vscode.workspace.workspaceFolders ?? [];
@@ -2183,8 +2233,12 @@ async function _openKodoSettings(): Promise<void> {
     _fetchLlamaCppVersionInfo(),
     _fetchSessionsForPanel(),
   ]);
+  // Unlike the four above, ui-settings.json is a local file kodo-vsix alone
+  // owns — no server round trip, so this reads synchronously rather than
+  // joining the Promise.all.
+  const uiSettings = _readUiSettings();
   const panel = KodoSettingsPanel.createOrShow(
-    { rules, stuckDetection, llamaCpp, sessions, sessionRules: null },
+    { rules, stuckDetection, llamaCpp, sessions, sessionRules: null, uiSettings },
     (msg) => void _onKodoSettingsMessage(msg),
   );
   // For an already-open panel, createOrShow only revealed it (initialState is
@@ -2193,7 +2247,7 @@ async function _openKodoSettings(): Promise<void> {
   // untouched here (omitted from the patch) — closing and reopening the panel
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
-  panel.update({ rules, stuckDetection, llamaCpp, sessions });
+  panel.update({ rules, stuckDetection, llamaCpp, sessions, uiSettings });
 }
 
 /** Delete a session by id from the Kōdo Settings panel's "Sessions" list —
@@ -2286,6 +2340,20 @@ async function _onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     } catch {
       vscode.window.showErrorMessage('Kōdo: could not reach the server to update stuck-detection settings.');
     }
+    return;
+  }
+  if (msg.type === 'set_ui_settings') {
+    // Local file, no server round trip — write, reflect in the panel, and
+    // push to every open session tab immediately (mirrors
+    // _broadcastThinkingContext; unlike that one, this fires from a user
+    // action rather than a state change elsewhere).
+    const uiSettings = _writeUiSettings({
+      showTimestamps: msg.showTimestamps,
+      timezone: msg.timezone,
+      clockFormat: msg.clockFormat,
+    });
+    KodoSettingsPanel.instance?.update({ uiSettings });
+    _broadcastUiSettings(uiSettings);
     return;
   }
   if (msg.type === 'install_llamacpp') {

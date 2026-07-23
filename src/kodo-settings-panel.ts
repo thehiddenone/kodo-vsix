@@ -52,18 +52,39 @@ export interface LlamaCppInfo {
   busy: boolean;
 }
 
+/** The "Show Timestamps" flags (kodo-vsix-only — never sent to or read by the
+ *  kodo server) backing the "General" section's top subsection. Persisted to
+ *  `~/.kodo/etc/ui-settings.json` (extension.ts's `_readUiSettings`/
+ *  `_writeUiSettings`) — a dedicated file, deliberately separate from the
+ *  server-mirrored `~/.kodo/etc/settings.json` (`_readSettings`/
+ *  `_writeSettings`). `clockFormat` is one of six presets (`<dateOrder>_<12h|
+ *  24h>`, e.g. `"ymd_24h"`) the webview's `webview/types.ts`
+ *  `ClockFormatPreset` also defines — kept as a plain `string` here (not that
+ *  union) since the host and webview sides define their own copies of small
+ *  wire types independently (see `session-controller.ts`'s duplicated
+ *  `EditControl`/`CommandControl`), and the six option values/labels are
+ *  hardcoded into this panel's own inline script below
+ *  (`CLOCK_FORMAT_OPTIONS`) rather than shared. */
+export interface UiSettings {
+  showTimestamps: boolean;
+  timezone: string;
+  clockFormat: string;
+}
+
 export interface KodoSettingsState {
   rules: GlobalRuleEntry[];
   stuckDetection: StuckDetectionSettings;
   llamaCpp: LlamaCppInfo;
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
+  uiSettings: UiSettings;
 }
 
 export type KodoSettingsMessage =
   | { type: 'ready' }
   | { type: 'delete_rules'; rules: GlobalRuleEntry[] }
   | ({ type: 'set_stuck_detection' } & StuckDetectionSettings)
+  | ({ type: 'set_ui_settings' } & UiSettings)
   | { type: 'install_llamacpp' }
   | { type: 'uninstall_llamacpp' }
   | { type: 'update_llamacpp' }
@@ -231,6 +252,36 @@ function buildHtml(): string {
       cursor: default;
     }
     .checkbox-row input:disabled {
+      cursor: default;
+    }
+    .select-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .select-row label {
+      font-size: 0.92em;
+      flex-shrink: 0;
+      width: 90px;
+    }
+    .select-row:has(select:disabled) label {
+      opacity: 0.5;
+    }
+    .settings-select {
+      flex: 1;
+      min-width: 0;
+      box-sizing: border-box;
+      padding: 3px 5px;
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: 0.92em;
+    }
+    .settings-select:disabled {
+      opacity: 0.5;
       cursor: default;
     }
     .toolbar {
@@ -443,6 +494,7 @@ function buildHtml(): string {
       llamaCpp: { installedVersion: null, latestVersion: null, busy: false },
       sessions: [],
       sessionRules: null,
+      uiSettings: { showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h' },
     };
     let _selectedKey = 'general';
     const _checked = new Set();
@@ -932,6 +984,122 @@ function buildHtml(): string {
       return wrap;
     }
 
+    // 'system' resolves to the runtime's local IANA zone (format.ts's
+    // resolveTimeZone); every other value is a real IANA zone id used as-is —
+    // 'UTC' plus a curated set of common hubs, not an exhaustive list.
+    const TIMEZONE_OPTIONS = [
+      ['system', 'System locale'],
+      ['UTC', 'UTC'],
+      ['America/Los_Angeles', 'Pacific Time (Los Angeles)'],
+      ['America/Denver', 'Mountain Time (Denver)'],
+      ['America/Chicago', 'Central Time (Chicago)'],
+      ['America/New_York', 'Eastern Time (New York)'],
+      ['America/Sao_Paulo', 'São Paulo'],
+      ['Europe/London', 'London'],
+      ['Europe/Paris', 'Paris / Berlin'],
+      ['Europe/Moscow', 'Moscow'],
+      ['Asia/Kolkata', 'India (Kolkata)'],
+      ['Asia/Singapore', 'Singapore / Hong Kong'],
+      ['Asia/Tokyo', 'Tokyo'],
+      ['Australia/Sydney', 'Sydney'],
+    ];
+
+    // <dateOrder>_<12h|24h> — mirrors webview/types.ts's ClockFormatPreset
+    // union (kept as plain strings here, see the UiSettings doc comment above).
+    const CLOCK_FORMAT_OPTIONS = [
+      ['ymd_24h', 'YYYY-MM-DD, 24-hour (2026-07-23 14:41)'],
+      ['ymd_12h', 'YYYY-MM-DD, 12-hour (2026-07-23 2:41 PM)'],
+      ['mdy_24h', 'MM/DD/YYYY, 24-hour (07/23/2026 14:41)'],
+      ['mdy_12h', 'MM/DD/YYYY, 12-hour (07/23/2026 2:41 PM)'],
+      ['dmy_24h', 'DD/MM/YYYY, 24-hour (23/07/2026 14:41)'],
+      ['dmy_12h', 'DD/MM/YYYY, 12-hour (23/07/2026 2:41 PM)'],
+    ];
+
+    function postUiSettings() {
+      vsc.postMessage({ type: 'set_ui_settings', ..._state.uiSettings });
+    }
+
+    function renderSelectRow({ labelText, options, value, disabled, onChange }) {
+      const row = document.createElement('div');
+      row.className = 'select-row';
+
+      const label = document.createElement('label');
+      label.textContent = labelText;
+      row.appendChild(label);
+
+      const select = document.createElement('select');
+      select.className = 'settings-select';
+      select.disabled = disabled;
+      options.forEach(([optValue, optLabel]) => {
+        const option = document.createElement('option');
+        option.value = optValue;
+        option.textContent = optLabel;
+        option.selected = optValue === value;
+        select.appendChild(option);
+      });
+      select.addEventListener('change', () => onChange(select.value));
+      row.appendChild(select);
+
+      return row;
+    }
+
+    function renderShowTimestampsSection() {
+      const wrap = document.createElement('div');
+
+      const subheading = document.createElement('div');
+      subheading.className = 'section-subheading';
+      subheading.textContent = 'Show Timestamps';
+      wrap.appendChild(subheading);
+
+      const intro = document.createElement('p');
+      intro.className = 'intro-text';
+      intro.textContent = 'Show when each message, response, and tool call happened, as a small '
+        + 'line above it in the conversation.';
+      wrap.appendChild(intro);
+
+      const showRow = document.createElement('label');
+      showRow.className = 'checkbox-row';
+      const showInput = document.createElement('input');
+      showInput.type = 'checkbox';
+      showInput.checked = _state.uiSettings.showTimestamps;
+      showInput.addEventListener('change', () => {
+        _state.uiSettings = { ..._state.uiSettings, showTimestamps: showInput.checked };
+        postUiSettings();
+        render();
+      });
+      showRow.appendChild(showInput);
+      showRow.appendChild(document.createTextNode('Show timestamps'));
+      wrap.appendChild(showRow);
+
+      const disabled = !_state.uiSettings.showTimestamps;
+
+      wrap.appendChild(renderSelectRow({
+        labelText: 'Time zone',
+        options: TIMEZONE_OPTIONS,
+        value: _state.uiSettings.timezone,
+        disabled,
+        onChange: (value) => {
+          _state.uiSettings = { ..._state.uiSettings, timezone: value };
+          postUiSettings();
+          render();
+        },
+      }));
+
+      wrap.appendChild(renderSelectRow({
+        labelText: 'Format',
+        options: CLOCK_FORMAT_OPTIONS,
+        value: _state.uiSettings.clockFormat,
+        disabled,
+        onChange: (value) => {
+          _state.uiSettings = { ..._state.uiSettings, clockFormat: value };
+          postUiSettings();
+          render();
+        },
+      }));
+
+      return wrap;
+    }
+
     const STUCK_ACTIVE_OPTIONS = [
       ['off', 'Off'],
       ['local_only', 'Only for local LLMs'],
@@ -952,6 +1120,12 @@ function buildHtml(): string {
       const topDivider = document.createElement('hr');
       topDivider.className = 'section-divider';
       wrap.appendChild(topDivider);
+
+      wrap.appendChild(renderShowTimestampsSection());
+
+      const timestampsDivider = document.createElement('hr');
+      timestampsDivider.className = 'section-divider';
+      wrap.appendChild(timestampsDivider);
 
       wrap.appendChild(renderLlamaCppSection());
 
@@ -1060,6 +1234,9 @@ function buildHtml(): string {
       }
       if (data.llamaCpp && typeof data.llamaCpp === 'object') {
         _state.llamaCpp = data.llamaCpp;
+      }
+      if (data.uiSettings && typeof data.uiSettings === 'object') {
+        _state.uiSettings = data.uiSettings;
       }
       if (Array.isArray(data.sessions)) {
         _state.sessions = data.sessions;

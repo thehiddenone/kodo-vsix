@@ -44,6 +44,15 @@ function coerceCommandControl(value: unknown): CommandControl {
 const _AUTONOMOUS_EDIT: EditControl = 'allow_all';
 const _AUTONOMOUS_COMMAND: CommandControl = 'permissive';
 
+/** The "Show Timestamps" flags (kodo-vsix-only, see kodo-settings-panel.ts's
+ *  own copy of this shape and its doc comment on why it's duplicated rather
+ *  than shared). */
+interface UiSettings {
+  showTimestamps: boolean;
+  timezone: string;
+  clockFormat: string;
+}
+
 /** Coerce an untyped wire value into a workflow mode (default guided). */
 function coerceWorkflowMode(value: unknown): 'guided' | 'problem_solving' {
   return value === 'problem_solving' ? 'problem_solving' : 'guided';
@@ -219,6 +228,13 @@ export interface SessionDeps {
    */
   getThinkingContext: () => ThinkingContext;
   /**
+   * Current "Show Timestamps" flags, read fresh from
+   * `~/.kodo/etc/ui-settings.json` (extension.ts's `_readUiSettings`) at
+   * construction, then re-pushed to this tab whenever they change via
+   * {@link SessionController.updateUiSettings}.
+   */
+  getUiSettings: () => UiSettings;
+  /**
    * Forward a window-global `llama.state` event to the host. llama.cpp is
    * auto-started inside an engine run, so the event arrives on THIS session's
    * socket (not the session-less control connection); the host owns the sidebar
@@ -305,6 +321,9 @@ export class SessionController {
   // the next tier to request on click, and show per-tier tooltips.
   private thinkingLevel = '';
   private thinkingContext: ThinkingContext = { family: null, tiers: [], defaultTier: '' };
+  /** "Show Timestamps" flags — window-global like `thinkingContext`, kept
+   *  current via {@link updateUiSettings} and replayed on every rehydrate. */
+  private uiSettings: UiSettings = { showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h' };
   private running = false;
   // Server-authoritative twin of the webview's `awaitingLlm` ("Awaiting
   // response" spinner) — true iff the server is between an `llm.turn_start`
@@ -336,6 +355,7 @@ export class SessionController {
     this.isNewSession = sessionId === '';
     this.panel = panel;
     this.thinkingContext = deps.getThinkingContext();
+    this.uiSettings = deps.getUiSettings();
 
     panel.iconPath = vscode.Uri.file(
       path.join(deps.context.extensionPath, 'images', 'kodo16px.svg'),
@@ -1003,6 +1023,7 @@ export class SessionController {
     this._post({ type: 'status', connected: this.connected });
     this._post({ type: 'stage', stage: this.stage, agent: this.agent });
     this._postModeState();
+    this._post({ type: 'ui_settings', ...this.uiSettings });
     if (this.sessionHistory !== null) {
       this._post({ type: 'session_history', entries: this.sessionHistory.entries, subsessions: this.sessionHistory.subsessions });
     }
@@ -1938,6 +1959,16 @@ export class SessionController {
   updateThinkingContext(ctx: ThinkingContext): void {
     this.thinkingContext = ctx;
     this._postModeState();
+  }
+
+  /**
+   * Apply new "Show Timestamps" flags (the host calls this on every open
+   * session tab right after the user changes them in Kōdo Settings) and push
+   * them to the webview immediately, without waiting for a reload.
+   */
+  updateUiSettings(settings: UiSettings): void {
+    this.uiSettings = settings;
+    this._post({ type: 'ui_settings', ...settings });
   }
 }
 

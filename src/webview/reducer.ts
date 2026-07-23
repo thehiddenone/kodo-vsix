@@ -1,4 +1,16 @@
 import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, FileReviewFeedbackEntry } from './types';
+import { DEFAULT_UI_SETTINGS } from './types';
+
+/** Parse a history entry's ISO-8601 `ts` (kodo doc/WS_PROTOCOL.md §5.11) into
+ *  epoch ms, or null when absent/unparseable — never thrown from history
+ *  hydration over a missing/malformed field. */
+function parseTs(value: unknown): number | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
 
 /** Shared, mutable bookkeeping threaded through every `wireEntryToSessionEntry`
  *  call while processing one `session_history` delivery — populated from BOTH
@@ -32,10 +44,10 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
       const rec = a as Record<string, unknown>;
       return { name: String(rec.name ?? ''), path: String(rec.path ?? '') };
     });
-    return { type: 'user_message', content: String(e.content ?? ''), attachments, exclude_from_context: false };
+    return { type: 'user_message', content: String(e.content ?? ''), attachments, ts: parseTs(e.ts), exclude_from_context: false };
   }
   if (type === 'assistant_response') {
-    return { type: 'assistant_response', content: String(e.content ?? ''), exclude_from_context: false };
+    return { type: 'assistant_response', content: String(e.content ?? ''), ts: parseTs(e.ts), exclude_from_context: false };
   }
   if (type === 'thinking_block') {
     return { type: 'thinking_block', content: String(e.content ?? ''), durationMs: typeof e.durationMs === 'number' ? e.durationMs : null, exclude_from_context: true };
@@ -94,6 +106,7 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
       toolName: String(e.toolName ?? ''),
       description: String(e.description ?? ''),
       toolCallId,
+      ts: parseTs(e.ts),
       rows,
       detailFile: typeof e.detailFile === 'string' ? e.detailFile : null,
       schemaCompliance: typeof e.schemaCompliance === 'boolean' ? e.schemaCompliance : null,
@@ -231,7 +244,7 @@ export function commitStreaming(state: State): SessionEntry[] {
     session = [...session, { type: 'thinking_block', content: state.streamingThinking, durationMs, exclude_from_context: true }];
   }
   if (state.streamingTokens) {
-    session = [...session, { type: 'assistant_response', content: state.streamingTokens, exclude_from_context: false }];
+    session = [...session, { type: 'assistant_response', content: state.streamingTokens, ts: Date.now(), exclude_from_context: false }];
   }
   return session;
 }
@@ -335,7 +348,7 @@ export function reducer(state: State, action: Action): State {
         // startedAt stays null until 'tool_call_in_progress' arrives — the
         // progress bar must not tick through a judging round or permission
         // wait that precedes real execution (see indicators.tsx).
-        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: null, diff: null, checkpoint: null, toolgenDurationMs, toolgenChars, webSearchNotes: [], exclude_from_context: false }],
+        session: [...state.session, { type: 'tool_call', toolName: action.toolName, description: action.description, toolCallId: action.toolCallId, ts: Date.now(), rows: [], detailFile: null, schemaCompliance: null, success: null, timeoutSeconds: action.timeoutSeconds, startedAt: null, diff: null, checkpoint: null, toolgenDurationMs, toolgenChars, webSearchNotes: [], exclude_from_context: false }],
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -441,7 +454,7 @@ export function reducer(state: State, action: Action): State {
       // files rode along is preserved in the feed, then clear the staging area.
       return {
         ...state,
-        session: [...state.session, { type: 'user_message', content: action.text, attachments: state.attachedFiles.map((f) => ({ name: f.name, path: f.path })), exclude_from_context: false }],
+        session: [...state.session, { type: 'user_message', content: action.text, attachments: state.attachedFiles.map((f) => ({ name: f.name, path: f.path })), ts: Date.now(), exclude_from_context: false }],
         attachedFiles: [],
         streamingTokens: '',
         streaming: false,
@@ -457,7 +470,7 @@ export function reducer(state: State, action: Action): State {
       }
       return {
         ...state,
-        session: [{ type: 'user_message', content: action.text, attachments: [], exclude_from_context: false }],
+        session: [{ type: 'user_message', content: action.text, attachments: [], ts: Date.now(), exclude_from_context: false }],
       };
     case 'agent_started':
       return { ...state, agent: action.agent };
@@ -1038,6 +1051,11 @@ export function reducer(state: State, action: Action): State {
       });
       return changed ? { ...state, session } : state;
     }
+    case 'ui_settings':
+      return {
+        ...state,
+        uiSettings: { showTimestamps: action.showTimestamps, timezone: action.timezone, clockFormat: action.clockFormat },
+      };
     default:
       return state;
   }
@@ -1090,4 +1108,5 @@ export const initial: State = {
   attachedFiles: [],
   contextStats: null,
   compacting: false,
+  uiSettings: DEFAULT_UI_SETTINGS,
 };

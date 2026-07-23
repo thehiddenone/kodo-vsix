@@ -252,6 +252,18 @@ export const styles = {
     marginBottom: '8px',
     minHeight: '80px',
   },
+  /** "Show Timestamps" line rendered above a user_message/assistant_response/
+   *  tool_call block (App.tsx/SessionEntryView.tsx) — deliberately small and
+   *  low-contrast so it never competes with the content it labels; its own
+   *  top margin carries the block's usual "gap from whatever came before"
+   *  spacing, with almost none below so it reads as attached to the block
+   *  underneath it. */
+  timestampLine: {
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginTop: '14px',
+    marginBottom: '2px',
+  },
   userPrompt: {
     // Chat bubble pinned to the right edge (marginLeft:auto), sized to a fixed
     // share of the WebView width rather than shrinking to fit its content.
