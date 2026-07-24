@@ -488,6 +488,14 @@ export interface State {
   thinkingTiers: string[];
   /** True while a turn is in progress (server phase "running"); gates the frozen toggles' "queued" status. */
   running: boolean;
+  /**
+   * Whether this session's bound directories (if any) are hosted by the live
+   * workspace open in this window right now (server's `state.workspace_connected`,
+   * doc/WS_PROTOCOL.md §5.1) — mode-agnostic, always `true` for a session
+   * that has never locked a directory. `false` shows the footer's
+   * reconnect-workspace button.
+   */
+  workspaceConnected: boolean;
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
   awaitingLlm: boolean;
@@ -599,6 +607,7 @@ export type Action =
       thinkingFamily: ThinkingFamily | null;
       thinkingTiers: string[];
       running: boolean;
+      workspaceConnected: boolean;
     }
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }

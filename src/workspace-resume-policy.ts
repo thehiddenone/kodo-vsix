@@ -14,6 +14,16 @@
  * (reused, not a new window; folders set exactly, not additively — see the
  * `project_kodo_workspace_session_linkage` memory for the product decisions
  * behind these choices) before the session itself is opened.
+ *
+ * As of 2026-07-23, "doesn't match" no longer means "isn't byte-identical" —
+ * the server computes a looser `compatible` verdict per session
+ * (`RememberedWorkspace.compatible`, doc/WS_PROTOCOL.md §7.1b) that's `true`
+ * whenever the current workspace can host the session's bound directories at
+ * all, even with extra folders open or a different exact folder set on
+ * disk. `requiresWorkspaceSwitchConfirmation` gates on that instead of exact
+ * match, and declining its confirmation no longer aborts opening the session
+ * — it opens disconnected/isolated (`kodo.runtime._engine._core`'s
+ * Problem-Solver bound-directory fallback) instead of reloading the window.
  */
 
 /** A session's remembered workspace shape, as returned by `session.list`. */
@@ -32,6 +42,16 @@ export interface RememberedWorkspace {
    * gating the resume confirmation dialog to locked sessions only.
    */
   locked: boolean;
+  /**
+   * Server-computed (`kodo.state.workspace_shape_compatible`, via
+   * `session.list`'s optional `{physical_root, folders}` request payload,
+   * doc/WS_PROTOCOL.md §7.1b): whether the *current* window's workspace can
+   * host this session's bound directories, even if it isn't byte-identical
+   * to the remembered shape (extra folders open, etc.). Only meaningful when
+   * `locked` is true — drives `requiresWorkspaceSwitchConfirmation` and the
+   * "no reload needed" fast path in `_resumeSessionIntoWorkspace`.
+   */
+  compatible: boolean;
 }
 
 /** What resuming a session should do to the current window's workspace. */
@@ -101,17 +121,20 @@ export function resumeTargetMatchesCurrent(
 }
 
 /**
- * Whether resuming a session into `target` needs the user's explicit
- * confirmation before this window's workspace is reloaded.
+ * Whether resuming a session needs the user's explicit confirmation before
+ * this window's workspace is reloaded.
  *
  * Only sessions with at least one locked folder require it — an unlocked
  * session has no legitimate workspace link to protect yet, so it keeps the
  * pre-existing silent-reopen behaviour (`_resumeSessionIntoWorkspace`).
+ *
+ * `compatible` (server-computed, `RememberedWorkspace.compatible`) is the
+ * gate, not exact identity: a workspace that already hosts every bound
+ * directory needs no confirmation (and no reload at all — see
+ * `_resumeSessionIntoWorkspace`'s own compatible-fast-path check) even if
+ * it isn't byte-identical to what was remembered. This is a strictly wider
+ * "no confirmation needed" set than the old exact-match-only check.
  */
-export function requiresWorkspaceSwitchConfirmation(
-  locked: boolean,
-  target: ResumeTarget,
-  current: { workspaceFile: string | undefined; folderPaths: string[] },
-): boolean {
-  return locked && !resumeTargetMatchesCurrent(target, current);
+export function requiresWorkspaceSwitchConfirmation(locked: boolean, compatible: boolean): boolean {
+  return locked && !compatible;
 }

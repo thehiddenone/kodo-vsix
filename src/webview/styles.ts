@@ -22,6 +22,16 @@ export const styles = {
     fontWeight: 'bold',
     flexShrink: 0,
   },
+  reconnectBtn: {
+    background: 'transparent',
+    color: '#c8a400',
+    border: '1px solid #c8a400',
+    borderRadius: '2px',
+    width: '40px',
+    cursor: 'pointer',
+    fontSize: '16px',
+    flexShrink: 0,
+  },
   attachArea: {
     flex: 1,
     minWidth: 0,

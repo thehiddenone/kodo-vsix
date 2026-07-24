@@ -16,6 +16,7 @@ suite('workspace-resume-policy', () => {
     folders: { kodo: '/home/dev/kodo', 'kodo-vsix': '/home/dev/kodo-vsix' },
     codeWorkspaceFile: null,
     locked: false,
+    compatible: false,
   };
 
   const withCodeWorkspaceFile: RememberedWorkspace = {
@@ -34,6 +35,7 @@ suite('workspace-resume-policy', () => {
         folders: {},
         codeWorkspaceFile: null,
         locked: false,
+        compatible: false,
       };
       assert.deepStrictEqual(resumeTarget(empty, false), { kind: 'none' });
     });
@@ -158,39 +160,24 @@ suite('workspace-resume-policy', () => {
   });
 
   suite('requiresWorkspaceSwitchConfirmation', () => {
-    const mismatchedTarget = {
-      kind: 'folders' as const,
-      entries: [['kodo', '/home/dev/kodo']] as Array<[string, string]>,
-    };
-    const mismatchedCurrent = { workspaceFile: undefined, folderPaths: ['/home/dev/other'] };
-    const matchingCurrent = { workspaceFile: undefined, folderPaths: ['/home/dev/kodo'] };
-
-    test('locked + mismatch requires confirmation', () => {
-      assert.strictEqual(
-        requiresWorkspaceSwitchConfirmation(true, mismatchedTarget, mismatchedCurrent),
-        true,
-      );
+    // Server-computed `compatible` (doc/WS_PROTOCOL.md §7.1b) replaced the
+    // old exact-match-only check: a workspace hosting every bound directory
+    // needs no confirmation even if it isn't byte-identical to what was
+    // remembered.
+    test('locked + incompatible requires confirmation', () => {
+      assert.strictEqual(requiresWorkspaceSwitchConfirmation(true, false), true);
     });
 
-    test('unlocked + mismatch does not require confirmation (silent reopen, unchanged)', () => {
-      assert.strictEqual(
-        requiresWorkspaceSwitchConfirmation(false, mismatchedTarget, mismatchedCurrent),
-        false,
-      );
+    test('unlocked + incompatible does not require confirmation (silent reopen, unchanged)', () => {
+      assert.strictEqual(requiresWorkspaceSwitchConfirmation(false, false), false);
     });
 
-    test('locked + already matching does not require confirmation — nothing to reload', () => {
-      assert.strictEqual(
-        requiresWorkspaceSwitchConfirmation(true, mismatchedTarget, matchingCurrent),
-        false,
-      );
+    test('locked + compatible does not require confirmation — nothing to reload', () => {
+      assert.strictEqual(requiresWorkspaceSwitchConfirmation(true, true), false);
     });
 
-    test('unlocked + already matching does not require confirmation', () => {
-      assert.strictEqual(
-        requiresWorkspaceSwitchConfirmation(false, mismatchedTarget, matchingCurrent),
-        false,
-      );
+    test('unlocked + compatible does not require confirmation', () => {
+      assert.strictEqual(requiresWorkspaceSwitchConfirmation(false, true), false);
     });
   });
 });

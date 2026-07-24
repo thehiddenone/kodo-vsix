@@ -377,6 +377,7 @@ export function App() {
                 : null,
             thinkingTiers: Array.isArray(msg.thinkingTiers) ? msg.thinkingTiers.map((t) => String(t)) : [],
             running: Boolean(msg.running),
+            workspaceConnected: msg.workspaceConnected !== false,
           });
           break;
         case 'persist_session_id':
@@ -439,6 +440,12 @@ export function App() {
   function handleDelete() {
     // Confirmation + deletion are driven by the extension host (native dialog).
     vscode.postMessage({ type: 'delete_session' });
+  }
+
+  function handleReconnectWorkspace() {
+    // Confirmation + the actual window reload are driven by the extension
+    // host (native dialog + `SessionDeps.reconnectWorkspace`).
+    vscode.postMessage({ type: 'reconnect_workspace' });
   }
 
   function handleAttach() {
@@ -634,6 +641,16 @@ export function App() {
           <div style={styles.inputFooter}>
             <AttachedFilesArea files={state.attachedFiles} onRemove={removeAttachment} />
             <div style={styles.footerButtons}>
+              {!state.workspaceConnected && (
+                <FooterButton
+                  style={styles.reconnectBtn}
+                  onClick={handleReconnectWorkspace}
+                  disabled={!state.connected}
+                  title="Open workspace associated with this session."
+                >
+                  {'📂'}
+                </FooterButton>
+              )}
               <FooterButton
                 style={styles.sendBtn}
                 onClick={sendPrompt}

@@ -503,6 +503,7 @@ function _sessionDeps(): SessionDeps {
     getCodeWorkspaceFile: _codeWorkspaceFile,
     pickProject,
     addWorkspaceFolder,
+    reconnectWorkspace: _reconnectSessionWorkspace,
     getThinkingContext: _currentThinkingContext,
     getUiSettings: _readUiSettings,
     handleApiKeyRequest: (vendor, requestId, send) => {
@@ -1047,13 +1048,61 @@ async function _promptOpenWorkspaceForNewProject(): Promise<void> {
 }
 
 /**
- * "Kōdo: Create Project" command. A workspace already open → ask only for a
- * project name and create it there. No workspace → `_promptOpenWorkspaceForNewProject`
- * (a reload-spanning flow resumed by `_resumePendingCreateProjectPrompt`). Both
- * halves converge on `_promptCreateProjectName`, which opens a session tab of
- * its own if none is open yet.
+ * Disconnected-session half of "Create Project" (added 2026-07-23): the
+ * active session tab is locked but isolated from this window's live
+ * workspace (`SessionController.workspaceConnected === false`) — creating a
+ * project needs a live matching workspace to add the new folder to, so this
+ * offers to reconnect first rather than either silently failing or routing
+ * into the unrelated no-workspace flow. On confirmation, arms
+ * `_armPendingCreateProjectPrompt` (the same marker
+ * `_promptOpenWorkspaceForNewProject` uses) alongside the reconnect reload,
+ * so the name prompt resumes automatically once the window comes back —
+ * see the `hello.ack` handler's sequencing note for why session-resume must
+ * finish first.
+ */
+async function _promptReconnectForCreateProject(active: SessionController): Promise<null> {
+  const sessionId = active.sessionId;
+  if (!sessionId) {
+    return null;
+  }
+  const choice = await vscode.window.showWarningMessage(
+    'Load the workspace associated with the current Kōdo session?',
+    {
+      modal: true,
+      detail: 'This session is disconnected from its workspace. Creating a project requires reconnecting it first.',
+    },
+    'Load Workspace',
+  );
+  if (choice !== 'Load Workspace') {
+    return null;
+  }
+  const remembered = await _fetchRememberedWorkspaceFor(sessionId);
+  if (!remembered) {
+    return null;
+  }
+  const codeWorkspaceFileExists = Boolean(
+    remembered.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
+  );
+  const target = resumeTarget(remembered, codeWorkspaceFileExists);
+  await _armPendingCreateProjectPrompt();
+  await _reloadWindowIntoTarget(sessionId, target);
+  return null;
+}
+
+/**
+ * "Kōdo: Create Project" command. The active session (if any) is locked and
+ * disconnected → `_promptReconnectForCreateProject` first. Otherwise: a
+ * workspace already open → ask only for a project name and create it there.
+ * No workspace → `_promptOpenWorkspaceForNewProject` (a reload-spanning flow
+ * resumed by `_resumePendingCreateProjectPrompt`). All paths converge on
+ * `_promptCreateProjectName`, which opens a session tab of its own if none is
+ * open yet.
  */
 async function createProject(): Promise<string | null> {
+  const active = _findActiveSession();
+  if (active && active.workspaceConnected === false) {
+    return _promptReconnectForCreateProject(active);
+  }
   if (hasWorkspace) {
     return _promptCreateProjectName();
   }
@@ -1157,7 +1206,8 @@ interface SessionPickItem extends vscode.QuickPickItem {
 }
 
 /** Parse `session.list`'s per-entry `workspace` field (`null` or
- * `{physical_root, folders, code_workspace_file}`) into `RememberedWorkspace`. */
+ * `{physical_root, folders, code_workspace_file, locked, compatible}`) into
+ * `RememberedWorkspace`. */
 function _parseRememberedWorkspace(raw: unknown): RememberedWorkspace | null {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -1174,7 +1224,15 @@ function _parseRememberedWorkspace(raw: unknown): RememberedWorkspace | null {
   }
   const codeWorkspaceFile = typeof r.code_workspace_file === 'string' ? r.code_workspace_file : null;
   const locked = r.locked === true;
-  return { physicalRoot, folders, codeWorkspaceFile, locked };
+  const compatible = r.compatible === true;
+  return { physicalRoot, folders, codeWorkspaceFile, locked, compatible };
+}
+
+/** The current window's own workspace shape, as `session.list`'s optional
+ * request payload — lets the server compute each locked session's
+ * `compatible` field against it (doc/WS_PROTOCOL.md §7.1b). */
+function _currentWorkspaceShapeForList(): { physical_root: string; folders: Record<string, string> } {
+  return { physical_root: physicalRoot, folders: _buildFolderMap() };
 }
 
 /** Render an ISO-8601 timestamp as a short local date/time, or "unknown". */
@@ -1198,7 +1256,7 @@ function formatTimestamp(iso: string): string {
 async function pickSession(): Promise<void> {
   let resp: Record<string, unknown>;
   try {
-    resp = await sendControlAwait('session.list');
+    resp = await sendControlAwait('session.list', _currentWorkspaceShapeForList());
   } catch {
     void vscode.window.showErrorMessage('Kōdo: could not reach the server to list sessions.');
     return;
@@ -1276,13 +1334,61 @@ function _describeResumeTarget(target: ResumeTarget): string {
 }
 
 /**
+ * Reload the current window into `target` and arm the pending-resume marker
+ * for `sessionId` — the reload/continuity mechanics shared by
+ * `_resumeSessionIntoWorkspace`'s mismatch path and the manual
+ * reconnect-workspace flows (`_reconnectSessionWorkspace`,
+ * `_promptReconnectForCreateProject`). Always reloads unconditionally —
+ * callers are responsible for deciding a reload is actually needed/wanted
+ * first (compatibility/exact-match checks, user confirmation).
+ */
+async function _reloadWindowIntoTarget(sessionId: string, target: ResumeTarget): Promise<void> {
+  // This reload is at least as disruptive as the `insertAt <= 1` cases
+  // `reloadWipesSerializerState` guards (the whole folder set or the
+  // workspace file changes) — always arm the dead-serializer marker, and
+  // stash which session to resume opening on the other side.
+  await _armPendingResumeSession(sessionId);
+  await _armSerializerDead();
+
+  if (target.kind === 'file') {
+    if (extensionContext) {
+      const futureKey = _resolveFutureWindowKeyForCodeWorkspace(target.path);
+      if (futureKey) {
+        await _armWindowIdContinuity(extensionContext, futureKey);
+      }
+    }
+    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target.path), {
+      forceReuseWindow: true,
+    });
+    return;
+  }
+  if (target.kind === 'none') {
+    return; // nothing to reload into
+  }
+
+  if (extensionContext && target.entries.length > 0) {
+    await _armWindowIdContinuity(extensionContext, target.entries[0][1]);
+  }
+  const currentCount = vscode.workspace.workspaceFolders?.length ?? 0;
+  vscode.workspace.updateWorkspaceFolders(
+    0,
+    currentCount,
+    ...target.entries.map(
+      ([entryName, entryPath]: [string, string]) => ({ uri: vscode.Uri.file(entryPath), name: entryName }),
+    ),
+  );
+}
+
+/**
  * Resume a session picked via `pickSession()`, opening its remembered
- * workspace into the CURRENT window first if it doesn't already match —
+ * workspace into the CURRENT window first if the current one can't host it —
  * exact-match folder replacement or a `.code-workspace` open, reusing the
  * window rather than spawning a new one (product decisions, see the
  * `project_kodo_workspace_session_linkage` memory). If the window's
- * workspace already matches (or nothing was ever remembered), the session
- * opens immediately with no reload.
+ * workspace already matches, or is merely *compatible* (hosts every bound
+ * directory without being byte-identical — `remembered.compatible`,
+ * server-computed, doc/WS_PROTOCOL.md §7.1b), or nothing was ever
+ * remembered, the session opens immediately with no reload.
  *
  * Mirrors `_promptOpenWorkspaceForNewProject`'s reload-and-resume pattern:
  * a workspace switch reloads the extension host, so continuing "open this
@@ -1307,7 +1413,7 @@ async function _resumeSessionIntoWorkspace(
     folderPaths: (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
   };
 
-  if (resumeTargetMatchesCurrent(target, current)) {
+  if ((remembered?.compatible ?? false) || resumeTargetMatchesCurrent(target, current)) {
     openExistingSession(sessionId);
     return;
   }
@@ -1316,7 +1422,7 @@ async function _resumeSessionIntoWorkspace(
   // workspace — reloading into a different one needs the user's explicit
   // go-ahead first. An unlocked session has nothing legitimate to protect
   // yet, so it keeps the pre-existing silent-reopen behaviour.
-  if (requiresWorkspaceSwitchConfirmation(remembered?.locked ?? false, target, current)) {
+  if (requiresWorkspaceSwitchConfirmation(remembered?.locked ?? false, remembered?.compatible ?? false)) {
     const choice = await vscode.window.showWarningMessage(
       'Open this session in a different workspace?',
       {
@@ -1329,44 +1435,54 @@ async function _resumeSessionIntoWorkspace(
       'Open',
     );
     if (choice !== 'Open') {
+      // Declined: still open the session — just disconnected/isolated,
+      // operating against its bound directories, rather than not opening it
+      // at all (kodo.runtime._engine._core's Problem-Solver fallback).
+      openExistingSession(sessionId);
       return;
     }
   }
 
-  // Mismatch: this reload is at least as disruptive as the `insertAt <= 1`
-  // cases `reloadWipesSerializerState` guards (the whole folder set or the
-  // workspace file changes) — always arm the dead-serializer marker, and
-  // stash which session to resume opening on the other side.
-  await _armPendingResumeSession(sessionId);
-  await _armSerializerDead();
+  await _reloadWindowIntoTarget(sessionId, target);
+}
 
-  if (target.kind === 'file') {
-    if (extensionContext) {
-      const futureKey = _resolveFutureWindowKeyForCodeWorkspace(target.path);
-      if (futureKey) {
-        await _armWindowIdContinuity(extensionContext, futureKey);
-      }
-    }
-    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target.path), {
-      forceReuseWindow: true,
-    });
+/**
+ * Fetch `sessionId`'s current remembered workspace shape via a fresh
+ * `session.list` call (never a cached row — `taken`/`workspace` can go
+ * stale while a panel/dialog sits open). Shared by the manual
+ * reconnect-workspace flows below. Shows an error toast and returns `null`
+ * on an unreachable server.
+ */
+async function _fetchRememberedWorkspaceFor(sessionId: string): Promise<RememberedWorkspace | null> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('session.list', _currentWorkspaceShapeForList());
+  } catch {
+    void vscode.window.showErrorMessage('Kōdo: could not reach the server to reconnect the workspace.');
+    return null;
+  }
+  const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
+  const entry = list.find((s) => String(s.id ?? '') === sessionId);
+  return _parseRememberedWorkspace(entry?.workspace);
+}
+
+/**
+ * Reload the current window into `sessionId`'s OWN remembered workspace —
+ * the manual reconnect-workspace button's mechanism (`session-controller.ts`'s
+ * `reconnect_workspace` webview message, wired via `SessionDeps.reconnectWorkspace`).
+ * A no-op if nothing is remembered (shouldn't happen — the button only shows
+ * for a locked, disconnected session).
+ */
+async function _reconnectSessionWorkspace(sessionId: string): Promise<void> {
+  const remembered = await _fetchRememberedWorkspaceFor(sessionId);
+  if (!remembered) {
     return;
   }
-  if (target.kind === 'none') {
-    return; // unreachable — resumeTargetMatchesCurrent already treats 'none' as a match
-  }
-
-  if (extensionContext && target.entries.length > 0) {
-    await _armWindowIdContinuity(extensionContext, target.entries[0][1]);
-  }
-  const currentCount = vscode.workspace.workspaceFolders?.length ?? 0;
-  vscode.workspace.updateWorkspaceFolders(
-    0,
-    currentCount,
-    ...target.entries.map(
-      ([entryName, entryPath]: [string, string]) => ({ uri: vscode.Uri.file(entryPath), name: entryName }),
-    ),
+  const codeWorkspaceFileExists = Boolean(
+    remembered.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
   );
+  const target = resumeTarget(remembered, codeWorkspaceFileExists);
+  await _reloadWindowIntoTarget(sessionId, target);
 }
 
 // `globalState`, mirroring `_PENDING_CREATE_PROJECT_KEY` exactly: resuming a
@@ -1494,7 +1610,7 @@ function _applyLlamaState(payload: Record<string, unknown>): void {
   });
 }
 
-function handleControlEnvelope(env: Envelope): void {
+async function handleControlEnvelope(env: Envelope): Promise<void> {
   if (env.kind === 'response' && env.correlation_id) {
     const resolver = _pendingControl.get(env.correlation_id);
     if (resolver) {
@@ -1545,12 +1661,22 @@ function handleControlEnvelope(env: Envelope): void {
     // sessions that the panel serializer could not restore (see the
     // open-session memory block above).
     void _reconcileOpenSessions();
+    // Resume a `pickSession()`/reconnect-workspace flow that reloaded this
+    // window into a session's remembered workspace — see
+    // `_resumeSessionIntoWorkspace`/`_reconnectSessionWorkspace`. Awaited
+    // (not fire-and-forget) and sequenced BEFORE the create-project resume
+    // below: `_promptReconnectForCreateProject`'s reconnect-then-create-project
+    // flow arms both markers for the same reload, and
+    // `_resumePendingCreateProjectPrompt` (via `_promptCreateProjectName`)
+    // finds its target session through a generic "active session" lookup —
+    // if it ran first, it would find no active tab yet and spawn a spurious
+    // new session instead of using the one this reload just reconnected.
+    await _resumePendingResumeSession();
     // Resume a "Create Project" flow that reloaded this window to open its
-    // first workspace folder/file — see `_promptOpenWorkspaceForNewProject`.
+    // first workspace folder/file, or to reconnect a disconnected session's
+    // workspace — see `_promptOpenWorkspaceForNewProject`/
+    // `_promptReconnectForCreateProject`.
     void _resumePendingCreateProjectPrompt();
-    // Resume a `pickSession()` flow that reloaded this window into a picked
-    // session's remembered workspace — see `_resumeSessionIntoWorkspace`.
-    void _resumePendingResumeSession();
     return;
   }
 
@@ -2129,7 +2255,7 @@ async function _fetchGlobalRules(): Promise<GlobalRuleEntry[]> {
  * is unreachable. */
 async function _fetchSessionsForPanel(): Promise<SessionListEntry[]> {
   try {
-    const resp = await sendControlAwait('session.list');
+    const resp = await sendControlAwait('session.list', _currentWorkspaceShapeForList());
     const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
     return list.map((s) => ({
       id: String(s.id ?? ''),
@@ -2300,7 +2426,7 @@ async function _openSessionFromSettingsPanel(sessionId: string): Promise<void> {
   }
   let resp: Record<string, unknown>;
   try {
-    resp = await sendControlAwait('session.list');
+    resp = await sendControlAwait('session.list', _currentWorkspaceShapeForList());
   } catch {
     vscode.window.showErrorMessage('Kōdo: could not reach the server to open this session.');
     return;

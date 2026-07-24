@@ -208,6 +208,13 @@ export interface SessionDeps {
    * registers it as a VS Code workspace folder (no-op if already present).
    */
   addWorkspaceFolder: (folderPath: string, name: string) => void;
+  /**
+   * Reload the current window into `sessionId`'s own remembered workspace
+   * (the manual reconnect-workspace button's mechanism, doc/WS_PROTOCOL.md
+   * §7.1b) — reuses the same reload/continuity plumbing as resuming a
+   * mismatched session from the picker.
+   */
+  reconnectWorkspace: (sessionId: string) => Promise<void>;
   /** Shared SecretStorage-backed API-key prompt; replies on this session's WS. */
   handleApiKeyRequest: (vendor: string, requestId: string, send: (env: Envelope) => void) => void;
   /**
@@ -303,6 +310,15 @@ export class SessionController {
   private effectiveAutonomous = false;
   private workflowMode: 'guided' | 'problem_solving' = 'problem_solving';
   private effectiveWorkflowMode: 'guided' | 'problem_solving' = 'problem_solving';
+  /**
+   * Whether this session's bound directories (if any) are hosted by the
+   * live workspace open in this window right now — mirrors the server's
+   * `state.workspace_connected` (doc/WS_PROTOCOL.md §5.1), mode-agnostic,
+   * always `true` for a session that has never locked a directory. Drives
+   * the webview's reconnect-workspace button and `createProject()`'s
+   * disconnected-aware branch (via the public getter below).
+   */
+  private _workspaceConnected = true;
   // Edit/Tool Control are NEVER frozen. The host owns them: it keeps the
   // user's *selected* posture, and derives the *shown* value — which equals the
   // selection unless Autonomous mode is currently in effect, in which case it is
@@ -383,6 +399,12 @@ export class SessionController {
   /** True when this session's tab is the foreground tab and its connection is ready. */
   get isActiveAndReady(): boolean {
     return this.panel.active && this.connected && this.sessionId !== '';
+  }
+
+  /** Mirrors the private field's doc comment — read by `createProject()`'s
+   *  disconnected-aware branch in extension.ts. */
+  get workspaceConnected(): boolean {
+    return this._workspaceConnected;
   }
 
   /**
@@ -502,6 +524,7 @@ export class SessionController {
       thinkingLevel: this.thinkingLevel,
       thinkingFamily: this.thinkingContext.family,
       thinkingTiers: this.thinkingContext.tiers,
+      workspaceConnected: this._workspaceConnected,
     });
   }
 
@@ -674,6 +697,9 @@ export class SessionController {
         break;
       case 'delete_session':
         void this._confirmAndDelete();
+        break;
+      case 'reconnect_workspace':
+        void this._confirmAndReconnectWorkspace();
         break;
       case 'attach_file':
         void this._attachFiles();
@@ -979,6 +1005,25 @@ export class SessionController {
   }
 
   /**
+   * The webview's reconnect-workspace button (shown only while
+   * `!workspaceConnected`, doc/WS_PROTOCOL.md §7.1b) — confirms, then
+   * delegates the actual reload to `deps.reconnectWorkspace`, which reuses
+   * the same reload/continuity plumbing `_resumeSessionIntoWorkspace` uses
+   * for a mismatched picked session.
+   */
+  private async _confirmAndReconnectWorkspace(): Promise<void> {
+    const choice = await vscode.window.showWarningMessage(
+      'Do you want to load the workspace associated with the current Kōdo session?',
+      { modal: true },
+      'Yes',
+    );
+    if (choice !== 'Yes' || !this.sessionId) {
+      return;
+    }
+    await this.deps.reconnectWorkspace(this.sessionId);
+  }
+
+  /**
    * A checkpoint undo/redo/rollback/roll-forward was blocked because the work
    * tree has edits Kōdo didn't make (it would otherwise silently overwrite
    * them). Ask the user how to proceed and resubmit the same request with a
@@ -1192,6 +1237,7 @@ export class SessionController {
       // reconciliation, a model-switch reset, or a thinking_level.set accept
       // all land here the same way.
       this.thinkingLevel = String(env.payload.thinking_level ?? '');
+      this._workspaceConnected = env.payload.workspace_connected !== false;
       // The turn boundary may have just locked/unlocked Edit & Command (a turn
       // starting under Autonomous forces Allow All/Permissive; a turn ending
       // unlocks to the user's selection) — resync the shown values if so.

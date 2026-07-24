@@ -899,6 +899,7 @@ export function reducer(state: State, action: Action): State {
         thinkingFamily: action.thinkingFamily,
         thinkingTiers: action.thinkingTiers,
         running: action.running,
+        workspaceConnected: action.workspaceConnected,
       };
     case 'resume_offer':
       return { ...state, resumeSessionId: action.sessionId };
@@ -1098,6 +1099,7 @@ export const initial: State = {
   thinkingFamily: null,
   thinkingTiers: [],
   running: false,
+  workspaceConnected: true,
   resumeSessionId: null,
   awaitingLlm: false,
   llmWaiting: null,
