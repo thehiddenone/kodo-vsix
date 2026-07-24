@@ -501,7 +501,6 @@ function _sessionDeps(): SessionDeps {
     hasWorkspace: () => hasWorkspace,
     buildFolderMap: _buildFolderMap,
     getCodeWorkspaceFile: _codeWorkspaceFile,
-    pickProject,
     addWorkspaceFolder,
     reconnectWorkspace: _reconnectSessionWorkspace,
     getThinkingContext: _currentThinkingContext,
@@ -1151,49 +1150,6 @@ async function addWorkspaceFolder(folderPath: string, name: string): Promise<voi
   );
 }
 
-async function pickProject(): Promise<{ root: string; name: string } | null> {
-  const folderMap = _buildFolderMap();
-  const _CREATE = '$(add) Create new project…';
-  const items: vscode.QuickPickItem[] = Object.entries(folderMap)
-    .filter(([, fsPath]) => fs.existsSync(path.join(fsPath, '.kodo', 'kodo.md')))
-    .map(([name, fsPath]) => ({ label: name, description: fsPath }));
-  items.push({ label: _CREATE, description: 'Initialise a new Kōdo project folder' });
-
-  const choice = await vscode.window.showQuickPick(items, {
-    title: 'Kōdo: Choose the project for this Guided Development session',
-    placeHolder: 'This choice is fixed for the whole session and cannot be changed afterwards.',
-    ignoreFocusOut: true,
-  });
-  if (!choice) {
-    return null;
-  }
-
-  let root: string;
-  let name: string;
-  if (choice.label === _CREATE) {
-    const created = await createProject();
-    if (created === null) {
-      return null;
-    }
-    root = created;
-    name = path.basename(created);
-  } else {
-    root = choice.description ?? '';
-    name = choice.label;
-  }
-
-  const confirm = await vscode.window.showWarningMessage(
-    `Guided Development mode will be locked to "${name}" for this session. ` +
-      'You cannot change the project until you start a new session. Continue?',
-    { modal: true },
-    'Lock project',
-  );
-  if (confirm !== 'Lock project') {
-    return null;
-  }
-  return { root, name };
-}
-
 // ---------------------------------------------------------------------------
 // Session picker (cross-window open gate, over the control connection)
 // ---------------------------------------------------------------------------
@@ -1269,7 +1225,7 @@ async function pickSession(): Promise<void> {
   for (const s of list) {
     const id = String(s.id ?? '');
     const name = String(s.name ?? id);
-    const root = typeof s.project_root === 'string' ? s.project_root : null;
+    const workflowMode = typeof s.workflow_mode === 'string' ? s.workflow_mode : null;
     const taken = Boolean(s.taken);
     const openHere = _findBySessionId(id) !== undefined;
     const remembered = _parseRememberedWorkspace(s.workspace);
@@ -1281,7 +1237,7 @@ async function pickSession(): Promise<void> {
     // live tab) regardless of what's remembered.
     const disabledReason = taken && !openHere ? 'Opened in another window' : undefined;
 
-    const kindLabel = root ? `Guided · ${path.basename(root)}` : 'Problem solving';
+    const kindLabel = workflowMode === 'guided' ? 'Guided' : 'Problem solving';
     const created = typeof s.created_at === 'string' ? s.created_at : '';
     const lastModified = typeof s.last_modified === 'string' ? s.last_modified : '';
     const timeLabel = `created ${formatTimestamp(created)}, last modified ${formatTimestamp(lastModified)}${remembered ? ', in workspace' : ''}`;
@@ -2260,7 +2216,7 @@ async function _fetchSessionsForPanel(): Promise<SessionListEntry[]> {
     return list.map((s) => ({
       id: String(s.id ?? ''),
       name: String(s.name ?? s.id ?? ''),
-      projectRoot: typeof s.project_root === 'string' ? s.project_root : null,
+      workflowMode: typeof s.workflow_mode === 'string' ? s.workflow_mode : null,
       taken: Boolean(s.taken),
       workspace: _parseRememberedWorkspace(s.workspace),
     }));

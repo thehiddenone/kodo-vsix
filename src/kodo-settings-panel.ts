@@ -20,7 +20,7 @@ export interface GlobalRuleEntry {
 export interface SessionListEntry {
   id: string;
   name: string;
-  projectRoot: string | null;
+  workflowMode: string | null;
   taken: boolean;
   workspace: RememberedWorkspace | null;
 }
@@ -647,12 +647,6 @@ function buildHtml(): string {
       return wrap;
     }
 
-    function basename(p) {
-      const trimmed = String(p).replace(/[\\/]+$/, '');
-      const parts = trimmed.split(/[\\/]/);
-      return parts[parts.length - 1] || trimmed;
-    }
-
     function sessionWorkspaceLine(session) {
       const ws = session.workspace;
       if (!ws) { return 'Not bound to any workspace'; }
@@ -674,7 +668,7 @@ function buildHtml(): string {
 
       const meta = document.createElement('div');
       meta.className = 'session-meta';
-      const kindLabel = session.projectRoot ? 'Guided · ' + basename(session.projectRoot) : 'Problem solving';
+      const kindLabel = session.workflowMode === 'guided' ? 'Guided' : 'Problem solving';
       meta.textContent = kindLabel + (session.taken ? ' · Open in another window' : '');
       info.appendChild(meta);
 

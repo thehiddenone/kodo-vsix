@@ -420,8 +420,6 @@ export interface State {
   hasWorkspace: boolean;
   /** Human-readable session name shown in the header; empty until named. */
   sessionName: string;
-  /** Locked current project name (Guided), or empty when none is bound. */
-  currentProject: string;
   /** True while the silent session-titler call is running (shows a naming indicator). */
   namingSession: boolean;
   stage: string;
@@ -612,7 +610,6 @@ export type Action =
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
   | { type: 'session_name'; name: string }
-  | { type: 'current_project'; name: string }
   | { type: 'session_naming'; active: boolean }
   | { type: 'session_cleared' }
   | { type: 'attachment_added'; id: string; name: string; path: string }

@@ -200,8 +200,6 @@ export interface SessionDeps {
    * server can remember it for session-resume (WS_PROTOCOL.md).
    */
   getCodeWorkspaceFile: () => string | undefined;
-  /** Guided project picker (returns {root,name} or null if cancelled). */
-  pickProject: () => Promise<{ root: string; name: string } | null>;
   /**
    * Add a server-scaffolded project directory to the open workspace (the
    * `create_new_project` tool). The path already exists on disk; this only
@@ -353,7 +351,6 @@ export class SessionController {
   // (`undefined` until the first sync forces an initial send).
   private sentEditControl: EditControl | undefined;
   private sentCommandControl: CommandControl | undefined;
-  private currentProject: { root: string; name: string } | null = null;
   private resumeSessionId: string | null = null;
   /** Validated files staged to be prepended to the next prompt, keyed by chip id. */
   private readonly attachedFiles = new Map<string, AttachedFile>();
@@ -792,19 +789,11 @@ export class SessionController {
   }
 
   /**
-   * Submit a prompt. In Guided mode with no project locked yet, force the
-   * project picker first and bind it on the server before sending (WS frames
-   * are processed in order, so the bind completes before the prompt dequeues).
+   * Submit a prompt. Guided and Problem Solver mode both ride whatever roots
+   * are already bound (VS Code workspace folders, or projects created via
+   * `create_new_project`/`init_project`) — there is no separate binding step.
    */
   private async _submitPrompt(text: string): Promise<void> {
-    if (this.workflowMode === 'guided' && this.currentProject === null) {
-      const project = await this.deps.pickProject();
-      if (project === null) {
-        return;
-      }
-      this.currentProject = project;
-      this._sendStamped(makeRequest('project.set', { root: project.root, name: project.name }));
-    }
     this.lastPrompt = text;
     this.tokens = '';
     this.fileEvents = [];
@@ -1075,9 +1064,6 @@ export class SessionController {
     if (this.sessionName) {
       this._post({ type: 'session_name', name: this.sessionName });
     }
-    if (this.currentProject !== null) {
-      this._post({ type: 'current_project', ...this.currentProject });
-    }
     if (this.lastPrompt) {
       this._post({ type: 'restore_prompt', text: this.lastPrompt });
     }
@@ -1243,16 +1229,6 @@ export class SessionController {
       // unlocks to the user's selection) — resync the shown values if so.
       this._syncEditCommandToServer();
       this._postModeState();
-      return;
-    }
-
-    if (env.kind === 'event' && evtType === 'project.bound') {
-      const root = String(env.payload.root ?? '');
-      const name = String(env.payload.name ?? root);
-      if (root) {
-        this.currentProject = { root, name };
-        this._post({ type: 'current_project', root, name });
-      }
       return;
     }
 
@@ -1967,12 +1943,6 @@ export class SessionController {
       }
       this._syncEditCommandToServer();
       this._postModeState();
-    }
-
-    const cp = env.payload.current_project as { root?: unknown; name?: unknown } | null | undefined;
-    if (cp && typeof cp.root === 'string' && cp.root) {
-      this.currentProject = { root: cp.root, name: typeof cp.name === 'string' ? cp.name : cp.root };
-      this._post({ type: 'current_project', ...this.currentProject });
     }
   }
 

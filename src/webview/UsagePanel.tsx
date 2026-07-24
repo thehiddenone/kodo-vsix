@@ -3,7 +3,6 @@ import type { LastCallTokens, ContextStats } from './types';
 import { formatTokens } from './format';
 interface UsagePanelProps {
   sessionName: string;
-  currentProject: string;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
   contextStats: ContextStats | null;
@@ -11,20 +10,14 @@ interface UsagePanelProps {
   onCompact: () => void;
 }
 
-export function UsagePanel({ sessionName, currentProject, cumulativeUsd, lastCallTokens, contextStats, compacting, onCompact }: UsagePanelProps) {
-  // Always render both header lines so the session name and running cost are
-  // visible from the very first frame — before a title is generated and before
-  // any cost has accrued.
+export function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens, contextStats, compacting, onCompact }: UsagePanelProps) {
+  // Always render the header line so the session name is visible from the
+  // very first frame — before a title is generated.
   return (
     <div style={styles.usagePanel}>
       <div style={styles.usageName}>
         Session name: <strong>{sessionName || 'Unnamed Session'}</strong>
       </div>
-      {currentProject && (
-        <div style={styles.usageName}>
-          Project: <strong>{currentProject}</strong> <span style={styles.usageDetail}>(locked for this session)</span>
-        </div>
-      )}
       <div style={styles.usageCostLine}>
         <span style={styles.usageTotal}>
           Session cost: <strong>${cumulativeUsd.toFixed(4)}</strong>

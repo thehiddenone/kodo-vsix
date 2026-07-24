@@ -257,8 +257,6 @@ export function reducer(state: State, action: Action): State {
       return { ...state, connected: action.connected };
     case 'session_name':
       return { ...state, sessionName: action.name, namingSession: false };
-    case 'current_project':
-      return { ...state, currentProject: action.name };
     case 'session_naming':
       return { ...state, namingSession: action.active };
     case 'session_cleared':
@@ -1066,7 +1064,6 @@ export const initial: State = {
   connected: false,
   hasWorkspace: false,
   sessionName: '',
-  currentProject: '',
   namingSession: false,
   stage: 'IDLE',
   agent: null,

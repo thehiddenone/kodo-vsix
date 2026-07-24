@@ -36,9 +36,6 @@ export function App() {
         case 'session_name':
           dispatch({ type: 'session_name', name: String(msg.name ?? '') });
           break;
-        case 'current_project':
-          dispatch({ type: 'current_project', name: String(msg.name ?? '') });
-          break;
         case 'session_naming':
           dispatch({ type: 'session_naming', active: Boolean(msg.active) });
           break;
@@ -487,7 +484,6 @@ export function App() {
       {/* Usage panel */}
       <UsagePanel
         sessionName={state.sessionName}
-        currentProject={state.currentProject}
         cumulativeUsd={state.cumulativeUsd}
         lastCallTokens={state.lastCallTokens}
         contextStats={state.contextStats}
