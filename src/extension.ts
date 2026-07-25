@@ -1352,6 +1352,12 @@ async function _reloadWindowIntoTarget(sessionId: string, target: ResumeTarget):
  * `_resumePendingResumeSession` (consumed from the control connection's next
  * `hello.ack`), exactly like `_armPendingCreateProjectPrompt`/
  * `_resumePendingCreateProjectPrompt`.
+ *
+ * A locked, incompatible session shows a three-way confirmation first
+ * (`requiresWorkspaceSwitchConfirmation`): "Open session and workspace"
+ * reloads as above, "Open session only" opens the session disconnected/
+ * isolated without touching this window's workspace, and Cancel (explicit
+ * button, dismiss, or Escape) opens nothing at all.
  */
 async function _resumeSessionIntoWorkspace(
   sessionId: string,
@@ -1379,22 +1385,34 @@ async function _resumeSessionIntoWorkspace(
   // go-ahead first. An unlocked session has nothing legitimate to protect
   // yet, so it keeps the pre-existing silent-reopen behaviour.
   if (requiresWorkspaceSwitchConfirmation(remembered?.locked ?? false, remembered?.compatible ?? false)) {
+    // Three explicit outcomes, not a single "Open" action + implicit
+    // Cancel — the two-choice version was ambiguous, since dismissing/
+    // Escape-ing the dialog silently opened the session anyway (just
+    // disconnected), which read as "Cancel" but wasn't. Now Cancel really
+    // means "don't open anything."
+    const openBoth = 'Open session and workspace';
+    const openSessionOnly = 'Open session only';
     const choice = await vscode.window.showWarningMessage(
       'Open this session in a different workspace?',
       {
         modal: true,
         detail:
           `This session is linked to ${_describeResumeTarget(target)}, ` +
-          'which is different from this window’s current workspace. Opening it will replace ' +
-          'this window’s workspace with that one.',
+          'which is different from this window’s current workspace. ' +
+          'Opening the workspace will replace this window’s workspace with that one; ' +
+          'opening the session only will open it disconnected, working against its own directories.',
       },
-      'Open',
+      openBoth,
+      openSessionOnly,
     );
-    if (choice !== 'Open') {
-      // Declined: still open the session — just disconnected/isolated,
-      // operating against its bound directories, rather than not opening it
-      // at all (kodo.runtime._engine._core's Problem-Solver fallback).
+    if (choice === openSessionOnly) {
+      // Open the session disconnected/isolated, operating against its
+      // bound directories, without touching this window's workspace.
       openExistingSession(sessionId);
+      return;
+    }
+    if (choice !== openBoth) {
+      // Cancel (explicit button, dismiss, or Escape): open nothing.
       return;
     }
   }
