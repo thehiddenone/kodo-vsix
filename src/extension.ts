@@ -23,13 +23,9 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import * as cloudCredentials from './cloud-credentials';
-import { CloudAiSettingsPanel } from './cloud-ai-settings-panel';
-import type { CloudAiSettingsMessage } from './cloud-ai-settings-panel';
 import { makeRequest, makeResponse } from './envelope';
 import type { Envelope } from './envelope';
 import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-provider';
-import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
-import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
 import * as hfTokens from './hf-tokens';
 import { KodoSettingsPanel } from './kodo-settings-panel';
 import type { GlobalRuleEntry, KodoSettingsMessage, LlamaCppInfo, SessionListEntry, StuckDetectionSettings, UiSettings } from './kodo-settings-panel';
@@ -132,9 +128,10 @@ let localDownloadsState: LocalDownloadState[] = [];
 // Installed models whose remote GGUF has changed (ETag mismatch) — reported
 // asynchronously by `local_llm.updates_available` in reply to a
 // `local_llm.check_updates` fire-and-forget scan kicked off whenever the
-// Local Inference Settings panel opens (see `_sendCheckLocalLlmUpdates` and
-// doc/LOCAL_MODEL_MANAGER.md §12). Empty until that reply lands, and reset
-// per-scan (not merged) so a model that's no longer stale drops out.
+// Kōdo Settings panel's "Local Inference" tab opens (see
+// `_sendCheckLocalLlmUpdates` and doc/LOCAL_MODEL_MANAGER.md §12). Empty
+// until that reply lands, and reset per-scan (not merged) so a model that's
+// no longer stale drops out.
 let localUpdatableNamesState: string[] = [];
 
 // custom_file entries' installed state is resolved ONCE per entry, the first
@@ -312,7 +309,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (noLongerTracked) {
       sendControlHello();
     }
-    _pushLocalInferenceSettingsState();
+    _pushLocalInferenceState();
   });
   context.subscriptions.push({ dispose: () => _downloadPolling.dispose() });
 
@@ -1394,14 +1391,15 @@ async function _resumeSessionIntoWorkspace(
     const openBoth = 'Open session and workspace';
     const openSessionOnly = 'Open session only';
     const choice = await vscode.window.showWarningMessage(
-      'Open this session in a different workspace?',
+      'Open VS code workspace associated with this session?',
       {
         modal: true,
         detail:
-          `This session is linked to ${_describeResumeTarget(target)}, ` +
-          'which is different from this window’s current workspace. ' +
-          'Opening the workspace will replace this window’s workspace with that one; ' +
-          'opening the session only will open it disconnected, working against its own directories.',
+          `This session is linked to ${_describeResumeTarget(target)}.\n` +
+          '- If you choose "Open session and workspace", session’s workplace will replace this window’s workspace.\n' +
+          '- If you choose "Open session only", the current workspace will remain opened, ' +
+          'and Kodo will be working in directories outside the current workspace.\n' +
+          '- Choose "Cancel" if you changed your mind and don’t want to re-open that session.',
       },
       openBoth,
       openSessionOnly,
@@ -1656,7 +1654,7 @@ async function handleControlEnvelope(env: Envelope): Promise<void> {
       detectedVramGb: detectedVramGbState,
       detectedRamGb: detectedRamGbState,
     });
-    _pushLocalInferenceSettingsState();
+    _pushLocalInferenceState();
     _pushCloudAiSettingsState();
     _broadcastThinkingContext();
     // The server is provably reachable now — reopen any of this window's
@@ -2160,8 +2158,13 @@ function _startLlamaCpp(): void {
     .then(undefined, () => undefined);
 }
 
-function _pushLocalInferenceSettingsState(): void {
-  LocalInferenceSettingsPanel.instance?.update({
+/** Push the "Local Inference" tab's fields into the Kōdo Settings panel — a
+ * no-op if the panel isn't open, same pattern as `_pushCloudAiSettingsState`
+ * below. Named after the tab now, not a standalone panel (that standalone
+ * "Local Inference Settings" panel was folded into Kōdo Settings — see
+ * `_openLocalInferenceSettings`). */
+function _pushLocalInferenceState(): void {
+  KodoSettingsPanel.instance?.update({
     localRegistry: localRegistryState,
     llamaServerOverridePath: llamaServerOverridePathState,
     detectedVramGb: detectedVramGbState,
@@ -2172,46 +2175,43 @@ function _pushLocalInferenceSettingsState(): void {
   });
 }
 
-function _pushCloudAiSettingsState(): void {
+/** The cloud AI vendor tabs' fields (former standalone Cloud AI Settings
+ * panel) — one entry per vendor in `cloudRegistryState`, keyed by vendor. */
+function _cloudAiStateForPanel(): {
+  cloudRegistry: CloudRegistry;
+  modelsByVendor: Record<string, Record<string, string>>;
+  keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]>;
+} {
   const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
   for (const vendor of Object.keys(cloudRegistryState)) {
     keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
   }
-  CloudAiSettingsPanel.instance?.update({
-    cloudRegistry: cloudRegistryState,
-    modelsByVendor: _readCloudModels(),
-    keysByVendor,
-  });
+  return { cloudRegistry: cloudRegistryState, modelsByVendor: _readCloudModels(), keysByVendor };
 }
 
+/** Push the cloud vendor tabs' fields into the Kōdo Settings panel — a no-op
+ * if the panel isn't open, same pattern as `_pushLocalInferenceState` above. */
+function _pushCloudAiSettingsState(): void {
+  KodoSettingsPanel.instance?.update(_cloudAiStateForPanel());
+}
+
+/** The sidebar's "Local inference settings" button — opens (or reveals) the
+ * Kōdo Settings panel with its "Local Inference" tab forced selected (the
+ * standalone "Local Inference Settings" panel this used to open directly was
+ * folded into that panel as a tab). */
 function _openLocalInferenceSettings(): void {
-  const panel = LocalInferenceSettingsPanel.createOrShow(
-    {
-      localRegistry: localRegistryState,
-      llamaServerOverridePath: llamaServerOverridePathState,
-      detectedVramGb: detectedVramGbState,
-      detectedRamGb: detectedRamGbState,
-      downloads: localDownloadsState,
-      isMac: process.platform === 'darwin',
-      updatableNames: localUpdatableNamesState,
-    },
-    (msg: LocalInferenceSettingsMessage) => void _onLocalInferenceSettingsMessage(msg),
-  );
-  void panel;
+  void _openKodoSettings('local-inference');
   // Fire-and-forget — the reply (local_llm.updates_available) lands later
   // and re-pushes state on its own (_onLocalLlmUpdatesAvailable).
   _sendCheckLocalLlmUpdates();
 }
 
+/** The sidebar's "Cloud AI settings" button — opens (or reveals) the Kōdo
+ * Settings panel with the currently active cloud vendor's tab forced
+ * selected (the standalone "Cloud AI Settings" panel this used to open
+ * directly was folded into that panel, one tab per vendor). */
 function _openCloudAiSettings(): void {
-  const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
-  for (const vendor of Object.keys(cloudRegistryState)) {
-    keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
-  }
-  CloudAiSettingsPanel.createOrShow(
-    { cloudRegistry: cloudRegistryState, modelsByVendor: _readCloudModels(), keysByVendor },
-    (msg: CloudAiSettingsMessage) => void _onCloudAiSettingsMessage(msg),
-  );
+  void _openKodoSettings(activeCloudVendorState);
 }
 
 /** Parse a `rules` payload shared by both the global and session-scoped rule
@@ -2343,18 +2343,24 @@ async function _fetchLlamaCppVersionInfo(): Promise<LlamaCppInfo> {
 
 /** Open (or reveal) the Kōdo Settings panel, seeded with the current global
  * rules, stuck-detection settings, and llama.cpp version info fetched
- * up-front.
+ * up-front. Pass `selectSection` (e.g. `'local-inference'`, or a cloud vendor
+ * key like `'anthropic'`) to force the left nav to a specific tab — used by
+ * the sidebar's "Local inference settings" button (see
+ * `_openLocalInferenceSettings`) and its "Cloud AI settings" button (see
+ * `_openCloudAiSettings`); omitted, the panel opens on whatever tab it last
+ * showed (or "General" for a brand-new panel).
  *
  * State is fetched BEFORE the panel is created so its webview is constructed
- * with fully-populated state — exactly like the local-inference and cloud-ai
- * panels. The previous approach opened the panel with an empty list and
- * relied on a later `security.rules.list` response arriving as an async
- * `update` postMessage; that message could race the freshly-created webview's
- * load and be dropped, leaving the panel showing nothing (the panel has no
- * static shell — every row is produced by the webview's `render()`, which
- * only ran on receipt of an `update`). Fetching first makes the initial data
- * ride the reliable `ready`→`update` handshake instead. */
-async function _openKodoSettings(): Promise<void> {
+ * with fully-populated state. The previous approach opened the panel with an
+ * empty list and relied on a later `security.rules.list` response arriving
+ * as an async `update` postMessage;
+ * that message could race the freshly-created webview's load and be dropped,
+ * leaving the panel showing nothing (the panel has no static shell — every
+ * row is produced by the webview's `render()`, which only ran on receipt of
+ * an `update`). Fetching first makes the initial data ride the reliable
+ * `ready`→`update` handshake instead — `selectSection` rides that same
+ * handshake (see `KodoSettingsPanel.createOrShow`/`selectSection`). */
+async function _openKodoSettings(selectSection?: string): Promise<void> {
   const [rules, stuckDetection, llamaCpp, sessions] = await Promise.all([
     _fetchGlobalRules(),
     _fetchStuckDetection(),
@@ -2362,12 +2368,27 @@ async function _openKodoSettings(): Promise<void> {
     _fetchSessionsForPanel(),
   ]);
   // Unlike the four above, ui-settings.json is a local file kodo-vsix alone
-  // owns — no server round trip, so this reads synchronously rather than
-  // joining the Promise.all.
+  // owns — no server round trip — and the "Local Inference" tab's fields are
+  // already continuously maintained in module state (see `_pushLocalInferenceState`),
+  // so both read synchronously rather than joining the Promise.all.
   const uiSettings = _readUiSettings();
+  const localInference = {
+    localRegistry: localRegistryState,
+    llamaServerOverridePath: llamaServerOverridePathState,
+    detectedVramGb: detectedVramGbState,
+    detectedRamGb: detectedRamGbState,
+    downloads: localDownloadsState,
+    isMac: process.platform === 'darwin',
+    updatableNames: localUpdatableNamesState,
+  };
+  const cloudAi = _cloudAiStateForPanel();
   const panel = KodoSettingsPanel.createOrShow(
-    { rules, stuckDetection, llamaCpp, sessions, sessionRules: null, uiSettings, hfTokens: hfTokens.listTokens() },
+    {
+      rules, stuckDetection, llamaCpp, sessions, sessionRules: null, uiSettings,
+      hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
+    },
     (msg) => void _onKodoSettingsMessage(msg),
+    selectSection,
   );
   // For an already-open panel, createOrShow only revealed it (initialState is
   // ignored) — push the freshly-fetched state in explicitly so re-opening the
@@ -2375,7 +2396,10 @@ async function _openKodoSettings(): Promise<void> {
   // untouched here (omitted from the patch) — closing and reopening the panel
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
-  panel.update({ rules, stuckDetection, llamaCpp, sessions, uiSettings, hfTokens: hfTokens.listTokens() });
+  panel.update({
+    rules, stuckDetection, llamaCpp, sessions, uiSettings, hfTokens: hfTokens.listTokens(),
+    ...localInference, ...cloudAi,
+  });
 }
 
 /** Delete a session by id from the Kōdo Settings panel's "Sessions" list —
@@ -2556,9 +2580,41 @@ async function _onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     KodoSettingsPanel.instance?.update({ hfTokens: hfTokens.listTokens() });
     return;
   }
+  if (msg.type === 'set_cloud_model') {
+    _setCloudModel(msg.vendor, msg.effort, msg.model_id);
+    return;
+  }
+  if (msg.type === 'add_key') {
+    if (extensionContext) {
+      await cloudCredentials.addKey(extensionContext, msg.vendor, msg.name, msg.secret);
+      _pushCloudAiSettingsState();
+    }
+    return;
+  }
+  if (msg.type === 'forget_key') {
+    const confirm = await vscode.window.showWarningMessage(
+      'Forget this API key? This cannot be undone.',
+      { modal: true },
+      'Forget key',
+    );
+    if (confirm === 'Forget key' && extensionContext) {
+      await cloudCredentials.forgetKey(extensionContext, msg.vendor, msg.uuid);
+      _pushCloudAiSettingsState();
+    }
+    return;
+  }
+  if (msg.type === 'make_active') {
+    cloudCredentials.makeActive(msg.vendor, msg.uuid);
+    _pushCloudAiSettingsState();
+    return;
+  }
+  // Everything else belongs to the "Local Inference" tab (former standalone
+  // Local Inference Settings panel's message set) — handled separately below
+  // to keep that cluster of branches together.
+  await _onLocalInferenceSettingsMessage(msg);
 }
 
-async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessage): Promise<void> {
+async function _onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   if (msg.type === 'add_huggingface') {
     _sendControl(
       makeRequest('local_llm.add_huggingface', {
@@ -2613,7 +2669,7 @@ async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessa
     // msg.name here immediately is correct, not just optimistic: the update
     // this triggers is what actually brings the file back in sync.
     localUpdatableNamesState = localUpdatableNamesState.filter((n) => n !== msg.name);
-    _pushLocalInferenceSettingsState();
+    _pushLocalInferenceState();
     _sendControl(makeRequest('local_llm.update', { name: msg.name }));
   } else if (msg.type === 'remove') {
     _sendControl(makeRequest('local_llm.remove', { name: msg.name }));
@@ -2651,36 +2707,13 @@ async function _onLocalInferenceSettingsMessage(msg: LocalInferenceSettingsMessa
   }
 }
 
-async function _onCloudAiSettingsMessage(msg: CloudAiSettingsMessage): Promise<void> {
-  if (msg.type === 'set_cloud_model') {
-    _setCloudModel(msg.vendor, msg.effort, msg.model_id);
-  } else if (msg.type === 'add_key') {
-    if (!extensionContext) { return; }
-    await cloudCredentials.addKey(extensionContext, msg.vendor, msg.name, msg.secret);
-    _pushCloudAiSettingsState();
-  } else if (msg.type === 'forget_key') {
-    const confirm = await vscode.window.showWarningMessage(
-      'Forget this API key? This cannot be undone.',
-      { modal: true },
-      'Forget key',
-    );
-    if (confirm === 'Forget key' && extensionContext) {
-      await cloudCredentials.forgetKey(extensionContext, msg.vendor, msg.uuid);
-      _pushCloudAiSettingsState();
-    }
-  } else if (msg.type === 'make_active') {
-    cloudCredentials.makeActive(msg.vendor, msg.uuid);
-    _pushCloudAiSettingsState();
-  }
-}
-
 async function _pickGgufFile(): Promise<void> {
   const picked = await vscode.window.showOpenDialog({
     title: 'Kōdo: Select a GGUF file',
     canSelectMany: false,
     filters: { 'GGUF model': ['gguf'] },
   });
-  LocalInferenceSettingsPanel.instance?.postGgufFilePicked(picked?.[0]?.fsPath ?? null);
+  KodoSettingsPanel.instance?.postGgufFilePicked(picked?.[0]?.fsPath ?? null);
 }
 
 async function _setLlamaServerOverride(): Promise<void> {
@@ -2710,7 +2743,7 @@ function _onLocalLlmRegistryState(payload: Record<string, unknown>): void {
   sidebarProvider?.update({
     localRegistry: localRegistryState,
   });
-  _pushLocalInferenceSettingsState();
+  _pushLocalInferenceState();
   _broadcastThinkingContext();
 }
 
@@ -2720,7 +2753,7 @@ function _onLocalLlmRegistryState(payload: Record<string, unknown>): void {
 function _onLocalLlmUpdatesAvailable(payload: Record<string, unknown>): void {
   const raw = payload.updatable;
   localUpdatableNamesState = Array.isArray(raw) ? raw.filter((n): n is string => typeof n === 'string') : [];
-  _pushLocalInferenceSettingsState();
+  _pushLocalInferenceState();
 }
 
 /**

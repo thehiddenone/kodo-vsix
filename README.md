@@ -1,8 +1,8 @@
 # Kōdo — VS Code Extension
 
-The VS Code front-end for [Kōdo](https://github.com/thehiddenone/kodo): a build system that converts natural language into working code through a multi-agent LLM workflow, designed to run on your own hardware — model included.
+The VS Code front-end for [Kōdo](https://github.com/thehiddenone/kodo): a build system that converts natural language into working code through a multi-agent LLM workflow, designed to run on your own hardware — model included. Whether that holds up on a given day depends on the mode and the model in use — the honest accounting of that lives in the main repo, not here.
 
-This README covers installing and running the extension. Everything else — the workflow, the agents, the wire protocol, security, local inference — is documented in the Kōdo repo: start with [`kodo/README.md`](https://github.com/thehiddenone/kodo/blob/main/README.md) and [`kodo/doc/`](https://github.com/thehiddenone/kodo/tree/main/doc).
+This README only covers installing and running the extension. Everything else — the workflow, the agents, the wire protocol, security, local inference, and where things actually stand — is documented in the Kōdo repo: start with [`kodo/README.md`](https://github.com/thehiddenone/kodo/blob/main/README.md) (read its [Status](https://github.com/thehiddenone/kodo/blob/main/README.md#status) section first) and [`kodo/doc/`](https://github.com/thehiddenone/kodo/tree/main/doc).
 
 ## Running Kōdo
 
@@ -16,7 +16,7 @@ There is no packaged `.vsix` yet. The way to run Kōdo today is from source, in 
    export KODO_DEV_PATH=/path/to/kodo
    ```
 
-   Until `kodo` is published on PyPI, the extension installs the server from this path (`uv pip install -e "$KODO_DEV_PATH"` — an editable install, so server-side Python changes take effect on the next server start without reinstalling).
+   `kodo` is on PyPI now (`pip install py-kodo`), but the extension doesn't install from there yet — it always installs from this path in editable mode (`uv pip install -e "$KODO_DEV_PATH"`, so server-side Python changes take effect on the next server start without reinstalling). Switching this over to a PyPI install is future work, not done here.
 
    The variable must be visible to the VS Code **process**, not just your shell. The reliable way is to launch VS Code from a terminal that has it exported:
 
