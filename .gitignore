@@ -1,3 +1,9 @@
+# Kodo
+.kodo/
+
+# VS Code
+*.code-workspace
+
 # mise
 mise.toml
 

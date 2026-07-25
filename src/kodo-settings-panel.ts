@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { HfTokenEntry } from './hf-tokens';
 import type { RememberedWorkspace } from './workspace-resume-policy';
 
 /** A granted "always allow" rule (doc/SECURITY_RULES_PLAN.md §2.7,
@@ -78,6 +79,8 @@ export interface KodoSettingsState {
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
   uiSettings: UiSettings;
+  /** Configured HuggingFace tokens. */
+  hfTokens: HfTokenEntry[];
 }
 
 export type KodoSettingsMessage =
@@ -93,6 +96,9 @@ export type KodoSettingsMessage =
   | { type: 'open_session'; sessionId: string }
   | { type: 'fetch_session_rules'; sessionId: string }
   | { type: 'delete_session_rules'; sessionId: string; rules: GlobalRuleEntry[] }
+  | { type: 'add_hf_token'; name: string; secret: string }
+  | { type: 'remove_hf_token'; uuid: string }
+  | { type: 'activate_hf_token'; uuid: string }
   | { type: 'close' };
 
 /** Singleton settings panel — reveals the existing one instead of opening a second. */
@@ -214,7 +220,7 @@ function buildHtml(): string {
       color: var(--vscode-descriptionForeground);
       font-size: 0.92em;
       line-height: 1.5;
-      max-width: 640px;
+      max-width: auto;
       margin: 0 0 16px;
     }
     .section-subheading {
@@ -457,6 +463,11 @@ function buildHtml(): string {
       padding: 18px 20px;
       box-sizing: border-box;
     }
+    .modal-box.narrow-box {
+      width: 380px;
+      max-width: calc(100vw - 40px);
+    }
+    .modal-box h3 { margin: 0 0 6px; font-size: 1.05em; }
     .modal-toolbar {
       display: flex;
       justify-content: flex-end;
@@ -466,6 +477,62 @@ function buildHtml(): string {
     .modal-toolbar button {
       display: inline-block;
       width: auto;
+    }
+    .section-heading {
+      font-size: 0.95em;
+      font-weight: 600;
+      margin: 0 0 8px;
+    }
+    .keys-section { margin-bottom: 22px; }
+    .key-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .key-row:first-of-type { border-top: none; }
+    .key-name { flex: 1; }
+    .key-active-badge {
+      font-size: 0.78em;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: #4caf5033;
+      color: #4caf50;
+    }
+    #no-tokens-msg { color: var(--vscode-descriptionForeground); font-size: 0.9em; padding: 6px 0; }
+    .modal-intro {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.88em;
+      line-height: 1.4;
+      margin: 0 0 14px;
+    }
+    .modal-field { margin-bottom: 12px; }
+    .modal-field label {
+      display: block;
+      font-size: 0.85em;
+      margin-bottom: 4px;
+    }
+    .modal-field input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 5px 7px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+    }
+    .modal-field input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 16px;
     }
   </style>
 </head>
@@ -486,6 +553,7 @@ function buildHtml(): string {
       { key: 'general', label: 'General' },
       { key: 'sessions', label: 'Sessions' },
       { key: 'global-rules', label: 'Global Allow-Rules' },
+      { key: 'huggingface', label: 'HuggingFace' },
     ];
 
     let _state = {
@@ -495,11 +563,13 @@ function buildHtml(): string {
       sessions: [],
       sessionRules: null,
       uiSettings: { showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h' },
+      hfTokens: [],
     };
     let _selectedKey = 'general';
     const _checked = new Set();
     const _sessionChecked = new Set();
     let _sessionSettingsFor = null; // session id the "Session Settings" modal is open for, or null
+    let _addTokenModalOpen = false; // whether the "Add HuggingFace Token" modal is open
 
     function ruleKey(rule) {
       return rule.kind + '|' + rule.executable + '|' + rule.value;
@@ -881,10 +951,97 @@ function buildHtml(): string {
       return overlay;
     }
 
+    function closeAddTokenModal() {
+      _addTokenModalOpen = false;
+      renderModal();
+    }
+
+    function renderAddTokenModal() {
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) { closeAddTokenModal(); }
+      });
+
+      const box = document.createElement('div');
+      box.className = 'modal-box narrow-box';
+      box.setAttribute('role', 'dialog');
+      box.setAttribute('aria-modal', 'true');
+      box.addEventListener('click', (e) => e.stopPropagation());
+
+      const heading = document.createElement('h3');
+      heading.textContent = 'Add HuggingFace Token';
+      box.appendChild(heading);
+
+      const intro = document.createElement('p');
+      intro.className = 'modal-intro';
+      intro.textContent = "This token grants access to gated HuggingFace repositories. It is stored securely in VS Code's keychain.";
+      box.appendChild(intro);
+
+      const nameField = document.createElement('div');
+      nameField.className = 'modal-field';
+      const nameLabel = document.createElement('label');
+      nameLabel.textContent = 'Token name';
+      nameLabel.setAttribute('for', 'add-token-name');
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.id = 'add-token-name';
+      nameInput.placeholder = 'e.g. work, personal';
+      nameInput.autocomplete = 'off';
+      nameField.appendChild(nameLabel);
+      nameField.appendChild(nameInput);
+      box.appendChild(nameField);
+
+      const secretField = document.createElement('div');
+      secretField.className = 'modal-field';
+      const secretLabel = document.createElement('label');
+      secretLabel.textContent = 'Access token';
+      secretLabel.setAttribute('for', 'add-token-secret');
+      const secretInput = document.createElement('input');
+      secretInput.type = 'password';
+      secretInput.id = 'add-token-secret';
+      secretInput.placeholder = 'Paste HF access token';
+      secretInput.autocomplete = 'off';
+      secretField.appendChild(secretLabel);
+      secretField.appendChild(secretInput);
+      box.appendChild(secretField);
+
+      const actions = document.createElement('div');
+      actions.className = 'modal-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'secondary-btn';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', closeAddTokenModal);
+      const confirmBtn = document.createElement('button');
+      confirmBtn.textContent = 'Add token';
+      confirmBtn.addEventListener('click', () => {
+        const name = nameInput.value.trim();
+        const secret = secretInput.value.trim();
+        if (!name || !secret) { return; }
+        vsc.postMessage({ type: 'add_hf_token', name, secret });
+        closeAddTokenModal();
+      });
+      actions.appendChild(cancelBtn);
+      actions.appendChild(confirmBtn);
+      box.appendChild(actions);
+
+      overlay.appendChild(box);
+      return overlay;
+    }
+
+    function openAddTokenModal() {
+      _addTokenModalOpen = true;
+      renderModal();
+      const input = document.getElementById('add-token-name');
+      if (input) { input.focus(); }
+    }
+
     function renderModal() {
       const root = document.getElementById('modal-root');
       root.innerHTML = '';
-      const modal = renderSessionSettingsModal();
+      const modal = _sessionSettingsFor
+        ? renderSessionSettingsModal()
+        : (_addTokenModalOpen ? renderAddTokenModal() : null);
       if (modal) { root.appendChild(modal); }
     }
 
@@ -1202,6 +1359,86 @@ function buildHtml(): string {
       return wrap;
     }
 
+    function renderHuggingFaceSection() {
+      const wrap = document.createElement('div');
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'HuggingFace';
+      wrap.appendChild(heading);
+
+      const intro = document.createElement('p');
+      intro.className = 'intro-text';
+      intro.textContent = "Manage access tokens for downloading gated models from HuggingFace Hub. Tokens are stored securely in VS Code's keychain and never written to disk.";
+      wrap.appendChild(intro);
+
+      // Access Tokens section
+      const section = document.createElement('div');
+      section.className = 'keys-section';
+
+      const sectionHeading = document.createElement('div');
+      sectionHeading.className = 'section-heading';
+      sectionHeading.textContent = 'Access Tokens';
+      section.appendChild(sectionHeading);
+
+      const divider = document.createElement('hr');
+      divider.className = 'section-divider';
+      section.appendChild(divider);
+
+      const tokens = _state.hfTokens || [];
+      if (tokens.length === 0) {
+        const msg = document.createElement('div');
+        msg.id = 'no-tokens-msg';
+        msg.textContent = 'No HuggingFace access tokens configured yet.';
+        section.appendChild(msg);
+      } else {
+        tokens.forEach(token => {
+          const row = document.createElement('div');
+          row.className = 'key-row';
+
+          const name = document.createElement('span');
+          name.className = 'key-name';
+          name.textContent = token.name;
+          row.appendChild(name);
+
+          if (token.active) {
+            const badge = document.createElement('span');
+            badge.className = 'key-active-badge';
+            badge.textContent = 'Active';
+            row.appendChild(badge);
+          } else {
+            const makeActiveBtn = document.createElement('button');
+            makeActiveBtn.className = 'secondary-btn';
+            makeActiveBtn.textContent = 'Make active';
+            makeActiveBtn.addEventListener('click', () => {
+              vsc.postMessage({ type: 'activate_hf_token', uuid: token.uuid });
+            });
+            row.appendChild(makeActiveBtn);
+          }
+
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'secondary-btn';
+          removeBtn.textContent = 'Remove this token';
+          removeBtn.addEventListener('click', () => {
+            vsc.postMessage({ type: 'remove_hf_token', uuid: token.uuid });
+          });
+          row.appendChild(removeBtn);
+
+          section.appendChild(row);
+        });
+      }
+
+      const addBtn = document.createElement('button');
+      addBtn.id = 'add-key-btn';
+      addBtn.style.marginTop = '15px';
+      addBtn.textContent = 'Add new token';
+      addBtn.addEventListener('click', () => openAddTokenModal());
+      section.appendChild(addBtn);
+
+      wrap.appendChild(section);
+
+      return wrap;
+    }
+
     function render() {
       renderNav();
       const content = document.getElementById('content');
@@ -1210,8 +1447,10 @@ function buildHtml(): string {
         content.appendChild(renderGeneralSection());
       } else if (_selectedKey === 'sessions') {
         content.appendChild(renderSessionsSection());
-      } else {
+      } else if (_selectedKey === 'global-rules') {
         content.appendChild(renderGlobalRulesSection());
+      } else if (_selectedKey === 'huggingface') {
+        content.appendChild(renderHuggingFaceSection());
       }
       renderModal();
     }
@@ -1247,12 +1486,16 @@ function buildHtml(): string {
           [..._sessionChecked].forEach(k => { if (!keys.has(k)) { _sessionChecked.delete(k); } });
         }
       }
+      if (Array.isArray(data.hfTokens)) {
+        _state.hfTokens = data.hfTokens;
+      }
       render();
     });
 
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && _sessionSettingsFor) {
-        closeSessionSettings();
+      if (e.key === 'Escape') {
+        if (_sessionSettingsFor) { closeSessionSettings(); }
+        if (_addTokenModalOpen) { closeAddTokenModal(); }
       }
     });
 

@@ -30,6 +30,7 @@ import type { Envelope } from './envelope';
 import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-provider';
 import { LocalInferenceSettingsPanel } from './local-inference-settings-panel';
 import type { LocalInferenceSettingsMessage } from './local-inference-settings-panel';
+import * as hfTokens from './hf-tokens';
 import { KodoSettingsPanel } from './kodo-settings-panel';
 import type { GlobalRuleEntry, KodoSettingsMessage, LlamaCppInfo, SessionListEntry, StuckDetectionSettings, UiSettings } from './kodo-settings-panel';
 import type {
@@ -1596,6 +1597,33 @@ async function handleControlEnvelope(env: Envelope): Promise<void> {
 
   const evtType = String(env.payload.type ?? '');
 
+  // Server-initiated HF token request on the control connection.
+  // The extension resolves the active HF token and responds; empty string
+  // is returned when no token is configured (public repos don't need one).
+  if (env.kind === 'request' && evtType === 'hf_token.request') {
+    if (!extensionContext) {
+      return;
+    }
+    const token = await hfTokens.getActiveToken(extensionContext);
+    _sendControl(makeResponse(env.id, { hf_token: token ?? '' }));
+    return;
+  }
+
+  // Server-initiated HF token revoke — the active token was rejected
+  // (e.g. 401 on a gated repo). Forget it so the next download re-prompts.
+  if (env.kind === 'event' && evtType === 'hf_token.revoke') {
+    if (!extensionContext) {
+      return;
+    }
+    await hfTokens.revokeActiveToken(extensionContext);
+    KodoSettingsPanel.instance?.update({ hfTokens: hfTokens.listTokens() });
+    vscode.window.showWarningMessage(
+      'K\u014ddo: HuggingFace access token was rejected. ' +
+        'Add a valid token in K\u014ddo Settings → HuggingFace to download gated models.',
+    );
+    return;
+  }
+
   if (env.kind === 'response' && evtType === 'hello.ack') {
     if (env.payload.cloud_registry && typeof env.payload.cloud_registry === 'object') {
       cloudRegistryState = env.payload.cloud_registry as CloudRegistry;
@@ -2338,7 +2366,7 @@ async function _openKodoSettings(): Promise<void> {
   // joining the Promise.all.
   const uiSettings = _readUiSettings();
   const panel = KodoSettingsPanel.createOrShow(
-    { rules, stuckDetection, llamaCpp, sessions, sessionRules: null, uiSettings },
+    { rules, stuckDetection, llamaCpp, sessions, sessionRules: null, uiSettings, hfTokens: hfTokens.listTokens() },
     (msg) => void _onKodoSettingsMessage(msg),
   );
   // For an already-open panel, createOrShow only revealed it (initialState is
@@ -2347,7 +2375,7 @@ async function _openKodoSettings(): Promise<void> {
   // untouched here (omitted from the patch) — closing and reopening the panel
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
-  panel.update({ rules, stuckDetection, llamaCpp, sessions, uiSettings });
+  panel.update({ rules, stuckDetection, llamaCpp, sessions, uiSettings, hfTokens: hfTokens.listTokens() });
 }
 
 /** Delete a session by id from the Kōdo Settings panel's "Sessions" list —
@@ -2503,6 +2531,30 @@ async function _onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     } catch {
       vscode.window.showErrorMessage('Kōdo: could not reach the server to delete the selected rule(s).');
     }
+    return;
+  }
+  if (msg.type === 'add_hf_token') {
+    try {
+      await hfTokens.addToken(extensionContext!, msg.name, msg.secret);
+      KodoSettingsPanel.instance?.update({ hfTokens: hfTokens.listTokens() });
+    } catch {
+      vscode.window.showErrorMessage('K\u014ddo: failed to save HuggingFace token.');
+    }
+    return;
+  }
+  if (msg.type === 'remove_hf_token') {
+    try {
+      await hfTokens.removeToken(extensionContext!, msg.uuid);
+      KodoSettingsPanel.instance?.update({ hfTokens: hfTokens.listTokens() });
+    } catch {
+      vscode.window.showErrorMessage('K\u014ddo: failed to remove HuggingFace token.');
+    }
+    return;
+  }
+  if (msg.type === 'activate_hf_token') {
+    hfTokens.setActiveToken(msg.uuid);
+    KodoSettingsPanel.instance?.update({ hfTokens: hfTokens.listTokens() });
+    return;
   }
 }
 
