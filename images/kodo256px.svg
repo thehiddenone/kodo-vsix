@@ -34,7 +34,7 @@
   <rect x="0" y="0" width="256" height="256" fill="none"/>
 
   <!-- Base 'to' (ト): the face + nose, in the same serif font/colour as kodo128px.svg -->
-  <text x="0" y="32" xml:space="preserve" text-rendering="geometricPrecision"
+  <text x="0" y="28" xml:space="preserve" text-rendering="geometricPrecision"
         font-family="serif" font-size="280px" font-weight="900"
         dominant-baseline="hanging" fill="#107C41">ト</text>
 
