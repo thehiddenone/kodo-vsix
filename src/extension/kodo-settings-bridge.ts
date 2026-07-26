@@ -234,8 +234,13 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     // Local file, no server round trip — write, reflect in the panel, and
     // push to every open session tab immediately (mirrors
     // broadcastThinkingContext; unlike that one, this fires from a user
-    // action rather than a state change elsewhere).
+    // action rather than a state change elsewhere). Merged onto the current
+    // settings (not a bare object) since writeUiSettings overwrites the whole
+    // file and this message only carries the "General" section's own fields —
+    // a bare overwrite here would silently drop the sidebar's pinned-card
+    // lists (`pinnedLocalModels`/`pinnedCloudVendors`) on every toggle.
     const uiSettings = writeUiSettings({
+      ...readUiSettings(),
       showTimestamps: msg.showTimestamps,
       timezone: msg.timezone,
       clockFormat: msg.clockFormat,

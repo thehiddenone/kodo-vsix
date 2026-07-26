@@ -78,6 +78,12 @@ export interface UiSettings {
   showTimestamps: boolean;
   timezone: string;
   clockFormat: string;
+  /** Names of pinned local LLM registry entries, in pin order (oldest pin
+   *  first/topmost) — sidebar-only, never surfaced in this settings panel.
+   *  See `sidebar-provider.ts`'s pin/unpin handling. */
+  pinnedLocalModels: string[];
+  /** Same as `pinnedLocalModels` but for cloud vendor keys. */
+  pinnedCloudVendors: string[];
 }
 
 /** Payloads shared with the (former, now-merged-in) Local Inference Settings

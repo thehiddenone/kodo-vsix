@@ -20,6 +20,12 @@ export interface SidebarState {
   llamaStopping: boolean;
   detectedVramGb: number | null;
   detectedRamGb: number | null;
+  /** Pinned local LLM registry names, in pin order (oldest pin first/topmost)
+   *  — pinned cards render above unpinned ones in `renderLocalCards`.
+   *  Persisted in `~/.kodo/etc/ui-settings.json` (`settings-io.ts`). */
+  pinnedLocalModels: string[];
+  /** Same as `pinnedLocalModels` but for cloud vendor keys. */
+  pinnedCloudVendors: string[];
 }
 
 export type SidebarMessage =
@@ -29,6 +35,8 @@ export type SidebarMessage =
   | { type: 'set_active_model'; name: string }
   | { type: 'set_active_flavor'; name: string; flavor_id: string }
   | { type: 'set_cloud_vendor'; vendor: string }
+  | { type: 'toggle_pin_local_model'; name: string }
+  | { type: 'toggle_pin_cloud_vendor'; vendor: string }
   | { type: 'open_local_inference_settings' }
   | { type: 'open_cloud_ai_settings' }
   | { type: 'open_kodo_settings' }
@@ -201,11 +209,31 @@ function buildHtml(): string {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      min-width: 0;
+    }
+    .pin-btn {
+      all: unset;
+      flex-shrink: 0;
+      cursor: pointer;
+      line-height: 1;
+      font-size: 1em;
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.7;
+    }
+    .pin-btn:hover { opacity: 1; }
+    .pin-btn.pinned {
+      color: var(--vscode-charts-yellow, #cca700);
+      opacity: 1;
     }
     .card-meta-line {
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
       margin-bottom: 2px;
+    }
+    .pin-divider {
+      border: none;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+      margin: 4px 0;
     }
     select.flavor-select {
       width: 100%;
@@ -337,7 +365,37 @@ function buildHtml(): string {
       llamaRunningModel: '',
       llamaStarting: false,
       llamaStopping: false,
+      pinnedLocalModels: [],
+      pinnedCloudVendors: [],
     };
+
+    // Sorts \`items\` so entries named in \`pinned\` (pin order — oldest pin
+    // first) come first, followed by the rest in their original order.
+    function sortByPinned(items, pinned, keyFn) {
+      const pinnedSet = new Set(pinned);
+      const pinnedItems = pinned
+        .map(name => items.find(item => keyFn(item) === name))
+        .filter(item => item !== undefined);
+      const rest = items.filter(item => !pinnedSet.has(keyFn(item)));
+      return pinnedItems.concat(rest);
+    }
+
+    function makePinButton(isPinned, onToggle) {
+      const btn = document.createElement('span');
+      btn.className = 'pin-btn' + (isPinned ? ' pinned' : '');
+      btn.setAttribute('role', 'button');
+      btn.setAttribute('tabindex', '0');
+      btn.title = isPinned ? 'Unpin' : 'Pin to top';
+      btn.textContent = isPinned ? '★' : '☆';
+      btn.addEventListener('click', onToggle);
+      btn.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggle();
+        }
+      });
+      return btn;
+    }
 
     function statusDisplay(connected, stage) {
       if (!connected) { return { cls: 'off', label: 'Status: Disconnected' }; }
@@ -450,7 +508,14 @@ function buildHtml(): string {
         return;
       }
 
-      installed.forEach(model => {
+      const ordered = sortByPinned(installed, _state.pinnedLocalModels, m => m.name);
+      const pinnedCount = ordered.filter(m => _state.pinnedLocalModels.includes(m.name)).length;
+
+      ordered.forEach((model, index) => {
+        if (index === pinnedCount && pinnedCount > 0) {
+          section.appendChild(document.createElement('hr')).className = 'pin-divider';
+        }
+
         const isActive = _state.activeLocalModel === model.name;
 
         const card = document.createElement('div');
@@ -476,6 +541,11 @@ function buildHtml(): string {
         nameEl.className = 'card-name';
         nameEl.textContent = model.description;
         header.appendChild(nameEl);
+
+        const isPinned = _state.pinnedLocalModels.includes(model.name);
+        header.appendChild(makePinButton(isPinned, () => {
+          vsc.postMessage({ type: 'toggle_pin_local_model', name: model.name });
+        }));
 
         card.appendChild(header);
 
@@ -574,9 +644,14 @@ function buildHtml(): string {
       heading.textContent = 'Select LLM provider';
       section.appendChild(heading);
 
-      const vendors = Object.keys(_state.cloudRegistry);
+      const vendors = sortByPinned(Object.keys(_state.cloudRegistry), _state.pinnedCloudVendors, v => v);
+      const pinnedVendorCount = vendors.filter(v => _state.pinnedCloudVendors.includes(v)).length;
 
-      vendors.forEach(vendor => {
+      vendors.forEach((vendor, index) => {
+        if (index === pinnedVendorCount && pinnedVendorCount > 0) {
+          section.appendChild(document.createElement('hr')).className = 'pin-divider';
+        }
+
         const info = _state.cloudRegistry[vendor];
         const isActive = _state.activeCloudVendor === vendor;
 
@@ -602,6 +677,11 @@ function buildHtml(): string {
         nameEl.className = 'card-name';
         nameEl.textContent = info.display_name;
         header.appendChild(nameEl);
+
+        const isPinned = _state.pinnedCloudVendors.includes(vendor);
+        header.appendChild(makePinButton(isPinned, () => {
+          vsc.postMessage({ type: 'toggle_pin_cloud_vendor', vendor });
+        }));
 
         card.appendChild(header);
         section.appendChild(card);
@@ -676,6 +756,8 @@ function buildHtml(): string {
       if (typeof data.llamaRunningModel === 'string') { _state.llamaRunningModel = data.llamaRunningModel; }
       if (data.llamaStarting !== undefined) { _state.llamaStarting = Boolean(data.llamaStarting); }
       if (data.llamaStopping !== undefined) { _state.llamaStopping = Boolean(data.llamaStopping); }
+      if (Array.isArray(data.pinnedLocalModels)) { _state.pinnedLocalModels = data.pinnedLocalModels; }
+      if (Array.isArray(data.pinnedCloudVendors)) { _state.pinnedCloudVendors = data.pinnedCloudVendors; }
 
       renderCards();
     });

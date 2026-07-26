@@ -39,7 +39,13 @@ export function writeSettings(patch: Record<string, unknown>): void {
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
 }
 
-const DEFAULT_UI_SETTINGS: UiSettings = { showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h' };
+const DEFAULT_UI_SETTINGS: UiSettings = {
+  showTimestamps: false,
+  timezone: 'system',
+  clockFormat: 'ymd_24h',
+  pinnedLocalModels: [],
+  pinnedCloudVendors: [],
+};
 
 /**
  * `~/.kodo/etc/ui-settings.json` — kodo-vsix's own "Show Timestamps" flags
@@ -66,6 +72,12 @@ export function readUiSettings(): UiSettings {
     showTimestamps: typeof raw.showTimestamps === 'boolean' ? raw.showTimestamps : DEFAULT_UI_SETTINGS.showTimestamps,
     timezone: typeof raw.timezone === 'string' && raw.timezone ? raw.timezone : DEFAULT_UI_SETTINGS.timezone,
     clockFormat: typeof raw.clockFormat === 'string' && raw.clockFormat ? raw.clockFormat : DEFAULT_UI_SETTINGS.clockFormat,
+    pinnedLocalModels: Array.isArray(raw.pinnedLocalModels)
+      ? raw.pinnedLocalModels.filter((n): n is string => typeof n === 'string')
+      : DEFAULT_UI_SETTINGS.pinnedLocalModels,
+    pinnedCloudVendors: Array.isArray(raw.pinnedCloudVendors)
+      ? raw.pinnedCloudVendors.filter((n): n is string => typeof n === 'string')
+      : DEFAULT_UI_SETTINGS.pinnedCloudVendors,
   };
 }
 
@@ -77,6 +89,26 @@ export function writeUiSettings(settings: UiSettings): UiSettings {
   fs.mkdirSync(path.dirname(uiSettingsPath()), { recursive: true });
   fs.writeFileSync(uiSettingsPath(), JSON.stringify(settings, null, 2), 'utf8');
   return settings;
+}
+
+/** Pin/unpin a local LLM registry entry for the sidebar's card ordering.
+ *  Newly pinned names are appended, so `pinnedLocalModels` is in pin order
+ *  (oldest pin first/topmost) — see `sidebar-provider.ts`'s `renderLocalCards`. */
+export function togglePinnedLocalModel(name: string): UiSettings {
+  const settings = readUiSettings();
+  const pinnedLocalModels = settings.pinnedLocalModels.includes(name)
+    ? settings.pinnedLocalModels.filter((n) => n !== name)
+    : [...settings.pinnedLocalModels, name];
+  return writeUiSettings({ ...settings, pinnedLocalModels });
+}
+
+/** Same as `togglePinnedLocalModel` but for cloud vendor keys. */
+export function togglePinnedCloudVendor(vendor: string): UiSettings {
+  const settings = readUiSettings();
+  const pinnedCloudVendors = settings.pinnedCloudVendors.includes(vendor)
+    ? settings.pinnedCloudVendors.filter((v) => v !== vendor)
+    : [...settings.pinnedCloudVendors, vendor];
+  return writeUiSettings({ ...settings, pinnedCloudVendors });
 }
 
 /** Push the current "Show Timestamps" flags to every open session tab in
@@ -151,7 +183,7 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
   anthropic: {
     low: 'claude-haiku-4-5-20251001',
     medium: 'claude-sonnet-5',
-    high: 'claude-opus-4-8',
+    high: 'claude-opus-5',
     max: 'claude-fable-5',
   },
 };

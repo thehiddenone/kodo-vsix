@@ -43,7 +43,15 @@ import { openCloudAiSettings, openKodoSettings, openLocalInferenceSettings } fro
 import { installLlamaCpp, startLlamaCpp } from './extension/llamacpp';
 import { pushLocalInferenceState, setActiveFlavor, setActiveLocalModel } from './extension/local-llm-registry';
 import { beginServerStartupProgress, endServerStartupProgress, handleServerStartFailure, launchKodoServer, showTransientNotification } from './extension/server-lifecycle';
-import { readActiveCloudVendor, readActiveLocalModel, readMode, setMode } from './extension/settings-io';
+import {
+  readActiveCloudVendor,
+  readActiveLocalModel,
+  readMode,
+  readUiSettings,
+  setMode,
+  togglePinnedCloudVendor,
+  togglePinnedLocalModel,
+} from './extension/settings-io';
 import { pickSession } from './extension/session-resume';
 import { state } from './extension/state';
 import { adoptPanel, consumeSerializerDead, newSession, openPanel } from './extension/window-sessions';
@@ -132,6 +140,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   state.modeState = readMode();
   state.activeCloudVendorState = readActiveCloudVendor();
   state.activeLocalModelState = readActiveLocalModel();
+  const initialUiSettings = readUiSettings();
 
   state.sidebarProvider = new SidebarProvider(
     {
@@ -153,6 +162,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaStopping: state.llamaStoppingState,
       detectedVramGb: state.detectedVramGbState,
       detectedRamGb: state.detectedRamGbState,
+      pinnedLocalModels: initialUiSettings.pinnedLocalModels,
+      pinnedCloudVendors: initialUiSettings.pinnedCloudVendors,
     },
     (msg) => {
       if (msg.type === 'list_sessions') {
@@ -167,6 +178,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void setActiveFlavor(msg.name, msg.flavor_id);
       } else if (msg.type === 'set_cloud_vendor') {
         setActiveCloudVendor(msg.vendor);
+      } else if (msg.type === 'toggle_pin_local_model') {
+        const { pinnedLocalModels } = togglePinnedLocalModel(msg.name);
+        state.sidebarProvider?.update({ pinnedLocalModels });
+      } else if (msg.type === 'toggle_pin_cloud_vendor') {
+        const { pinnedCloudVendors } = togglePinnedCloudVendor(msg.vendor);
+        state.sidebarProvider?.update({ pinnedCloudVendors });
       } else if (msg.type === 'open_local_inference_settings') {
         openLocalInferenceSettings();
       } else if (msg.type === 'open_cloud_ai_settings') {
