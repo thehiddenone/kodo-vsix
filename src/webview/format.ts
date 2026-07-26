@@ -50,7 +50,7 @@ export function formatTokens(n: number): string {
 }
 
 /** `settings.timezone === 'system'` resolves to the runtime's local IANA zone;
- *  anything else (`'UTC'` or a curated zone id — see kodo-settings-panel.ts's
+ *  anything else (`'UTC'` or a curated zone id — see settings-webview/GeneralSection.tsx's
  *  `TIMEZONE_OPTIONS`) is a real IANA id already, passed straight to `Intl`. */
 function resolveTimeZone(timezone: string): string {
   return timezone === 'system' || !timezone

@@ -19,7 +19,7 @@ export function coerceCommandControl(value: unknown): CommandControl {
 /** One "Clock format" preset offered by the Show Timestamps settings section —
  *  `ymd`/`mdy`/`dmy` is the date field order, `_12h`/`_24h` the clock style.
  *  Rendered by {@link formatTimestamp} in `format.ts`; the same six keys are
- *  hardcoded (value + label) into `kodo-settings-panel.ts`'s inline script,
+ *  hardcoded (value + label) into `settings-webview/GeneralSection.tsx`'s options list,
  *  which can't import this module (see that file's `CLOCK_FORMAT_OPTIONS`). */
 export type ClockFormatPreset = 'ymd_24h' | 'ymd_12h' | 'mdy_24h' | 'mdy_12h' | 'dmy_24h' | 'dmy_12h';
 
@@ -36,7 +36,7 @@ export function coerceClockFormatPreset(value: unknown): ClockFormatPreset {
  * kodo server): whether a timestamp line is rendered above each primary
  * content block, which IANA zone to render it in (`'system'` resolves to the
  * runtime's local zone; `'UTC'` or any curated zone id from
- * `kodo-settings-panel.ts`'s `TIMEZONE_OPTIONS` list is used as-is), and which
+ * `settings-webview/GeneralSection.tsx`'s `TIMEZONE_OPTIONS` list is used as-is), and which
  * {@link ClockFormatPreset} to render it with. Persisted host-side to
  * `~/.kodo/etc/ui-settings.json` (extension.ts's `_readUiSettings`/
  * `_writeUiSettings`) and pushed to every open session webview as a
@@ -49,7 +49,7 @@ export interface UiSettings {
 }
 
 /** Flags-off, system-zone, ISO-order-24h default — matches extension.ts's
- *  `_DEFAULT_UI_SETTINGS` and kodo-settings-panel.ts's initial `uiSettings`. */
+ *  `_DEFAULT_UI_SETTINGS` and settings-webview/reducer.ts's initial `uiSettings`. */
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   showTimestamps: false,
   timezone: 'system',

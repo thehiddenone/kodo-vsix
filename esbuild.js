@@ -52,17 +52,36 @@ const webviewOptions = {
   plugins: [problemMatcherPlugin],
 };
 
+/** @type {import('esbuild').BuildOptions} */
+const settingsWebviewOptions = {
+  entryPoints: ['src/settings-webview/main.tsx'],
+  bundle: true,
+  format: /** @type {'iife'} */ ('iife'),
+  minify: production,
+  sourcemap: !production,
+  sourcesContent: false,
+  platform: /** @type {'browser'} */ ('browser'),
+  outdir: 'dist',
+  entryNames: 'settings-webview',
+  jsx: 'automatic',
+  jsxImportSource: 'preact',
+  logLevel: 'silent',
+  plugins: [problemMatcherPlugin],
+};
+
 async function main() {
   if (watch) {
-    const [extCtx, webCtx] = await Promise.all([
+    const [extCtx, webCtx, settingsCtx] = await Promise.all([
       esbuild.context(extensionOptions),
       esbuild.context(webviewOptions),
+      esbuild.context(settingsWebviewOptions),
     ]);
-    await Promise.all([extCtx.watch(), webCtx.watch()]);
+    await Promise.all([extCtx.watch(), webCtx.watch(), settingsCtx.watch()]);
   } else {
     await Promise.all([
       esbuild.build(extensionOptions),
       esbuild.build(webviewOptions),
+      esbuild.build(settingsWebviewOptions),
     ]);
   }
 }
