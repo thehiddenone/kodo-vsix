@@ -92,7 +92,7 @@ export class SessionController {
     this.activity = new ActivityCache(panel, post);
 
     panel.iconPath = vscode.Uri.file(
-      path.join(deps.context.extensionPath, 'images', 'kodo16px.svg'),
+      path.join(deps.context.extensionPath, 'images', 'kodo16px.png'),
     );
     const webviewJsUri = panel.webview.asWebviewUri(
       vscode.Uri.file(path.join(deps.context.extensionPath, 'dist', 'webview.js')),

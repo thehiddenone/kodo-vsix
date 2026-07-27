@@ -26,7 +26,7 @@
         {
           "id": "kodo",
           "title": "Kōdo",
-          "icon": "images/kodo24px.svg"
+          "icon": "images/kodo24px.png"
         }
       ]
     },
@@ -36,7 +36,7 @@
           "id": "kodo.view",
           "name": "Kōdo",
           "type": "webview",
-          "icon": "images/kodo16px.svg"
+          "icon": "images/kodo16px.png"
         }
       ]
     },
@@ -44,7 +44,7 @@
       {
         "command": "kodo.openPanel",
         "title": "Kōdo: Open Panel",
-        "icon": "images/kodo16px.svg"
+        "icon": "images/kodo16px.png"
       },
       {
         "command": "kodo.openSettings",
@@ -54,27 +54,27 @@
       {
         "command": "kodo.newSession",
         "title": "Kōdo: Start New Session",
-        "icon": "images/kodo16px.svg"
+        "icon": "images/kodo16px.png"
       },
       {
         "command": "kodo.createProject",
         "title": "Kōdo: Create New Project",
-        "icon": "images/kodo16px.svg"
+        "icon": "images/kodo16px.png"
       },
       {
         "command": "kodo.useCloudLLMs",
         "title": "Kōdo: Use Cloud LLMs",
-        "icon": "images/kodo16px.svg"
+        "icon": "images/kodo16px.png"
       },
       {
         "command": "kodo.useLocalLLM",
         "title": "Kōdo: Use Local LLM via llama.cpp",
-        "icon": "images/kodo16px.svg"
+        "icon": "images/kodo16px.png"
       },
       {
         "command": "kodo.pickSession",
         "title": "Kōdo: Open Session…",
-        "icon": "images/kodo16px.svg"
+        "icon": "images/kodo16px.png"
       },
       {
         "command": "kodo.addFeedback",
