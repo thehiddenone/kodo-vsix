@@ -4,7 +4,7 @@
   "displayName": "Kōdo",
   "icon": "images/kodo128px.png",
   "description": "Agentic build system: requirements → working code.",
-  "version": "0.1.0",
+  "version": "0.1.9",
   "engines": {
     "vscode": "^1.90.0"
   },

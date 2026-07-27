@@ -33,6 +33,7 @@ import * as https from 'https';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { state } from './extension/state';
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -379,24 +380,54 @@ async function ensureVenv(uvExec: string, out: vscode.OutputChannel): Promise<st
 }
 
 function isKodoInstalled(uvExec: string, venv: string): boolean {
-  const r = childProcess.spawnSync(uvExec, ['pip', 'show', 'kodo'], {
+  const r = childProcess.spawnSync(uvExec, ['pip', 'show', 'py-kodo'], {
     env: { ...process.env, VIRTUAL_ENV: venv },
     encoding: 'utf-8',
   });
   return r.status === 0;
 }
 
+/**
+ * Reads this extension's own version out of its `package.json`.
+ *
+ * `kodo-vsix`'s `package.json` "version" is kept in lockstep with the
+ * `py-kodo` version it depends on — see `kodo/scripts/post_build.py`, which
+ * stamps both from the same `pyproject.toml` value on every kodo release.
+ * Reads via `extensionContext.extensionPath` (set as the first line of
+ * `activate()`, long before this can be called) rather than a `__dirname`-relative
+ * guess, so it stays correct regardless of the bundle's output layout.
+ */
+function getExtensionVersion(): string {
+  const pkgPath = path.join(state.extensionContext!.extensionPath, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string };
+  return pkg.version;
+}
+
+/**
+ * In local dev (``KODO_DEV_PATH`` set), installs kodo editable from that
+ * checkout. Otherwise installs the published ``py-kodo`` PyPI package,
+ * pinned to this extension's own version so the client/server protocol
+ * never drifts out of sync. If the pinned version isn't resolvable (e.g. it
+ * hasn't reached PyPI's index yet), falls back to the latest ``py-kodo``.
+ */
 async function installKodo(uvExec: string, venv: string, out: vscode.OutputChannel): Promise<void> {
-  // STUB: kodo is not yet published on PyPI.
-  // TODO: replace the args below with ['pip', 'install', 'kodo'] after publish.
   const kodoSrc = process.env['KODO_DEV_PATH'];
-  if (!kodoSrc) {
-    throw new Error(
-      'Kodo: KODO_DEV_PATH environment variable is not set. Cannot install kodo in dev mode.',
-    );
+  if (kodoSrc) {
+    out.appendLine(`[uv] Installing kodo from ${kodoSrc} (dev mode)`);
+    await runProcess(uvExec, ['pip', 'install', '-e', kodoSrc], { VIRTUAL_ENV: venv }, out);
+    return;
   }
-  out.appendLine(`[uv] Installing kodo from ${kodoSrc} (dev stub)`);
-  await runProcess(uvExec, ['pip', 'install', '-e', kodoSrc], { VIRTUAL_ENV: venv }, out);
+
+  const version = getExtensionVersion();
+  out.appendLine(`[uv] Installing py-kodo==${version} from PyPI`);
+  try {
+    await runProcess(uvExec, ['pip', 'install', `py-kodo==${version}`], { VIRTUAL_ENV: venv }, out);
+  } catch (e) {
+    out.appendLine(
+      `[uv] WARNING: py-kodo==${version} install failed (${e instanceof Error ? e.message : String(e)}) — falling back to unpinned py-kodo`,
+    );
+    await runProcess(uvExec, ['pip', 'install', 'py-kodo'], { VIRTUAL_ENV: venv }, out);
+  }
 }
 
 // ---------------------------------------------------------------------------

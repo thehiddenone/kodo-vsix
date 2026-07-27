@@ -8,15 +8,15 @@ This README only covers installing and running the extension. Everything else �
 
 There is no packaged `.vsix` yet. The way to run Kōdo today is from source, in a VS Code Extension Development Host.
 
-**Prerequisites:** Node.js 24 and a clone of both repos (`kodo` and `kodo-vsix`). You do **not** need Python installed — the extension provisions its own Python 3.12 environment on first run.
+**Prerequisites:** Node.js 24 and a clone of `kodo-vsix`. You do **not** need Python installed, and you do **not** need a `kodo` clone — the extension provisions its own Python 3.12 environment and installs the [`py-kodo`](https://pypi.org/project/py-kodo/) server package from PyPI on first run, pinned to this extension's own version (`package.json`'s `version`, kept in lockstep with `py-kodo` releases by `kodo`'s `scripts/post_build.py`). If that exact pinned version isn't installable, it falls back to the latest `py-kodo`.
 
-1. **Point `KODO_DEV_PATH` at the Kōdo Python package** — the directory of your `kodo` clone that contains `pyproject.toml`:
+1. **(Optional) Point `KODO_DEV_PATH` at a local Kōdo Python checkout** — the directory of a `kodo` clone that contains `pyproject.toml`. Only needed if you're developing the server itself:
 
    ```bash
    export KODO_DEV_PATH=/path/to/kodo
    ```
 
-   `kodo` is on PyPI now (`pip install py-kodo`), but the extension doesn't install from there yet — it always installs from this path in editable mode (`uv pip install -e "$KODO_DEV_PATH"`, so server-side Python changes take effect on the next server start without reinstalling). Switching this over to a PyPI install is future work, not done here.
+   When set, the extension installs from this path in editable mode instead of PyPI (`uv pip install -e "$KODO_DEV_PATH"`), so server-side Python changes take effect on the next server start without reinstalling.
 
    The variable must be visible to the VS Code **process**, not just your shell. The reliable way is to launch VS Code from a terminal that has it exported:
 
@@ -39,7 +39,7 @@ There is no packaged `.vsix` yet. The way to run Kōdo today is from source, in 
 3. **First activation** bootstraps everything automatically (this one-time setup takes a couple of minutes; a progress notification tracks it):
    - downloads `uv` into `~/.kodo/bin/`,
    - creates a Python 3.12 venv at `~/.kodo/venv/` (uv downloads the interpreter if needed),
-   - installs the `kodo` package from `KODO_DEV_PATH` into that venv,
+   - installs the `kodo` package into that venv — editable from `KODO_DEV_PATH` if set, otherwise the pinned `py-kodo` release from PyPI,
    - starts the Kōdo server and connects to it.
 
 ## One server, many windows
@@ -80,7 +80,7 @@ Per-project state (specs, checkpoint mirror, the `kodo.md` manifest) lives in a 
 
 ### Common problems
 
-**"KODO_DEV_PATH environment variable is not set"** — the extension could not install the server. Export the variable and make sure VS Code actually inherits it: launch `code` from a terminal where it is exported (a VS Code started from the dock/Start menu does not see your shell's exports).
+**`py-kodo` install fails** — without `KODO_DEV_PATH` set, the extension installs `py-kodo` pinned to its own version from PyPI, falling back to the latest `py-kodo` if that exact version isn't resolvable (e.g. network issues, or the pinned version hasn't reached PyPI's index). Check the "Kodo Server" output channel for the `uv pip install` error. If you're developing the server locally, set `KODO_DEV_PATH` instead of relying on PyPI.
 
 **The server never comes up** — check the "Kodo Server" output channel. The extension already retries once with a freshly rebuilt venv before surfacing an error; if it is still stuck, delete `~/.kodo/venv/` yourself and reload the window. A corrupt or half-installed venv is the usual culprit.
 
@@ -115,7 +115,7 @@ The build produces two independent bundles in `dist/`, one per JavaScript contex
 
 Pressing **F5** runs the default build task — `watch:esbuild` and `watch:tsc` in the background — then launches the Extension Development Host. Edits rebuild automatically; run **Developer: Reload Window** in the dev-host window to load the rebuilt extension. Type errors surface in the Problems panel from the `tsc --watch` task even though esbuild (which does no type checking) keeps bundling.
 
-Python-side changes need no rebuild at all — the server is installed editable from `KODO_DEV_PATH`; just restart the server.
+If `KODO_DEV_PATH` is set, Python-side changes need no rebuild at all — the server is installed editable from it; just restart the server. Without `KODO_DEV_PATH`, the server comes from a pinned PyPI release, so Python-side changes require publishing a new `py-kodo` version.
 
 ### Source layout
 
@@ -123,7 +123,7 @@ Python-side changes need no rebuild at all — the server is installed editable 
 | --- | --- |
 | [extension.ts](src/extension.ts) | Activation: bootstraps the environment, launches/attaches to the server, routes protocol envelopes between server, sidebar, and panels. |
 | [server-launcher.ts](src/server-launcher.ts) | Singleton discovery, detached server spawn (survives window reloads), shared-log tailing into the "Kodo Server" channel. |
-| [uv-setup.ts](src/uv-setup.ts) | First-run bootstrap: install `uv`, create the venv, install `kodo` from `KODO_DEV_PATH`. |
+| [uv-setup.ts](src/uv-setup.ts) | First-run bootstrap: install `uv`, create the venv, install `kodo` — editable from `KODO_DEV_PATH` if set, otherwise the pinned `py-kodo` release from PyPI. |
 | [ws-client.ts](src/ws-client.ts) | WebSocket client with automatic reconnect; the server replays buffered events on reconnect. |
 | [envelope.ts](src/envelope.ts) | Wire-protocol envelope construction/parsing (see [`kodo/doc/WS_PROTOCOL.md`](https://github.com/thehiddenone/kodo/blob/main/doc/WS_PROTOCOL.md)). |
 | [session-controller.ts](src/session-controller.ts) | Per-session state and routing — one instance per session tab. |
