@@ -3,6 +3,7 @@
 
 # VS Code
 *.code-workspace
+*.vsix
 
 # mise
 mise.toml

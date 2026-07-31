@@ -674,6 +674,23 @@ export const styles = {
     fontSize: '12px',
     color: 'var(--vscode-foreground)',
   },
+  // Collapsible subsession transcript (SubsessionGroupView) — the clickable
+  // title line deliberately reads as a section heading (big + bold), never as
+  // just another status line, since it is the only affordance for expanding/
+  // collapsing everything the delegated sub-agent did.
+  subsessionBlockTitle: {
+    fontSize: '14px',
+    fontWeight: 700,
+    cursor: 'pointer',
+    margin: '6px 0 4px',
+    padding: '4px 0',
+    userSelect: 'none' as const,
+  },
+  subsessionBlockContent: {
+    borderLeft: '3px solid var(--vscode-panel-border)',
+    paddingLeft: '10px',
+    margin: '0 0 4px',
+  },
   // A just-granted "always allow" security rule notice (WS_PROTOCOL.md §5.9d)
   // — the header row mirrors a tool call's (icon + label), and its details
   // sit in the same boxed/monospace table (toolCallBox/toolCallTable) a tool

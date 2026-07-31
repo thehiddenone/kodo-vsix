@@ -515,6 +515,10 @@ export interface State {
   attachedFiles: AttachedFile[];
   /** Live context-window gauge shown in the header, or null until first reported. */
   contextStats: ContextStats | null;
+  /** The active subsession's own context-window gauge, or null while no
+   *  subsession is running. Shown as a second "subsession context:" readout
+   *  next to the main one — see `SubsessionContextStats`. */
+  subsessionContextStats: SubsessionContextStats | null;
   /** True while the engine is running the compactor (shows a "Compacting…" banner). */
   compacting: boolean;
   /** "Show Timestamps" flags from `~/.kodo/etc/ui-settings.json` (kodo-vsix-only,
@@ -528,6 +532,19 @@ export interface ContextStats {
   limitTokens: number;
   percent: number;
   canCompact: boolean;
+}
+
+/**
+ * The active subsession's own context-window gauge — scoped to whichever
+ * sub-agent is currently running, measured against *its* model's context
+ * window (which may differ from the main entry agent's). No `canCompact`:
+ * compaction only ever applies to the main context (kodo doc/WS_PROTOCOL.md
+ * §5.7a), never to a subsession's.
+ */
+export interface SubsessionContextStats {
+  currentTokens: number;
+  limitTokens: number;
+  percent: number;
 }
 
 /** One staged attachment chip (id assigned by the host on validation). */
@@ -616,7 +633,14 @@ export type Action =
   | { type: 'attachment_removed'; id: string }
   | { type: 'attachments_cleared' }
   | { type: 'sent_attachments'; attachments: AttachedFileRef[] }
-  | { type: 'context_stats'; currentTokens: number; limitTokens: number; percent: number; canCompact: boolean }
+  | {
+      type: 'context_stats';
+      currentTokens: number;
+      limitTokens: number;
+      percent: number;
+      canCompact: boolean;
+      subsession: SubsessionContextStats | null;
+    }
   | { type: 'context_compacting'; active: boolean }
   | { type: 'context_compacted'; summaryExcerpt: string; summary: string; tokensBefore: number; tokensAfter: number }
   | { type: 'session_history'; entries: Record<string, unknown>[]; subsessions: Record<string, Record<string, unknown>[]> }

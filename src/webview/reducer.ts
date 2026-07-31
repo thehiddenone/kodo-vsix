@@ -544,6 +544,7 @@ export function reducer(state: State, action: Action): State {
           percent: action.percent,
           canCompact: action.canCompact,
         },
+        subsessionContextStats: action.subsession,
       };
     case 'context_compacting':
       return { ...state, compacting: action.active };
@@ -1106,6 +1107,7 @@ export const initial: State = {
   toolgenStartedAt: null,
   attachedFiles: [],
   contextStats: null,
+  subsessionContextStats: null,
   compacting: false,
   uiSettings: DEFAULT_UI_SETTINGS,
 };

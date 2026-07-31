@@ -361,10 +361,7 @@ export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
         <Markdown content="<kodo_crit>Interrupted by user — this turn was stopped before it finished, so any in-progress response or tool call may be incomplete.</kodo_crit>" />
       );
     case 'error_notice': {
-      const tail = entry.recoverable
-        ? ' You can adjust settings and try again.'
-        : ' The workflow cannot proceed.';
-      return <Markdown content={`<kodo_crit>Error — ${entry.message}${tail}</kodo_crit>`} />;
+      return <Markdown content={`<kodo_crit>Error — ${entry.message}</kodo_crit>`} />;
     }
     case 'security_rule_added': {
       const shape = `${entry.offer.executable} ${entry.offer.subcommand}`.trim();

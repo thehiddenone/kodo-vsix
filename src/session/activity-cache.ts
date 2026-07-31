@@ -20,6 +20,12 @@ interface ContextStats {
   canCompact: boolean;
 }
 
+interface SubsessionContextStats {
+  currentTokens: number;
+  limitTokens: number;
+  percent: number;
+}
+
 interface SessionHistory {
   entries: Record<string, unknown>[];
   subsessions: Record<string, Record<string, unknown>[]>;
@@ -31,6 +37,7 @@ export class ActivityCache {
   private tokens = '';
   private usage: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
   private contextStats: ContextStats | null = null;
+  private subsessionContextStats: SubsessionContextStats | null = null;
   private compacting = false;
   private fileEvents: FileEventData[] = [];
   private sessionHistory: SessionHistory | null = null;
@@ -96,9 +103,10 @@ export class ActivityCache {
     this.post({ type: 'usage', cumulativeUsd, lastCallTokens, durationSeconds });
   }
 
-  setContextStats(stats: ContextStats): void {
+  setContextStats(stats: ContextStats, subsessionStats: SubsessionContextStats | null): void {
     this.contextStats = stats;
-    this.post({ type: 'context_stats', ...stats });
+    this.subsessionContextStats = subsessionStats;
+    this.post({ type: 'context_stats', ...stats, subsession: subsessionStats });
   }
 
   setCompacting(active: boolean): void {
@@ -142,7 +150,7 @@ export class ActivityCache {
       this.post({ type: 'usage', ...this.usage });
     }
     if (this.contextStats !== null) {
-      this.post({ type: 'context_stats', ...this.contextStats });
+      this.post({ type: 'context_stats', ...this.contextStats, subsession: this.subsessionContextStats });
     }
     if (this.compacting) {
       this.post({ type: 'context_compacting', active: true });

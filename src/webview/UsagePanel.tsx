@@ -1,16 +1,17 @@
 import { styles } from './styles';
-import type { LastCallTokens, ContextStats } from './types';
+import type { LastCallTokens, ContextStats, SubsessionContextStats } from './types';
 import { formatTokens } from './format';
 interface UsagePanelProps {
   sessionName: string;
   cumulativeUsd: number;
   lastCallTokens: LastCallTokens | null;
   contextStats: ContextStats | null;
+  subsessionContextStats: SubsessionContextStats | null;
   compacting: boolean;
   onCompact: () => void;
 }
 
-export function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens, contextStats, compacting, onCompact }: UsagePanelProps) {
+export function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens, contextStats, subsessionContextStats, compacting, onCompact }: UsagePanelProps) {
   // Always render the header line so the session name is visible from the
   // very first frame — before a title is generated.
   return (
@@ -35,6 +36,13 @@ export function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens, context
               {' / '}{formatTokens(contextStats.limitTokens)}
               {' ('}{contextStats.percent.toFixed(0)}%)
             </span>
+            {subsessionContextStats !== null && (
+              <span style={styles.usageDetail}>
+                {' '}| subsession context: <strong>{formatTokens(subsessionContextStats.currentTokens)}</strong>
+                {' / '}{formatTokens(subsessionContextStats.limitTokens)}
+                {' ('}{subsessionContextStats.percent.toFixed(0)}%)
+              </span>
+            )}
             <button
               style={contextStats.canCompact && !compacting ? styles.compactBtn : styles.compactBtnDisabled}
               onClick={onCompact}

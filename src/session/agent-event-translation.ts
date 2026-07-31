@@ -40,6 +40,7 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
       agent: String(env.payload.agent ?? ''),
       displayName: String(env.payload.display_name ?? ''),
       parentDisplayName: String(env.payload.parent_display_name ?? ''),
+      failed: env.payload.failed === true,
     });
     return true;
   }

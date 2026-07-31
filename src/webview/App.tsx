@@ -1,12 +1,14 @@
 import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
-import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart } from './types';
+import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart, SessionEntry } from './types';
 import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset } from './types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
 import { UsagePanel } from './UsagePanel';
 import { SessionEntryView } from './SessionEntryView';
+import { SubsessionGroupView } from './SubsessionGroupView';
+import { groupSessionEntries } from './groupSubsessions';
 import { ThinkingBlock, ToolgenBlock } from './StreamingBlocks';
 import { Markdown } from './markdown';
 import { AwaitingIndicator, LlmWaitingIndicator, NamingIndicator, CompactingIndicator } from './indicators';
@@ -191,15 +193,25 @@ export function App() {
             durationSeconds: Number(msg.durationSeconds ?? 0),
           });
           break;
-        case 'context_stats':
+        case 'context_stats': {
+          const rawSub = msg.subsession as Record<string, unknown> | null | undefined;
           dispatch({
             type: 'context_stats',
             currentTokens: Number(msg.currentTokens ?? 0),
             limitTokens: Number(msg.limitTokens ?? 0),
             percent: Number(msg.percent ?? 0),
             canCompact: Boolean(msg.canCompact ?? false),
+            subsession:
+              rawSub != null
+                ? {
+                    currentTokens: Number(rawSub.currentTokens ?? 0),
+                    limitTokens: Number(rawSub.limitTokens ?? 0),
+                    percent: Number(rawSub.percent ?? 0),
+                  }
+                : null,
           });
           break;
+        }
         case 'context_compacting':
           dispatch({ type: 'context_compacting', active: Boolean(msg.active ?? false) });
           break;
@@ -470,6 +482,32 @@ export function App() {
 
   const isEmpty = state.session.length === 0 && !state.streamingTokens && !state.streamingThinking && !state.awaitingLlm && !state.llmWaiting && !state.namingSession && !state.toolgenActive && !state.compacting;
 
+  // Shared by the top-level feed and every subsession group's inner transcript
+  // (SubsessionGroupView) so `ask_user` gets the same live-panel special-case
+  // wherever it appears.
+  function renderEntry(entry: SessionEntry, key: number | string) {
+    if (entry.type === 'ask_user') {
+      // Keyed by toolCallId so local selections and the mount-only
+      // auto-scroll survive history reconciliation reordering indexes.
+      return (
+        <AskUserPanel
+          key={entry.toolCallId}
+          entry={entry}
+          requestId={
+            state.pendingQuestion !== null && state.pendingQuestion.toolCallId === entry.toolCallId
+              ? state.pendingQuestion.requestId
+              : null
+          }
+          onRespond={(requestId: string, answers: AskUserAnswer[]) => {
+            vscode.postMessage({ type: 'question_respond', requestId, answers });
+            dispatch({ type: 'question_answered', toolCallId: entry.toolCallId, answers });
+          }}
+        />
+      );
+    }
+    return <SessionEntryView key={key} entry={entry} uiSettings={state.uiSettings} />;
+  }
+
   return (
     <div style={styles.root}>
       {/* Resume banner */}
@@ -487,31 +525,20 @@ export function App() {
         cumulativeUsd={state.cumulativeUsd}
         lastCallTokens={state.lastCallTokens}
         contextStats={state.contextStats}
+        subsessionContextStats={state.subsessionContextStats}
         compacting={state.compacting}
         onCompact={handleCompact}
       />
 
       {/* Session feed */}
       <div style={styles.stream}>
-        {state.session.map((entry, i) =>
-          entry.type === 'ask_user' ? (
-            // Keyed by toolCallId so local selections and the mount-only
-            // auto-scroll survive history reconciliation reordering indexes.
-            <AskUserPanel
-              key={entry.toolCallId}
-              entry={entry}
-              requestId={
-                state.pendingQuestion !== null && state.pendingQuestion.toolCallId === entry.toolCallId
-                  ? state.pendingQuestion.requestId
-                  : null
-              }
-              onRespond={(requestId: string, answers: AskUserAnswer[]) => {
-                vscode.postMessage({ type: 'question_respond', requestId, answers });
-                dispatch({ type: 'question_answered', toolCallId: entry.toolCallId, answers });
-              }}
-            />
+        {groupSessionEntries(state.session).map((block) =>
+          block.kind === 'entry' ? (
+            renderEntry(block.entry, block.index)
           ) : (
-            <SessionEntryView key={i} entry={entry} uiSettings={state.uiSettings} />
+            <SubsessionGroupView key={block.index} group={block} uiSettings={state.uiSettings}>
+              {block.inner.map((e, j) => renderEntry(e, `${block.index}-${j}`))}
+            </SubsessionGroupView>
           ),
         )}
         {state.streamingThinking && (

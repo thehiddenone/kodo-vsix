@@ -13,3 +13,7 @@ vsc-extension-quickstart.md
 **/*.ts
 **/.vscode-test.*
 **/*.svg
+**/*.txt
+.kodo/
+.claude/
+CLAUDE.md

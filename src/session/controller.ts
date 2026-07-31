@@ -699,12 +699,24 @@ export class SessionController {
     }
 
     if (env.kind === 'event' && evtType === 'context.stats') {
-      this.activity.setContextStats({
-        currentTokens: Number(env.payload.current_tokens ?? 0),
-        limitTokens: Number(env.payload.limit_tokens ?? 0),
-        percent: Number(env.payload.percent ?? 0),
-        canCompact: Boolean(env.payload.can_compact ?? false),
-      });
+      const rawSub = env.payload.subsession;
+      const subsession =
+        rawSub && typeof rawSub === 'object'
+          ? {
+              currentTokens: Number((rawSub as Record<string, unknown>).current_tokens ?? 0),
+              limitTokens: Number((rawSub as Record<string, unknown>).limit_tokens ?? 0),
+              percent: Number((rawSub as Record<string, unknown>).percent ?? 0),
+            }
+          : null;
+      this.activity.setContextStats(
+        {
+          currentTokens: Number(env.payload.current_tokens ?? 0),
+          limitTokens: Number(env.payload.limit_tokens ?? 0),
+          percent: Number(env.payload.percent ?? 0),
+          canCompact: Boolean(env.payload.can_compact ?? false),
+        },
+        subsession,
+      );
       return;
     }
 

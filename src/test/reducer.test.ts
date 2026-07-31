@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 
 import { reducer, initial } from '../webview/reducer';
+import { groupSessionEntries } from '../webview/groupSubsessions';
 import type { State } from '../webview/types';
 
 // The mid-stream cyclic-thinking detector (doc/STUCK_DETECTION.md §2.7) --
@@ -109,5 +110,70 @@ suite('reducer — cyclic-thinking', () => {
         },
       ]);
     });
+  });
+});
+
+// Stopping the agent while a subsession is running must close out the
+// collapsible block instead of leaving it open forever: the server now sends
+// a subsession_ended event (marked failed) before the state event that
+// produces the 'interrupted' action (see kodo's stop()/_abort_active_subsession
+// in _subagents.py) -- this only exercises the client's existing reducer/
+// grouping logic against that same live-event order, no reducer.ts changes
+// were needed for this half of the fix.
+suite('reducer + groupSessionEntries -- Stop mid-subsession', () => {
+  test('subsession_ended(failed) then interrupted closes the block and places the callout outside it', () => {
+    let state = initial;
+    state = reducer(state, { type: 'subsession_started', displayName: 'Investigator', task: 'look into it' });
+    state = reducer(state, { type: 'token', text: 'partial findings so far' });
+    state = reducer(state, {
+      type: 'subsession_ended',
+      displayName: 'Investigator',
+      parentDisplayName: 'Guide',
+      failed: true,
+    });
+    state = reducer(state, { type: 'interrupted' });
+
+    const blocks = groupSessionEntries(state.session);
+    assert.strictEqual(blocks.length, 2);
+
+    const [group, callout] = blocks;
+    assert.strictEqual(group.kind, 'subsession_group');
+    assert.ok(group.kind === 'subsession_group');
+    assert.notStrictEqual(group.endEntry, null);
+    assert.strictEqual(group.endEntry?.failed, true);
+    // The in-flight assistant text streamed inside the subsession stays part
+    // of its collapsible block...
+    assert.deepStrictEqual(
+      group.inner.map((e) => e.type),
+      ['assistant_response'],
+    );
+
+    // ...while the interrupted callout lands as its own top-level block,
+    // outside the (now closed) subsession group.
+    assert.strictEqual(callout.kind, 'entry');
+    assert.ok(callout.kind === 'entry');
+    assert.strictEqual(callout.entry.type, 'interrupted');
+  });
+
+  test('a message sent after Stop is a new top-level block, not swallowed into the closed group', () => {
+    let state = initial;
+    state = reducer(state, { type: 'subsession_started', displayName: 'Investigator', task: 'look into it' });
+    state = reducer(state, {
+      type: 'subsession_ended',
+      displayName: 'Investigator',
+      parentDisplayName: 'Guide',
+      failed: true,
+    });
+    state = reducer(state, { type: 'interrupted' });
+    state = reducer(state, {
+      type: 'prompt_sent',
+      text: 'continue',
+    });
+
+    const blocks = groupSessionEntries(state.session);
+    const last = blocks[blocks.length - 1];
+    assert.strictEqual(last.kind, 'entry');
+    assert.ok(last.kind === 'entry');
+    assert.strictEqual(last.entry.type, 'user_message');
   });
 });
