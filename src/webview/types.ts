@@ -77,7 +77,7 @@ export interface GateData {
 
 /** One question in an ask_user batch. `options` are plain answer strings, the
  *  agent's top choice first; the UI always appends a free-text option itself.
- *  An empty `options` list means free-text-only (escalate_blocker's prompt). */
+ *  An empty `options` list means free-text-only. */
 export interface AskUserQuestion {
   question: string;
   kind: 'single_choice' | 'multi_choice';

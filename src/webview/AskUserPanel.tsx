@@ -17,8 +17,7 @@ import type { AskUserAnswer, AskUserQuestion, SessionEntry } from './types';
  * the persisted tool call + result after a reload): the same boxes render
  * read-only with the confirmed selections.
  *
- * A question with an empty `options` list (escalate_blocker's prompt) renders
- * as free-text-only.
+ * A question with an empty `options` list renders as free-text-only.
  */
 
 interface QuestionSelection {
