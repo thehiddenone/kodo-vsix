@@ -1,7 +1,7 @@
 # Kōdo
 
 <p align="center">
-    <img src="images/kodo256px.png" width="100%" height="256px" alt="Kodo"/>
+    <img src="images/kodo256px.png" width="256px" height="256px" alt="Kodo"/>
 </p>
 
 **Kōdo** (コード) turns natural language into working code through a multi-agent LLM workflow — and it's built from the ground up to run that workflow on your own hardware, model included. No subscription, no API key, no round trip to someone else's datacenter.
