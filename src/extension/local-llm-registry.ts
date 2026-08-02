@@ -10,10 +10,10 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { makeRequest } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
-import type { LocalRegistryEntry } from '../llm-registry-types';
-import { hardwareFitWarningForFlavor, isDownloadableLocalEntry } from '../llm-registry-types';
+import type { LocalLaunchWarning, LocalRegistryEntry } from '../llm-registry-types';
+import { hardwareFitWarningForFlavor, isDownloadableLocalEntry, localLaunchWarnings } from '../llm-registry-types';
 import { sendControl } from './control-send';
-import { readSettings, writeSettings } from './settings-io';
+import { dismissLocalLaunchWarnings, readSettings, readUiSettings, writeSettings } from './settings-io';
 import { state } from './state';
 import { broadcastThinkingContext, parseThinkingFamilies } from './thinking-context';
 
@@ -131,6 +131,72 @@ export async function setActiveFlavor(name: string, flavorId: string): Promise<v
     }
   }
   sendControl(makeRequest('local_llm.set_active_flavor', { name, flavor_id: flavorId }));
+}
+
+/** The active local model entry plus its outstanding memory/llama.cpp-version
+ * warnings, or `null` when there's no active entry or it has none — reads
+ * window-global state only, since the active local model and the installed
+ * llama.cpp build are both machine-wide, not per-session. */
+function activeLocalLaunchWarnings(): { entry: LocalRegistryEntry; warnings: LocalLaunchWarning[] } | null {
+  const entry = state.localRegistryState.find((e) => e.name === state.activeLocalModelState);
+  if (!entry) { return null; }
+  const installedVersion = state.llamaInstalledState && state.llamaVersionState ? state.llamaVersionState : null;
+  const warnings = localLaunchWarnings(entry, state.detectedVramGbState, state.detectedRamGbState, installedVersion);
+  return warnings.length > 0 ? { entry, warnings } : null;
+}
+
+/**
+ * Before actually launching llama-server — the sidebar's explicit
+ * Start/Restart button, or a local-mode prompt about to trigger the engine's
+ * automatic launch — warn the user about every outstanding memory/llama.cpp-
+ * version warning on the active model and let them cancel (the dialog's
+ * implicit Cancel/Escape, same convention as `setActiveFlavor` below), start
+ * anyway, or — only when a llama.cpp version warning is present — jump to
+ * Kōdo Settings to update llama.cpp instead of starting.
+ *
+ * `openSettings` is injected rather than imported directly (e.g. from
+ * kodo-settings-bridge.ts) to avoid a circular import: kodo-settings-bridge.ts
+ * already imports from this module and from window-sessions.ts, both of
+ * which need to call this gate.
+ *
+ * A "Start anyway, don't ask again for this model" choice permanently
+ * suppresses the dialog for this exact registry entry (`dismissLocalLaunchWarnings`,
+ * `settings-io.ts` — persisted in `~/.kodo/etc/ui-settings.json`), checked
+ * up front on every call: once set, EVERY future launch of this quant skips
+ * the dialog no matter what warnings apply then, and there is no UI to unset it.
+ *
+ * Returns `true` to proceed with the launch, `false` to cancel — always
+ * `true` when the active model has no outstanding warnings, or was
+ * previously dismissed.
+ */
+export async function confirmLocalLlamaLaunch(openSettings: () => void): Promise<boolean> {
+  if (readUiSettings().dismissedLocalLaunchWarnings.includes(state.activeLocalModelState)) {
+    return true;
+  }
+  const found = activeLocalLaunchWarnings();
+  if (!found) { return true; }
+  const { entry, warnings } = found;
+  const message = [
+    `Starting llama.cpp with "${entry.name}" may cause problems:`,
+    ...warnings.map((w) => w.text),
+  ].join('\n\n');
+  const proceedLabel = 'Start anyway';
+  const dontAskLabel = "Start anyway, don't ask again for this model";
+  const settingsLabel = 'Update llama.cpp…';
+  const needsUpdate = warnings.some((w) => w.kind === 'version');
+  const items = needsUpdate
+    ? [proceedLabel, dontAskLabel, settingsLabel]
+    : [proceedLabel, dontAskLabel];
+  const choice = await vscode.window.showWarningMessage(message, { modal: true }, ...items);
+  if (choice === settingsLabel) {
+    openSettings();
+    return false;
+  }
+  if (choice === dontAskLabel) {
+    dismissLocalLaunchWarnings(entry.name);
+    return true;
+  }
+  return choice === proceedLabel;
 }
 
 /** "Show me local files" — reveal the installed model's file in Finder/Explorer/etc.

@@ -12,6 +12,7 @@ import type { Envelope } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { LlamaCppInfo } from '../settings-panel/types';
 import { sendControl, sendControlAwait } from './control-send';
+import { confirmLocalLlamaLaunch } from './local-llm-registry';
 import { state } from './state';
 
 /** Current llama.cpp info as the Kōdo Settings panel's "Llama.cpp" section
@@ -77,8 +78,15 @@ export function applyLlamaState(payload: Record<string, unknown>): void {
   });
 }
 
-export function startLlamaCpp(): void {
+/**
+ * Start (or restart) llama.cpp for the active local model — gated behind
+ * `confirmLocalLlamaLaunch` when that model has outstanding memory/llama.cpp-
+ * version warnings. `openSettings` is forwarded straight through to the gate
+ * (see its doc comment in local-llm-registry.ts for why it's injected).
+ */
+export async function startLlamaCpp(openSettings: () => void): Promise<void> {
   if (state.llamaStartingState) { return; }
+  if (!(await confirmLocalLlamaLaunch(openSettings))) { return; }
   const isRestart = state.llamaRunningState;
   const notifTitle = isRestart ? 'llama.cpp is restarting…' : 'llama.cpp is starting…';
 

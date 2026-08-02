@@ -15,6 +15,7 @@ import { SessionController } from '../session/controller';
 import { applyLlamaState } from './llamacpp';
 import { handleApiKeyRequest, pushCloudAiSettingsState } from './cloud-ai-settings';
 import { handleChooseProjectFolder } from './create-project';
+import { confirmLocalLlamaLaunch } from './local-llm-registry';
 import { reconnectSessionWorkspace } from './session-resume';
 import { sendControlAwait } from './control-send';
 import { buildFolderMap, codeWorkspaceFile, readUiSettings } from './settings-io';
@@ -49,6 +50,22 @@ function sessionDeps(): SessionDeps {
     },
     onSessionAssigned: (_c, sessionId) => rememberOpenSession(sessionId),
     onLlamaState: applyLlamaState,
+    confirmLocalLaunch: () => {
+      // A launch only actually occurs if we're in local mode and the running
+      // server (if any) isn't already serving the active model — mirrors the
+      // condition an engine run's own auto-start check would find true.
+      const wouldLaunch =
+        state.modeState === 'local' &&
+        (!state.llamaRunningState || state.llamaRunningModelState !== state.activeLocalModelState);
+      if (!wouldLaunch) {
+        return Promise.resolve(true);
+      }
+      // `kodo.openSettings` (not a direct kodo-settings-bridge.ts import) to
+      // avoid a circular import — see confirmLocalLlamaLaunch's doc comment.
+      return confirmLocalLlamaLaunch(() =>
+        void vscode.commands.executeCommand('kodo.openSettings', 'local-inference'),
+      );
+    },
     onClosed: (c) => {
       state.sessions.delete(c.key);
       // A real user close (or delete, or a session_in_use bounce) means this

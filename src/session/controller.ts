@@ -360,6 +360,15 @@ export class SessionController {
    * `create_new_project`/`init_project`) — there is no separate binding step.
    */
   private async _submitPrompt(text: string): Promise<void> {
+    // The webview already echoed this prompt into its own transcript
+    // optimistically (App.tsx's sendPrompt/'prompt_sent'), before the host
+    // ever sees this message — so a cancel here leaves that echo in place
+    // with nothing sent; tell the user explicitly rather than let it look
+    // like a silent hang.
+    if (!(await this.deps.confirmLocalLaunch())) {
+      void vscode.window.showWarningMessage('Kōdo: prompt not sent — llama.cpp was not started.');
+      return;
+    }
     this.lastPrompt = text;
     this.activity.resetForSubmit();
     this.gates.clearAll();

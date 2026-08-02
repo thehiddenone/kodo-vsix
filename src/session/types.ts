@@ -220,6 +220,15 @@ export interface SessionDeps {
    * mirror + "starting…" progress notification.
    */
   onLlamaState: (payload: Record<string, unknown>) => void;
+  /**
+   * Called right before submitting a prompt that would trigger llama.cpp's
+   * automatic launch (local mode, active model not already running) — warns
+   * about outstanding memory/llama.cpp-version warnings on the active model
+   * and resolves `false` if the user cancelled (or chose to jump to Kōdo
+   * Settings instead). Resolves `true` immediately, with no dialog, when no
+   * launch would occur or the active model has no outstanding warnings.
+   */
+  confirmLocalLaunch: () => Promise<boolean>;
   /** Called when the panel is disposed (user closed the tab, or reload). */
   onClosed: (c: SessionController) => void;
   /** True while the extension host is deactivating (window reload/close). */

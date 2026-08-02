@@ -95,6 +95,14 @@ export interface UiSettings {
   pinnedLocalModels: string[];
   /** Same as `pinnedLocalModels` but for cloud vendor keys. */
   pinnedCloudVendors: string[];
+  /** Local registry entry names ("quants") for which the user picked "Start
+   *  anyway, don't ask again" on the pre-launch memory/llama.cpp-version
+   *  warning dialog (`confirmLocalLlamaLaunch`, `extension/local-llm-registry.ts`)
+   *  — every future launch attempt for that exact quant skips the dialog
+   *  entirely, no matter what warnings apply at the time. One-way: nothing
+   *  in the product removes an entry from this list once added (no "re-enable
+   *  warnings" UI exists), mirroring how this whole file has no in-app editor. */
+  dismissedLocalLaunchWarnings: string[];
 }
 
 /** Payloads shared with the (former, now-merged-in) Local Inference Settings

@@ -191,7 +191,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (msg.type === 'open_kodo_settings') {
         void openKodoSettings();
       } else if (msg.type === 'start_llamacpp') {
-        startLlamaCpp();
+        void startLlamaCpp(() => void openKodoSettings('local-inference'));
       } else if (msg.type === 'stop_llamacpp') {
         state.llamaStoppingState = true;
         state.sidebarProvider?.update({ llamaStopping: true });
@@ -216,7 +216,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     }),
     vscode.commands.registerCommand('kodo.openPanel', () => openPanel()),
-    vscode.commands.registerCommand('kodo.openSettings', () => void openKodoSettings()),
+    // Optional `selectSection` arg lets programmatic callers (e.g. the
+    // prompt-send local-launch gate in window-sessions.ts, which can't import
+    // kodo-settings-bridge.ts directly without a circular import) jump
+    // straight to a tab; the Command Palette invocation passes none.
+    vscode.commands.registerCommand('kodo.openSettings', (selectSection?: string) => void openKodoSettings(selectSection)),
     vscode.commands.registerCommand('kodo.newSession', () => newSession()),
     vscode.commands.registerCommand('kodo.createProject', () => createProject()),
     vscode.commands.registerCommand('kodo.useCloudLLMs', () => setMode('cloud')),

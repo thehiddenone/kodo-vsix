@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import type { CloudRegistry, LocalRegistryEntry } from './llm-registry-types';
+import type { CloudRegistry, LocalLaunchWarning, LocalRegistryEntry } from './llm-registry-types';
+import { localLaunchWarnings } from './llm-registry-types';
 
 export interface SidebarState {
   connected: boolean;
@@ -81,7 +82,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private _post(state: SidebarState): void {
-    this._view?.webview.postMessage({ type: 'update', ...state });
+    this._view?.webview.postMessage({ type: 'update', ...state, localWarnings: this._computeLocalWarnings(state) });
+  }
+
+  // Outstanding memory/llama.cpp-version warnings per local LLM, keyed by
+  // registry name — computed here (not in the webview's plain-JS script,
+  // which can't import this TS module) so the sidebar card's warning icon
+  // uses the exact same rules as the launch-gating confirm dialog
+  // (`activeLocalLaunchWarnings` in extension/local-llm-registry.ts).
+  private _computeLocalWarnings(state: SidebarState): Record<string, LocalLaunchWarning[]> {
+    const installedVersion = state.llamaInstalled && state.llamaVersion ? state.llamaVersion : null;
+    const result: Record<string, LocalLaunchWarning[]> = {};
+    for (const entry of state.localRegistry) {
+      const warnings = localLaunchWarnings(entry, state.detectedVramGb, state.detectedRamGb, installedVersion);
+      if (warnings.length > 0) {
+        result[entry.name] = warnings;
+      }
+    }
+    return result;
   }
 }
 
@@ -225,6 +243,15 @@ function buildHtml(): string {
       color: var(--vscode-charts-yellow, #cca700);
       opacity: 1;
     }
+    .warn-btn {
+      all: unset;
+      flex-shrink: 0;
+      cursor: default;
+      line-height: 1;
+      font-size: 1em;
+    }
+    .warn-btn.level-yellow { color: var(--vscode-charts-yellow, #cca700); }
+    .warn-btn.level-red { color: var(--vscode-errorForeground, #f44336); }
     .card-meta-line {
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
@@ -367,6 +394,7 @@ function buildHtml(): string {
       llamaStopping: false,
       pinnedLocalModels: [],
       pinnedCloudVendors: [],
+      localWarnings: {},
     };
 
     // Sorts \`items\` so entries named in \`pinned\` (pin order — oldest pin
@@ -394,6 +422,20 @@ function buildHtml(): string {
           onToggle();
         }
       });
+      return btn;
+    }
+
+    // \`warnings\` is the model's LocalLaunchWarning[] (kind/level/text) sent
+    // by the extension host (see SidebarProvider._computeLocalWarnings in
+    // sidebar-provider.ts) — 'red' outranks 'yellow' for the icon's color
+    // when both are present. Returns null when there's nothing to show.
+    function makeWarningButton(warnings) {
+      if (!warnings || warnings.length === 0) { return null; }
+      const level = warnings.some(w => w.level === 'red') ? 'red' : 'yellow';
+      const btn = document.createElement('span');
+      btn.className = 'warn-btn level-' + level;
+      btn.textContent = '⚠';
+      btn.title = warnings.map(w => w.text).join('\\n');
       return btn;
     }
 
@@ -541,6 +583,9 @@ function buildHtml(): string {
         nameEl.className = 'card-name';
         nameEl.textContent = model.description;
         header.appendChild(nameEl);
+
+        const warnBtn = makeWarningButton(_state.localWarnings[model.name]);
+        if (warnBtn) { header.appendChild(warnBtn); }
 
         const isPinned = _state.pinnedLocalModels.includes(model.name);
         header.appendChild(makePinButton(isPinned, () => {
@@ -758,6 +803,7 @@ function buildHtml(): string {
       if (data.llamaStopping !== undefined) { _state.llamaStopping = Boolean(data.llamaStopping); }
       if (Array.isArray(data.pinnedLocalModels)) { _state.pinnedLocalModels = data.pinnedLocalModels; }
       if (Array.isArray(data.pinnedCloudVendors)) { _state.pinnedCloudVendors = data.pinnedCloudVendors; }
+      if (data.localWarnings && typeof data.localWarnings === 'object') { _state.localWarnings = data.localWarnings; }
 
       renderCards();
     });

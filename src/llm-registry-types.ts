@@ -273,6 +273,63 @@ export function hardwareFitWarningForFlavor(
     'llama.cpp to crash from running out of memory.';
 }
 
+export interface LocalLaunchWarning {
+  kind: 'memory' | 'version';
+  level: 'red' | 'yellow';
+  text: string;
+}
+
+/**
+ * Outstanding memory/llama.cpp-version warnings for `entry` given the
+ * currently detected hardware and installed llama.cpp build — the same
+ * rules as `ramWarning`/`llamacppVersionWarning` in
+ * settings-webview/localLlmUtils.ts, duplicated here (not imported) because
+ * that module belongs to the webview bundle while this one is
+ * extension-host-importable (see `hardwareFitWarningForFlavor` above for the
+ * same reasoning). Used to gate an actual llama-server launch
+ * (`confirmLocalLlamaLaunch` in extension/local-llm-registry.ts) rather than
+ * just render inline text — keep both copies of these rules in sync if
+ * either changes.
+ */
+export function localLaunchWarnings(
+  entry: LocalRegistryEntry,
+  detectedVramGb: number | null,
+  detectedRamGb: number | null,
+  installedLlamaCppVersion: string | null,
+): LocalLaunchWarning[] {
+  const warnings: LocalLaunchWarning[] = [];
+  if (detectedVramGb !== null || detectedRamGb !== null) {
+    const total = (detectedVramGb || 0) + (detectedRamGb || 0);
+    const min = entry.min_memory || 0;
+    const rec = entry.memory || 0;
+    if (min > 0 && total < min) {
+      warnings.push({
+        kind: 'memory',
+        level: 'red',
+        text: `⛔ This LLM will likely not run on this machine — it needs at least ${min} GB of combined VRAM + RAM, but only ${total} GB was detected.`,
+      });
+    } else if (rec > 0 && total < rec) {
+      warnings.push({
+        kind: 'memory',
+        level: 'yellow',
+        text: `⚠️ This LLM may not perform well with large contexts on this machine — ${rec} GB of combined VRAM + RAM is recommended, but only ${total} GB was detected.`,
+      });
+    }
+  }
+  const required = entry.llamacpp_version || 0;
+  if (required > 0 && installedLlamaCppVersion) {
+    const installed = parseInt(installedLlamaCppVersion.replace(/^b/i, ''), 10);
+    if (Number.isFinite(installed) && installed < required) {
+      warnings.push({
+        kind: 'version',
+        level: 'red',
+        text: `⛔ The installed llama.cpp (b${installed}) does not support this LLM — it requires at least b${required}. Update llama.cpp to run it.`,
+      });
+    }
+  }
+  return warnings;
+}
+
 /** Which llama.cpp reasoning-tiering mechanism a `base_llm` uses — see
  * kodo/doc/LLM_REGISTRY.md §4.5. `qwen_reasoning_budget` rides a 6-tier
  * `--reasoning-budget`/`thinking_budget_tokens` scale; `gpt_oss_reasoning_effort`

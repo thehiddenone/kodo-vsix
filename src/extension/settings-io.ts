@@ -46,6 +46,7 @@ const DEFAULT_UI_SETTINGS: UiSettings = {
   enterSubmits: true,
   pinnedLocalModels: [],
   pinnedCloudVendors: [],
+  dismissedLocalLaunchWarnings: [],
 };
 
 /**
@@ -80,6 +81,9 @@ export function readUiSettings(): UiSettings {
     pinnedCloudVendors: Array.isArray(raw.pinnedCloudVendors)
       ? raw.pinnedCloudVendors.filter((n): n is string => typeof n === 'string')
       : DEFAULT_UI_SETTINGS.pinnedCloudVendors,
+    dismissedLocalLaunchWarnings: Array.isArray(raw.dismissedLocalLaunchWarnings)
+      ? raw.dismissedLocalLaunchWarnings.filter((n): n is string => typeof n === 'string')
+      : DEFAULT_UI_SETTINGS.dismissedLocalLaunchWarnings,
   };
 }
 
@@ -111,6 +115,22 @@ export function togglePinnedCloudVendor(vendor: string): UiSettings {
     ? settings.pinnedCloudVendors.filter((v) => v !== vendor)
     : [...settings.pinnedCloudVendors, vendor];
   return writeUiSettings({ ...settings, pinnedCloudVendors });
+}
+
+/** Permanently suppress the pre-launch memory/llama.cpp-version warning
+ *  dialog (`confirmLocalLlamaLaunch`, `extension/local-llm-registry.ts`) for
+ *  one local registry entry — the "Start anyway, don't ask again" button's
+ *  effect. One-way (unlike `togglePinnedLocalModel`, this never removes
+ *  `name` again) and idempotent (a no-op write if already dismissed). */
+export function dismissLocalLaunchWarnings(name: string): UiSettings {
+  const settings = readUiSettings();
+  if (settings.dismissedLocalLaunchWarnings.includes(name)) {
+    return settings;
+  }
+  return writeUiSettings({
+    ...settings,
+    dismissedLocalLaunchWarnings: [...settings.dismissedLocalLaunchWarnings, name],
+  });
 }
 
 /** Push the current "Show Timestamps" flags to every open session tab in
