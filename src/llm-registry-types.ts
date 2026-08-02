@@ -95,6 +95,10 @@ export interface LocalRegistryEntry {
   min_memory: number;
   /** Recommended VRAM (GB) for large contexts; 0 = no known recommendation. */
   memory: number;
+  /** Org/company that produced the original (unquantized) model, e.g. "Alibaba Cloud". `hardcoded_hf` only — "" otherwise. */
+  llm_author: string;
+  /** Minimum llama.cpp build number (matching the `b<N>` scheme reported by the installed build) this LLM needs; 0 = any version works. */
+  llamacpp_version: number;
   /**
    * Maximum input-context size in tokens, as configured on the
    * `LocalLLMEntry` itself (kodo/llms/_local_registry.py) — the fallback

@@ -106,6 +106,8 @@ export interface LocalRegistryEntry {
   gpu_tip?: string;
   min_memory?: number;
   memory?: number;
+  llm_author?: string;
+  llamacpp_version?: number;
   installed: boolean;
   installed_path?: string;
   flavors: LocalFlavor[];

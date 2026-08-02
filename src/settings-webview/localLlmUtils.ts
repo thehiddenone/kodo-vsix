@@ -96,3 +96,27 @@ export function ramWarning(
   }
   return null;
 }
+
+export interface LlamaCppVersionWarning {
+  level: 'red';
+  text: string;
+}
+
+// entry.llamacpp_version is a bare build number (0 = "any version works —
+// don't warn"); the installed version is the "b<N>" string llama-server
+// itself reports (see doc/WS_PROTOCOL.md §4.1, doc/LLM_REGISTRY.md §4.4).
+// installedVersion is null until the first hello.ack/version_info reply —
+// don't warn on unknown state, same convention as ramWarning's vram/ram nulls.
+export function llamacppVersionWarning(
+  entry: LocalRegistryEntry,
+  installedVersion: string | null,
+): LlamaCppVersionWarning | null {
+  const required = entry.llamacpp_version || 0;
+  if (required <= 0 || !installedVersion) { return null; }
+  const installed = parseInt(installedVersion.replace(/^b/i, ''), 10);
+  if (!Number.isFinite(installed) || installed >= required) { return null; }
+  return {
+    level: 'red',
+    text: `⛔ The installed llama.cpp (b${installed}) does not support this LLM — it requires at least b${required}. Update llama.cpp to run it.`,
+  };
+}

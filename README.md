@@ -48,7 +48,7 @@ Then pick how you want to drive it.
 | --- | --- |
 | **Qwen 3.6 27B** (dense) | Works. A reasonable first download. |
 | **Qwen 3.6 35B-A3B** (MoE) | Works. |
-| **Ornith 1.0 35B** | Works, and is very good. |
+| **Ornith 1.0 35B-A3B** | Works, and is very good. |
 | **Gemma 4 26B-A4B** | Works, but noticeably less stable than the three above. |
 | Everything else in the catalogue | Sized and curated. Not yet driven hard enough to make a claim. |
 

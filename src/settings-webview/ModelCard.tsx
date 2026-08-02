@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { DOWNLOADABLE, CUSTOM, FLAVOR_CAPABLE, ramWarning } from './localLlmUtils';
+import { DOWNLOADABLE, CUSTOM, FLAVOR_CAPABLE, ramWarning, llamacppVersionWarning } from './localLlmUtils';
 import type { LocalRegistryEntry } from './types';
 import { vscode } from './vscode';
 
@@ -10,14 +10,16 @@ interface ModelCardProps {
   isMac: boolean;
   detectedVramGb: number | null;
   detectedRamGb: number | null;
+  installedLlamaCppVersion: string | null;
   onManageFlavors: (name: string) => void;
 }
 
 export function ModelCard({
-  entry, downloadingNames, updatableNames, isMac, detectedVramGb, detectedRamGb, onManageFlavors,
+  entry, downloadingNames, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion, onManageFlavors,
 }: ModelCardProps) {
   const tip = isMac ? entry.mac_tip : entry.gpu_tip;
   const warning = ramWarning(entry, detectedVramGb, detectedRamGb);
+  const versionWarning = llamacppVersionWarning(entry, installedLlamaCppVersion);
   const updatable = DOWNLOADABLE.has(entry.kind) && entry.installed && updatableNames.includes(entry.name);
   // Immediate feedback only — the next 'update' (kickoff reply, disk-poll
   // tick, or an error event's registry_state) always re-renders this card
@@ -59,6 +61,8 @@ export function ModelCard({
       {tip && <div className="hw-tip">{tip}</div>}
 
       {warning && <div className={`ram-warning ${warning.level}`}>{warning.text}</div>}
+
+      {versionWarning && <div className={`ram-warning ${versionWarning.level}`}>{versionWarning.text}</div>}
 
       {entry.installed && <span className="installed-tag">Installed</span>}
 

@@ -39,6 +39,7 @@ export function LocalInferenceSection(props: LocalInferenceSectionProps) {
         isMac={props.isMac}
         detectedVramGb={props.detectedVramGb}
         detectedRamGb={props.detectedRamGb}
+        installedLlamaCppVersion={props.llamaCpp.installedVersion}
         onAddHf={props.onAddHf}
         onAddFile={props.onAddFile}
         onAddServer={props.onAddServer}
