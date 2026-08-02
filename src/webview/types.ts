@@ -46,14 +46,22 @@ export interface UiSettings {
   showTimestamps: boolean;
   timezone: string;
   clockFormat: ClockFormatPreset;
+  /** Whether Enter (alone) sends the prompt and Shift+Enter adds a newline
+   *  (`true`, the default — preserves the input box's original behavior), or
+   *  the reverse (`false`: Enter adds a newline, Shift+Enter sends). Read by
+   *  `App.tsx`'s `handleKeyDown`. Backs the "General" section's "How to
+   *  submit a prompt" radio choice. */
+  enterSubmits: boolean;
 }
 
-/** Flags-off, system-zone, ISO-order-24h default — matches extension.ts's
- *  `_DEFAULT_UI_SETTINGS` and settings-webview/reducer.ts's initial `uiSettings`. */
+/** Flags-off, system-zone, ISO-order-24h, Enter-sends default — matches
+ *  extension.ts's `_DEFAULT_UI_SETTINGS` and settings-webview/reducer.ts's
+ *  initial `uiSettings`. */
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   showTimestamps: false,
   timezone: 'system',
   clockFormat: 'ymd_24h',
+  enterSubmits: true,
 };
 
 export interface LastCallTokens {

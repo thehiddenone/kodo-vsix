@@ -78,6 +78,11 @@ export interface UiSettings {
   showTimestamps: boolean;
   timezone: string;
   clockFormat: string;
+  /** Whether Enter (alone) sends the prompt and Shift+Enter adds a newline
+   *  (`true`, the default — preserves the input box's original behavior), or
+   *  the reverse (`false`: Enter adds a newline, Shift+Enter sends). Backs
+   *  the "General" section's "How to submit a prompt" radio choice. */
+  enterSubmits: boolean;
   /** Names of pinned local LLM registry entries, in pin order (oldest pin
    *  first/topmost) — sidebar-only, never surfaced in this settings panel.
    *  See `sidebar-provider.ts`'s pin/unpin handling. */

@@ -43,6 +43,7 @@ const DEFAULT_UI_SETTINGS: UiSettings = {
   showTimestamps: false,
   timezone: 'system',
   clockFormat: 'ymd_24h',
+  enterSubmits: true,
   pinnedLocalModels: [],
   pinnedCloudVendors: [],
 };
@@ -72,6 +73,7 @@ export function readUiSettings(): UiSettings {
     showTimestamps: typeof raw.showTimestamps === 'boolean' ? raw.showTimestamps : DEFAULT_UI_SETTINGS.showTimestamps,
     timezone: typeof raw.timezone === 'string' && raw.timezone ? raw.timezone : DEFAULT_UI_SETTINGS.timezone,
     clockFormat: typeof raw.clockFormat === 'string' && raw.clockFormat ? raw.clockFormat : DEFAULT_UI_SETTINGS.clockFormat,
+    enterSubmits: typeof raw.enterSubmits === 'boolean' ? raw.enterSubmits : DEFAULT_UI_SETTINGS.enterSubmits,
     pinnedLocalModels: Array.isArray(raw.pinnedLocalModels)
       ? raw.pinnedLocalModels.filter((n): n is string => typeof n === 'string')
       : DEFAULT_UI_SETTINGS.pinnedLocalModels,

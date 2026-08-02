@@ -36,6 +36,7 @@ export interface UiSettings {
   showTimestamps: boolean;
   timezone: string;
   clockFormat: string;
+  enterSubmits: boolean;
 }
 
 /** Coerce an untyped wire value into a workflow mode (default guided). */

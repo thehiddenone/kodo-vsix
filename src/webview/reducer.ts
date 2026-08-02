@@ -1071,7 +1071,12 @@ export function reducer(state: State, action: Action): State {
     case 'ui_settings':
       return {
         ...state,
-        uiSettings: { showTimestamps: action.showTimestamps, timezone: action.timezone, clockFormat: action.clockFormat },
+        uiSettings: {
+          showTimestamps: action.showTimestamps,
+          timezone: action.timezone,
+          clockFormat: action.clockFormat,
+          enterSubmits: action.enterSubmits,
+        },
       };
     default:
       return state;

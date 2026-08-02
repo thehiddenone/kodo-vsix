@@ -50,6 +50,10 @@ export interface UiSettings {
   showTimestamps: boolean;
   timezone: string;
   clockFormat: string;
+  /** Whether Enter (alone) sends the prompt and Shift+Enter adds a newline
+   *  (`true`, the default), or the reverse (`false`). Backs the "General"
+   *  section's "How to submit a prompt" radio choice. */
+  enterSubmits: boolean;
 }
 
 export interface HfTokenEntry {

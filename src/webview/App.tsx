@@ -243,6 +243,7 @@ export function App() {
             showTimestamps: Boolean(msg.showTimestamps),
             timezone: typeof msg.timezone === 'string' && msg.timezone ? msg.timezone : 'system',
             clockFormat: coerceClockFormatPreset(msg.clockFormat),
+            enterSubmits: typeof msg.enterSubmits === 'boolean' ? msg.enterSubmits : true,
           });
           break;
         case 'file_change':
@@ -422,7 +423,13 @@ export function App() {
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key !== 'Enter') return;
+    // "How to submit a prompt" (Kōdo Settings > General): enterSubmits=true
+    // (default) sends on plain Enter, Shift+Enter adds a newline; false
+    // reverses it. Only preventDefault the combo that should send — the
+    // other falls through to the textarea's native newline-on-Enter behavior.
+    const shouldSend = state.uiSettings.enterSubmits ? !e.shiftKey : e.shiftKey;
+    if (shouldSend) {
       e.preventDefault();
       sendPrompt();
     }
@@ -645,7 +652,9 @@ export function App() {
             placeholder={
               state.pendingQuestion !== null
                 ? 'Answer the questions above, then Confirm and Send…'
-                : 'Type a prompt and press Enter…'
+                : state.uiSettings.enterSubmits
+                  ? 'Type a prompt and press Enter…'
+                  : 'Type a prompt and press Shift+Enter…'
             }
             disabled={inputDisabled}
             onKeyDown={handleKeyDown}
@@ -683,7 +692,7 @@ export function App() {
                 style={styles.sendBtn}
                 onClick={sendPrompt}
                 disabled={inputDisabled}
-                title="Send prompt (Enter)"
+                title={state.uiSettings.enterSubmits ? 'Send prompt (Enter)' : 'Send prompt (Shift+Enter)'}
               >
                 {isRunning ? '…' : '↑'}
               </FooterButton>

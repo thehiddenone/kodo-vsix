@@ -40,6 +40,38 @@ const STUCK_ACTIVE_OPTIONS: [StuckDetectionSettings['active'], string][] = [
   ['local_and_cloud', 'Both local LLMs and cloud LLMs'],
 ];
 
+function PromptSubmitSection({ uiSettings }: { uiSettings: UiSettings }) {
+  const post = (next: UiSettings) => vscode.postMessage({ type: 'set_ui_settings', ...next });
+  return (
+    <div>
+      <div className="section-subheading">How to submit a prompt</div>
+      <p className="intro-text">
+        Choose which key sends your prompt to Kōdo, and which one adds a new line in the input box instead.
+      </p>
+      <div className="radio-group">
+        <label className="radio-row">
+          <input
+            type="radio"
+            name="enter-submits"
+            checked={!uiSettings.enterSubmits}
+            onChange={(e) => (e.target as HTMLInputElement).checked && post({ ...uiSettings, enterSubmits: false })}
+          />
+          Enter adds a new line, Shift+Enter sends the prompt
+        </label>
+        <label className="radio-row">
+          <input
+            type="radio"
+            name="enter-submits"
+            checked={uiSettings.enterSubmits}
+            onChange={(e) => (e.target as HTMLInputElement).checked && post({ ...uiSettings, enterSubmits: true })}
+          />
+          Shift+Enter adds a new line, Enter sends the prompt
+        </label>
+      </div>
+    </div>
+  );
+}
+
 function ShowTimestampsSection({ uiSettings }: { uiSettings: UiSettings }) {
   const post = (next: UiSettings) => vscode.postMessage({ type: 'set_ui_settings', ...next });
   const disabled = !uiSettings.showTimestamps;
@@ -149,6 +181,8 @@ export function GeneralSection({ uiSettings, stuckDetection }: GeneralSectionPro
   return (
     <div>
       <h2>General</h2>
+      <hr className="section-divider" />
+      <PromptSubmitSection uiSettings={uiSettings} />
       <hr className="section-divider" />
       <ShowTimestampsSection uiSettings={uiSettings} />
       <hr className="section-divider" />
