@@ -81,6 +81,8 @@ export interface CloudVendorRegistryInfo {
 
 export type CloudRegistry = Record<string, CloudVendorRegistryInfo>;
 
+export type LlamaFlavorPlatform = 'mac' | 'gpu' | 'both';
+
 export interface LocalFlavor {
   id: string;
   name: string;
@@ -89,6 +91,7 @@ export interface LocalFlavor {
   min_ram?: number;
   min_vram?: number;
   predefined?: boolean;
+  platform?: LlamaFlavorPlatform;
 }
 
 export interface LocalRegistryEntry {
@@ -238,8 +241,8 @@ export type OutboundMessage =
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
   | { type: 'remove_override' }
-  | { type: 'add_flavor'; name: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number }
-  | { type: 'update_flavor'; name: string; flavor_id: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number }
+  | { type: 'add_flavor'; name: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
+  | { type: 'update_flavor'; name: string; flavor_id: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
   | { type: 'remove_flavor'; name: string; flavor_id: string };
 
 /** Messages the host can post into this webview. */

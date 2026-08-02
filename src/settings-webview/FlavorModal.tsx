@@ -12,8 +12,8 @@
  */
 
 import { useEffect, useState } from 'preact/hooks';
-import { llamaArgsToText, parseNonNegativeInt } from './localLlmUtils';
-import type { LocalFlavor, LocalRegistryEntry } from './types';
+import { FLAVOR_PLATFORM_OPTIONS, flavorPlatformBadge, llamaArgsToText, parseNonNegativeInt } from './localLlmUtils';
+import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry } from './types';
 import { vscode } from './vscode';
 
 interface FlavorModalProps {
@@ -31,6 +31,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
   const [llamaArgsText, setLlamaArgsText] = useState('');
   const [minRam, setMinRam] = useState('');
   const [minVram, setMinVram] = useState('');
+  const [platform, setPlatform] = useState<LlamaFlavorPlatform>('both');
 
   const selected = flavors.find((f) => f.id === selectedFlavorId) || null;
   const readOnly = Boolean(selected?.predefined);
@@ -52,12 +53,14 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
       setLlamaArgsText(llamaArgsToText(selected.llama_args));
       setMinRam(selected.min_ram ? String(selected.min_ram) : '');
       setMinVram(selected.min_vram ? String(selected.min_vram) : '');
+      setPlatform(selected.platform || 'both');
     } else {
       setName('');
       setDescription('');
       setLlamaArgsText('');
       setMinRam('');
       setMinVram('');
+      setPlatform('both');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFlavorId]);
@@ -89,6 +92,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
         llama_args_text: llamaArgsText,
         min_ram: parseNonNegativeInt(minRam),
         min_vram: parseNonNegativeInt(minVram),
+        platform,
       });
     } else {
       vscode.postMessage({
@@ -99,6 +103,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
         llama_args_text: llamaArgsText,
         min_ram: parseNonNegativeInt(minRam),
         min_vram: parseNonNegativeInt(minVram),
+        platform,
       });
       // Stays open in "add another" mode — the freshly-added flavor shows up
       // in the left pane once the next registry_state arrives.
@@ -107,6 +112,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
       setLlamaArgsText('');
       setMinRam('');
       setMinVram('');
+      setPlatform('both');
     }
   }
 
@@ -133,6 +139,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
                 >
                   <div className="flavor-row-name">
                     {f.name}{f.id === activeId ? ' (active)' : ''}{f.predefined ? ' — built-in' : ''}
+                    {flavorPlatformBadge(f.platform) ? ` — ${flavorPlatformBadge(f.platform)}` : ''}
                   </div>
                   {f.description && <div className="flavor-row-desc">{f.description}</div>}
                 </div>
@@ -216,6 +223,25 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
                   value={minVram}
                   onInput={(e) => setMinVram((e.target as HTMLInputElement).value)}
                 />
+              </div>
+            </div>
+            <div className="modal-field">
+              <label for="flavor-platform">Platform compatibility</label>
+              <select
+                id="flavor-platform"
+                className="settings-select"
+                disabled={readOnly}
+                value={platform}
+                onChange={(e) => setPlatform((e.target as HTMLSelectElement).value as LlamaFlavorPlatform)}
+              >
+                {FLAVOR_PLATFORM_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <div className="field-hint">
+                Which host(s) this flavor may be launched on. Restrict it if the launch args only make sense on
+                one platform (e.g. a huge context flavor that only fits Apple Silicon&apos;s unified memory) —
+                kodo skips an incompatible flavor when auto-selecting a default.
               </div>
             </div>
             <div className="field-hint">

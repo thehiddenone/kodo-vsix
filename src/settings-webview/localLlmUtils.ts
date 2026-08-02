@@ -2,7 +2,7 @@
  *  modals — parsing form input into the wire shapes the host expects, and
  *  the local-registry name-clash check every add form validates against. */
 
-import type { LocalRegistryEntry } from './types';
+import type { LlamaFlavorPlatform, LocalRegistryEntry } from './types';
 
 export const DEFAULT_CONTEXT_WINDOW = 262144;
 export const HF_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -31,6 +31,24 @@ export function llamaArgsToText(llamaArgs: Record<string, string> | undefined): 
   return Object.entries(llamaArgs || {})
     .map(([flag, value]) => (value ? `${flag} ${value}` : flag))
     .join('\n');
+}
+
+// The "Manage flavors" modal's platform radio group — order matters (render
+// order). `both` (no restriction) is the default for a brand-new flavor,
+// mirroring the server's LlamaFlavorPlatform.BOTH default.
+export const FLAVOR_PLATFORM_OPTIONS: { value: LlamaFlavorPlatform; label: string }[] = [
+  { value: 'mac', label: 'Apple Silicon only' },
+  { value: 'gpu', label: 'NVIDIA GPU only' },
+  { value: 'both', label: 'Apple Silicon and NVIDIA GPU' },
+];
+
+// Short badge text for a flavor's platform restriction in the "Manage
+// flavors" list — omitted (empty string) for 'both' since that's "no
+// restriction," not something worth calling out next to every row.
+export function flavorPlatformBadge(platform: LlamaFlavorPlatform | undefined): string {
+  if (platform === 'mac') { return 'Apple Silicon only'; }
+  if (platform === 'gpu') { return 'NVIDIA GPU only'; }
+  return '';
 }
 
 export const DOWNLOADABLE = new Set(['hardcoded_hf', 'custom_hf']);

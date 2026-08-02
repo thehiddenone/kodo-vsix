@@ -26,6 +26,16 @@ export type CloudRegistry = Record<string, CloudVendorInfo>;
 export type LocalEntryKind = 'hardcoded_hf' | 'custom_hf' | 'custom_file' | 'custom_server_url';
 
 /**
+ * Which host platform(s) a flavor may be launched on (kodo/llms/
+ * _local_registry.py's `LlamaFlavorPlatform`) — `'mac'`/`'gpu'` restrict a
+ * flavor to Apple Silicon or a Windows/Linux discrete-GPU PC respectively
+ * (e.g. a huge YaRN-extended-context flavor that only fits in Apple
+ * Silicon's unified memory), `'both'` (the default for a new custom flavor)
+ * means no restriction.
+ */
+export type LlamaFlavorPlatform = 'mac' | 'gpu' | 'both';
+
+/**
  * A named llama-server launch config for one local registry entry — the
  * *only* source of its launch args (a local registry entry carries none of
  * its own). E.g. a "1M context" variant (YaRN rope-scaling + a much larger
@@ -66,6 +76,12 @@ export interface LlamaFlavorInfo {
    * extension.ts).
    */
   min_vram: number;
+  /** Which host platform(s) this flavor may be launched on — see
+   * {@link LlamaFlavorPlatform}. Purely informational client-side today
+   * (shown as a badge in the "Manage flavors" modal); the platform-aware
+   * *default*-flavor selection this drives happens server-side, in
+   * `get_effective_flavor_id` (kodo/llms/_local_registry.py). */
+  platform: LlamaFlavorPlatform;
 }
 
 export interface LocalRegistryEntry {

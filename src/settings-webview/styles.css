@@ -80,11 +80,11 @@
       cursor: pointer;
       flex-shrink: 0;
     }
-    .checkbox-row:has(input:disabled) {
+    .radio-row:has(input:disabled), .checkbox-row:has(input:disabled) {
       opacity: 0.5;
       cursor: default;
     }
-    .checkbox-row input:disabled {
+    .radio-row input:disabled, .checkbox-row input:disabled {
       cursor: default;
     }
     .select-row {
@@ -335,7 +335,7 @@
       margin: 0 0 14px;
     }
     .modal-field { margin-bottom: 12px; }
-    .modal-field label {
+    .modal-field > label {
       display: block;
       font-size: 0.85em;
       margin-bottom: 4px;
@@ -351,7 +351,7 @@
       margin-top: 3px;
       min-height: 1.1em;
     }
-    .modal-field input {
+    .modal-field > input {
       width: 100%;
       box-sizing: border-box;
       padding: 5px 7px;
@@ -362,9 +362,13 @@
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
     }
-    .modal-field input:focus {
+    .modal-field > input:focus {
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: -1px;
+    }
+    .modal-field > select {
+      width: 100%;
+      box-sizing: border-box;
     }
     .modal-field textarea {
       width: 100%;

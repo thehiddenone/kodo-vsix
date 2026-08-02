@@ -6,7 +6,13 @@
 
 import type { ApiKeyEntry } from '../cloud-credentials';
 import type { HfTokenEntry } from '../hf-tokens';
-import type { CloudRegistry, EffortLevel, LocalDownloadState, LocalRegistryEntry } from '../llm-registry-types';
+import type {
+  CloudRegistry,
+  EffortLevel,
+  LlamaFlavorPlatform,
+  LocalDownloadState,
+  LocalRegistryEntry,
+} from '../llm-registry-types';
 import type { RememberedWorkspace } from '../workspace-resume-policy';
 
 /** A granted "always allow" rule (doc/SECURITY_RULES_PLAN.md §2.7,
@@ -126,6 +132,8 @@ export interface AddFlavorPayload {
   /** GB, 0 = unknown/no requirement — see LlamaFlavorInfo.min_ram/min_vram. */
   min_ram: number;
   min_vram: number;
+  /** Defaults server-side to `'both'` if omitted — see LlamaFlavorInfo.platform. */
+  platform: LlamaFlavorPlatform;
 }
 
 export interface UpdateFlavorPayload {
@@ -141,6 +149,8 @@ export interface UpdateFlavorPayload {
    * modal always resends its own fields' current contents. */
   min_ram: number;
   min_vram: number;
+  /** Not carried forward if omitted (resets to `'both'`), same as min_ram/min_vram. */
+  platform: LlamaFlavorPlatform;
 }
 
 export interface KodoSettingsState {

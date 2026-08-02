@@ -430,6 +430,7 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
         llama_args_text: msg.llama_args_text,
         min_ram: msg.min_ram,
         min_vram: msg.min_vram,
+        platform: msg.platform,
       }),
     );
   } else if (msg.type === 'update_flavor') {
@@ -442,6 +443,7 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
         llama_args_text: msg.llama_args_text,
         min_ram: msg.min_ram,
         min_vram: msg.min_vram,
+        platform: msg.platform,
       }),
     );
   } else if (msg.type === 'remove_flavor') {
