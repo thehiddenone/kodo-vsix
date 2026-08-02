@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <svg xmlns="http://www.w3.org/2000/svg" version="1.1" baseProfile="full"
-     width="256px" height="256px" viewBox="0 0 256 256"
+     width="100%" height="256px" viewBox="0 0 100% 256"
      preserveAspectRatio="xMidYMid meet">
   <title>kodo256px.svg</title>
 
@@ -15,11 +15,6 @@
     }
     @keyframes blink {
       0%   { transform: scaleY(1) translateX(0px) translateY(0px) }
-      35%   { transform: scaleY(1) translateX(0px) translateY(0px) }
-      40%  { transform: translateX(10px); }
-      55%  { transform: translateX(10px); }
-      65%  { transform: translateX(0px) translateY(-20px); }
-      80%  { transform: translateX(0px) translateY(0px); }
       90%  { transform: scaleY(1); }
       91%  { transform: scaleY(0.2); }
       92%  { transform: scaleY(1); }
@@ -31,7 +26,7 @@
   ]]></style>
 
   <!-- Transparent background -->
-  <rect x="0" y="0" width="256" height="256" fill="none"/>
+  <rect x="0" y="0" width="100%" height="256px" fill="none"/>
 
   <!-- Base 'to' (ト): the face + nose, in the same serif font/colour as kodo128px.svg -->
   <text x="0" y="28" xml:space="preserve" text-rendering="geometricPrecision"
@@ -40,10 +35,10 @@
 
   <!-- Dakuten (゛): the two blinking eyes, same colour, top-right -->
   <g fill="#107C41">
-    <g transform="rotate(150 176 92)">
+    <g transform="rotate(170 170 88)">
       <rect class="eye" x="148" y="86" width="17" height="42" rx="10"/>
     </g>
-    <g transform="rotate(150 212 80)">
+    <g transform="rotate(170 206 76)">
       <rect class="eye" x="194" y="74" width="17" height="42" rx="10"/>
     </g>
   </g>

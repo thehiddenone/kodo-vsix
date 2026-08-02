@@ -414,7 +414,16 @@ export type SessionEntry =
   // (not a reuse of that one) since the root cause and message differ.
   // Persisted as an "agent_cyclic_thinking_critical" marker and replayed via
   // session_history on reload.
-  | { type: 'agent_cyclic_thinking_critical'; message: string; exclude_from_context: true };
+  | { type: 'agent_cyclic_thinking_critical'; message: string; exclude_from_context: true }
+  // The server-generated opening greeting for a brand-new session
+  // (kodo.titling.generate_greeting, runtime._engine._greeting.SessionGreeter)
+  // — replaces this WebView's own previously-hardcoded empty-state
+  // placeholder. Fired once, shortly after connect, from a background task
+  // that never delays hello.ack, so it may arrive a beat after the feed
+  // first renders. Persisted as a "greeting" marker and replayed via
+  // session_history on reload — the coding agent itself never sees it
+  // (kodo/doc/WS_PROTOCOL.md §5.9i).
+  | { type: 'greeting'; text: string; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -647,5 +656,6 @@ export type Action =
   | { type: 'checkpoint_state'; root: string; currentIndex: number; entries: { sha: string; undone: boolean }[] }
   | { type: 'interrupted' }
   | { type: 'runtime_error'; message: string; recoverable: boolean }
+  | { type: 'greeting'; text: string }
   | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer }
   | ({ type: 'ui_settings' } & UiSettings);

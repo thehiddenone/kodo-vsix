@@ -40,12 +40,17 @@ export function ThinkingBlock({ content, isActive, startedAt = null, durationMs 
 // ---------------------------------------------------------------------------
 
 /**
- * Marks where the prior conversation was summarised and the live LLM context
+ * Marks where the prior conversation was condensed and the live LLM context
  * reset. Rendered as a collapsible block in the same visual language as
  * ThinkingBlock: the summary line shows "✦ Context compacted (before → after
  * tokens)" and expanding it reveals the full summary — i.e. the exact context
  * the conversation continues from after compaction. Everything above the block
  * stays visible as history but is no longer part of the LLM context.
+ *
+ * The body is a condensed *transcript*, not a prose briefing — same turns as
+ * the original with `## USER` / `## ASSISTANT` headers, user prompts verbatim
+ * (kodo's `subagent_compactor.md`). It is shown as plain pre-wrapped text, not
+ * markdown, so those headers read as transcript labels rather than headings.
  */
 export function CompactionBlock({ summary, tokensBefore, tokensAfter }: { summary: string; tokensBefore: number; tokensAfter: number }) {
   const reduction =

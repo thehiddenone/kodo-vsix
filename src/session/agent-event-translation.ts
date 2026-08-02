@@ -226,6 +226,15 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     return true;
   }
 
+  if (env.kind === 'event' && evtType === 'session.greeting') {
+    // A brand-new session's opening greeting (kodo.titling.generate_greeting),
+    // fired once from a background task shortly after connect — see
+    // kodo/doc/WS_PROTOCOL.md §5.9i. Replaces this extension's own previously
+    // hardcoded empty-state placeholder.
+    post({ type: 'greeting', text: String(env.payload.text ?? '') });
+    return true;
+  }
+
   if (env.kind === 'event' && evtType === 'error') {
     const message = String(env.payload.message ?? 'Unknown server error');
     const recoverable = Boolean(env.payload.recoverable ?? true);

@@ -415,5 +415,11 @@ export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
       // Strike 2: a second detected repetition loop right after the notice
       // above, so the turn ended instead of trying again.
       return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
+    case 'greeting':
+      // A brand-new session's server-generated opening greeting
+      // (kodo/doc/WS_PROTOCOL.md §5.9i) — rendered like assistant_response
+      // since it's meant to read as Kodo speaking, just with no timestamp
+      // line (it isn't a real conversational turn).
+      return <div style={styles.agentTokens}><Markdown content={entry.text} /></div>;
   }
 }

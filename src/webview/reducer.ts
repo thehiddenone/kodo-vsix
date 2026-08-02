@@ -234,6 +234,13 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
       exclude_from_context: true,
     };
   }
+  if (type === 'greeting') {
+    // Replay of the server's persisted "greeting" marker (see
+    // EngineEmitters.emit_greeting) — same card the live 'greeting' action
+    // renders, so a reload shows the session's original opening greeting
+    // again instead of losing it.
+    return { type: 'greeting', text: String(e.text ?? ''), exclude_from_context: true };
+  }
   return null;
 }
 
@@ -809,6 +816,16 @@ export function reducer(state: State, action: Action): State {
           ...state.session,
           { type: 'security_rule_added', scope: action.scope, offer: action.offer, exclude_from_context: true },
         ],
+      };
+    case 'greeting':
+      // A brand-new session's server-generated opening greeting
+      // (WS_PROTOCOL.md §5.9i) — a plain append, mirroring
+      // 'security_rule_added'. Fires once, from a background task the server
+      // kicks off right on connect, so this can land before or after the
+      // very first render; either way isEmpty flips false once it's here.
+      return {
+        ...state,
+        session: [...state.session, { type: 'greeting', text: action.text, exclude_from_context: true }],
       };
     case 'agent_stuck_critical':
       // The watchdog gave up after one failed nudge (doc/STUCK_DETECTION.md)

@@ -77,6 +77,9 @@ export function App() {
         case 'runtime_error':
           dispatch({ type: 'runtime_error', message: String(msg.message ?? 'Unknown server error'), recoverable: Boolean(msg.recoverable ?? true) });
           break;
+        case 'greeting':
+          dispatch({ type: 'greeting', text: String(msg.text ?? '') });
+          break;
         case 'security_rule_added': {
           const offer = (msg.offer ?? {}) as Record<string, unknown>;
           dispatch({
@@ -558,9 +561,11 @@ export function App() {
         {state.compacting && <CompactingIndicator />}
         {state.llmWaiting && <LlmWaitingIndicator waiting={state.llmWaiting} />}
         {state.awaitingLlm && !state.llmWaiting && <AwaitingIndicator />}
-        {isEmpty && (
-          state.connected ? "Hello there. I'm Kodo. Ready to build something awesome." : 'Not connected to server.'
-        )}
+        {/* A brand-new session's server-generated greeting (kodo/doc/WS_PROTOCOL.md
+            §5.9i) lands in state.session and fills this in — see the 'greeting'
+            SessionEntry case in SessionEntryView. This placeholder is only for
+            the brief gap before it arrives, and for a disconnected panel. */}
+        {isEmpty && !state.connected && 'Not connected to server.'}
       </div>
 
       {/* File events */}
