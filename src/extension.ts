@@ -162,6 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       llamaStopping: state.llamaStoppingState,
       detectedVramGb: state.detectedVramGbState,
       detectedRamGb: state.detectedRamGbState,
+      isMac: process.platform === 'darwin',
       pinnedLocalModels: initialUiSettings.pinnedLocalModels,
       pinnedCloudVendors: initialUiSettings.pinnedCloudVendors,
     },

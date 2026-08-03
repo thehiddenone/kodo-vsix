@@ -21,6 +21,12 @@ export interface SidebarState {
   llamaStopping: boolean;
   detectedVramGb: number | null;
   detectedRamGb: number | null;
+  /** `true` on Apple Silicon (`process.platform === 'darwin'`), `false` for a
+   *  Windows/Linux discrete-GPU host — mirrors `current_host_platform`
+   *  (kodo/llms/_local_registry.py). Never changes at runtime; set once at
+   *  startup. Drives both `_computeLocalWarnings`' `'platform'` warning and
+   *  the webview script's own flavor-compatibility filter (§4.6b). */
+  isMac: boolean;
   /** Pinned local LLM registry names, in pin order (oldest pin first/topmost)
    *  — pinned cards render above unpinned ones in `renderLocalCards`.
    *  Persisted in `~/.kodo/etc/ui-settings.json` (`settings-io.ts`). */
@@ -94,7 +100,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const installedVersion = state.llamaInstalled && state.llamaVersion ? state.llamaVersion : null;
     const result: Record<string, LocalLaunchWarning[]> = {};
     for (const entry of state.localRegistry) {
-      const warnings = localLaunchWarnings(entry, state.detectedVramGb, state.detectedRamGb, installedVersion);
+      const warnings = localLaunchWarnings(
+        entry,
+        state.detectedVramGb,
+        state.detectedRamGb,
+        installedVersion,
+        state.isMac,
+      );
       if (warnings.length > 0) {
         result[entry.name] = warnings;
       }
@@ -392,6 +404,7 @@ function buildHtml(): string {
       llamaRunningModel: '',
       llamaStarting: false,
       llamaStopping: false,
+      isMac: false,
       pinnedLocalModels: [],
       pinnedCloudVendors: [],
       localWarnings: {},
@@ -540,6 +553,16 @@ function buildHtml(): string {
       return model.context_window;
     }
 
+    // Mirrors kodo's _flavor_compatible_with_host/current_host_platform
+    // (kodo/llms/_local_registry.py) and llm-registry-types.ts's
+    // flavorCompatibleWithHost — see doc/LLM_REGISTRY.md §4.6b. Duplicated
+    // here for the same reason flavorContextSize is above (plain-JS webview
+    // script, can't import the TS module); keep in sync by hand.
+    function flavorCompatibleWithHost(flavor, isMac) {
+      if (!flavor.platform || flavor.platform === 'both') { return true; }
+      return isMac ? flavor.platform === 'mac' : flavor.platform === 'gpu';
+    }
+
     function renderLocalCards(section) {
       const installed = _state.localRegistry.filter(m => m.installed);
       if (installed.length === 0) {
@@ -595,6 +618,14 @@ function buildHtml(): string {
         card.appendChild(header);
 
         const flavors = model.flavors || [];
+        // Only flavors launchable on this host are ever offered as a choice
+        // — picking an incompatible one used to be possible here and would
+        // silently start llama-server with args that don't fit this
+        // platform (doc/LLM_REGISTRY.md §4.6b). An entry with zero
+        // compatible flavors shows no picker at all; its ⚠ warning icon
+        // (via localWarnings' 'platform' kind) is the only indicator, and
+        // starting it fails with a dedicated error (confirmLocalLlamaLaunch).
+        const compatibleFlavors = flavors.filter(f => flavorCompatibleWithHost(f, _state.isMac));
 
         const quantLine = document.createElement('div');
         quantLine.className = 'card-meta-line';
@@ -603,26 +634,28 @@ function buildHtml(): string {
 
         const contextLine = document.createElement('div');
         contextLine.className = 'card-meta-line';
-        const activeFlavor = flavors.find(f => f.id === model.active_flavor) || flavors[0];
+        const activeFlavor = compatibleFlavors.find(f => f.id === model.active_flavor) || compatibleFlavors[0];
         contextLine.textContent = 'Context: ' + resolveContextSize(model, activeFlavor).toLocaleString();
         card.appendChild(contextLine);
 
         // Flavor picker: not offered for custom_server_url (not a process
-        // kodo launches, so it has no launch args to vary) or an entry with
-        // no flavors at all (every entry that reaches here normally has at
-        // least a built-in/seeded "default" one — see LLM_REGISTRY.md §4.6).
-        if (model.kind !== 'custom_server_url' && flavors.length > 0) {
+        // kodo launches, so it has no launch args to vary), an entry with no
+        // compatible flavors (nothing valid to offer — see above), or an
+        // entry with no flavors at all (every entry that reaches here
+        // normally has at least a built-in/seeded "default" one — see
+        // LLM_REGISTRY.md §4.6).
+        if (model.kind !== 'custom_server_url' && compatibleFlavors.length > 0) {
           const select = document.createElement('select');
           select.className = 'flavor-select';
-          flavors.forEach(f => {
+          compatibleFlavors.forEach(f => {
             const option = document.createElement('option');
             option.value = f.id;
             option.textContent = 'Flavor: ' + f.name;
             select.appendChild(option);
           });
-          select.value = model.active_flavor || flavors[0].id;
+          select.value = model.active_flavor || compatibleFlavors[0].id;
           select.addEventListener('change', () => {
-            const selected = flavors.find(f => f.id === select.value);
+            const selected = compatibleFlavors.find(f => f.id === select.value);
             contextLine.textContent = 'Context: ' + resolveContextSize(model, selected).toLocaleString();
             vsc.postMessage({ type: 'set_active_flavor', name: model.name, flavor_id: select.value });
           });
@@ -801,6 +834,7 @@ function buildHtml(): string {
       if (typeof data.llamaRunningModel === 'string') { _state.llamaRunningModel = data.llamaRunningModel; }
       if (data.llamaStarting !== undefined) { _state.llamaStarting = Boolean(data.llamaStarting); }
       if (data.llamaStopping !== undefined) { _state.llamaStopping = Boolean(data.llamaStopping); }
+      if (data.isMac !== undefined) { _state.isMac = Boolean(data.isMac); }
       if (Array.isArray(data.pinnedLocalModels)) { _state.pinnedLocalModels = data.pinnedLocalModels; }
       if (Array.isArray(data.pinnedCloudVendors)) { _state.pinnedCloudVendors = data.pinnedCloudVendors; }
       if (data.localWarnings && typeof data.localWarnings === 'object') { _state.localWarnings = data.localWarnings; }

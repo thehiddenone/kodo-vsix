@@ -394,6 +394,7 @@
     .modal-field-row {
       display: flex;
       gap: 12px;
+      margin-top: 12px;
       margin-bottom: 12px;
     }
     .modal-field-row .modal-field {

@@ -199,6 +199,12 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
                 selected.
               </div>
             </div>
+            <hr className="section-divider" />
+            <div className="field-hint">
+              System RAM (or Apple Silicon unified memory) and discrete GPU VRAM this flavor needs to run — leave
+              blank/0 if unknown. Selecting a flavor whose requirement exceeds this machine&apos;s detected
+              hardware prompts for confirmation first.
+            </div>
             <div className="modal-field-row">
               <div className="modal-field">
                 <label for="flavor-min-ram">Minimum RAM (GB, optional)</label>
@@ -225,6 +231,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
                 />
               </div>
             </div>
+            <hr className="section-divider" />
             <div className="modal-field">
               <label for="flavor-platform">Platform compatibility</label>
               <select
@@ -244,11 +251,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
                 kodo skips an incompatible flavor when auto-selecting a default.
               </div>
             </div>
-            <div className="field-hint">
-              System RAM (or Apple Silicon unified memory) and discrete GPU VRAM this flavor needs to run — leave
-              blank/0 if unknown. Selecting a flavor whose requirement exceeds this machine&apos;s detected
-              hardware prompts for confirmation first.
-            </div>
+            <hr className="section-divider" />
             <div className={'field-hint' + (readOnly ? ' visible' : '')} id="flavor-readonly-hint">
               This is a built-in flavor and cannot be edited or removed. Copy its values into a new flavor with
               &quot;Add&quot; if you want to customize it.

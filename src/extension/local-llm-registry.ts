@@ -141,7 +141,13 @@ function activeLocalLaunchWarnings(): { entry: LocalRegistryEntry; warnings: Loc
   const entry = state.localRegistryState.find((e) => e.name === state.activeLocalModelState);
   if (!entry) { return null; }
   const installedVersion = state.llamaInstalledState && state.llamaVersionState ? state.llamaVersionState : null;
-  const warnings = localLaunchWarnings(entry, state.detectedVramGbState, state.detectedRamGbState, installedVersion);
+  const warnings = localLaunchWarnings(
+    entry,
+    state.detectedVramGbState,
+    state.detectedRamGbState,
+    installedVersion,
+    process.platform === 'darwin',
+  );
   return warnings.length > 0 ? { entry, warnings } : null;
 }
 
@@ -154,6 +160,15 @@ function activeLocalLaunchWarnings(): { entry: LocalRegistryEntry; warnings: Loc
  * anyway, or — only when a llama.cpp version warning is present — jump to
  * Kōdo Settings to update llama.cpp instead of starting.
  *
+ * A `'platform'` warning (kodo/doc/LLM_REGISTRY.md §4.6b) is handled first
+ * and separately from the two above: unlike memory/version, there is no
+ * "proceed anyway" for it — none of the active model's flavors can launch on
+ * this host at all — so it shows a plain OK-only error and always cancels,
+ * checked *before* `dismissedLocalLaunchWarnings` (a model dismissed for
+ * memory/version reasons must not thereby bypass a platform block, and the
+ * platform fact doesn't become launchable just because a warning was
+ * dismissed once).
+ *
  * `openSettings` is injected rather than imported directly (e.g. from
  * kodo-settings-bridge.ts) to avoid a circular import: kodo-settings-bridge.ts
  * already imports from this module and from window-sessions.ts, both of
@@ -162,18 +177,24 @@ function activeLocalLaunchWarnings(): { entry: LocalRegistryEntry; warnings: Loc
  * A "Start anyway, don't ask again for this model" choice permanently
  * suppresses the dialog for this exact registry entry (`dismissLocalLaunchWarnings`,
  * `settings-io.ts` — persisted in `~/.kodo/etc/ui-settings.json`), checked
- * up front on every call: once set, EVERY future launch of this quant skips
- * the dialog no matter what warnings apply then, and there is no UI to unset it.
+ * up front on every call (after the platform check): once set, EVERY future
+ * launch of this quant skips the memory/version dialog no matter what
+ * warnings apply then, and there is no UI to unset it.
  *
  * Returns `true` to proceed with the launch, `false` to cancel — always
  * `true` when the active model has no outstanding warnings, or was
- * previously dismissed.
+ * previously dismissed (and isn't platform-blocked).
  */
 export async function confirmLocalLlamaLaunch(openSettings: () => void): Promise<boolean> {
+  const found = activeLocalLaunchWarnings();
+  const platformWarning = found?.warnings.find((w) => w.kind === 'platform');
+  if (platformWarning) {
+    await vscode.window.showErrorMessage(`Kōdo: ${platformWarning.text}`, { modal: true });
+    return false;
+  }
   if (readUiSettings().dismissedLocalLaunchWarnings.includes(state.activeLocalModelState)) {
     return true;
   }
-  const found = activeLocalLaunchWarnings();
   if (!found) { return true; }
   const { entry, warnings } = found;
   const message = [

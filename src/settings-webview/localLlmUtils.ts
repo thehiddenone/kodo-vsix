@@ -2,7 +2,7 @@
  *  modals — parsing form input into the wire shapes the host expects, and
  *  the local-registry name-clash check every add form validates against. */
 
-import type { LlamaFlavorPlatform, LocalRegistryEntry } from './types';
+import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry } from './types';
 
 export const DEFAULT_CONTEXT_WINDOW = 262144;
 export const HF_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -136,5 +136,35 @@ export function llamacppVersionWarning(
   return {
     level: 'red',
     text: `⛔ The installed llama.cpp (b${installed}) does not support this LLM — it requires at least b${required}. Update llama.cpp to run it.`,
+  };
+}
+
+export interface PlatformWarning {
+  level: 'red';
+  text: string;
+}
+
+// Mirrors flavorCompatibleWithHost (src/llm-registry-types.ts) and
+// _flavor_compatible_with_host/current_host_platform (kodo/llms/
+// _local_registry.py) — duplicated here since this module is webview-only
+// (see this file's header comment). Keep in sync by hand.
+function flavorCompatibleWithHost(flavor: LocalFlavor, isMac: boolean): boolean {
+  if (!flavor.platform || flavor.platform === 'both') { return true; }
+  return isMac ? flavor.platform === 'mac' : flavor.platform === 'gpu';
+}
+
+// entry has zero flavors compatible with this host (kodo/doc/
+// LLM_REGISTRY.md §4.6b) — a static fact about entry.flavors, not a
+// hardware-detection question like ramWarning/llamacppVersionWarning above,
+// so there's no "unknown — don't warn" case: an entry with no flavors at
+// all is never platform-restricted (nothing to be incompatible about).
+export function platformWarning(entry: LocalRegistryEntry, isMac: boolean): PlatformWarning | null {
+  const flavors = entry.flavors || [];
+  if (flavors.length === 0 || flavors.some((f) => flavorCompatibleWithHost(f, isMac))) {
+    return null;
+  }
+  return {
+    level: 'red',
+    text: `⛔ This LLM is not compatible with this platform (${isMac ? 'Apple Silicon' : 'Windows/Linux GPU'}) — none of its flavors support running here.`,
   };
 }

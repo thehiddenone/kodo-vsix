@@ -211,6 +211,39 @@ export function resolveContextSize(
 }
 
 /**
+ * Whether `flavor` may be launched on this host, mirroring
+ * `_flavor_compatible_with_host`/`current_host_platform` (kodo/llms/
+ * _local_registry.py): `'both'` is always compatible; `'mac'`/`'gpu'` must
+ * match `isMac`. `platform` is normally always one of the three
+ * `LlamaFlavorPlatform` values, but a payload that somehow omits it (e.g. an
+ * older cached state) is treated as `'both'`, same as the server's own
+ * `_parse_flavor_platform` fallback.
+ */
+export function flavorCompatibleWithHost(flavor: LlamaFlavorInfo, isMac: boolean): boolean {
+  if (!flavor.platform || flavor.platform === 'both') {
+    return true;
+  }
+  return isMac ? flavor.platform === 'mac' : flavor.platform === 'gpu';
+}
+
+/**
+ * Whether `entry` has at least one flavor launchable on this host, mirroring
+ * `has_compatible_flavor` (kodo/llms/_local_registry.py) — `true` when
+ * `entry` has no flavors at all (nothing to be incompatible about) or when
+ * {@link flavorCompatibleWithHost} passes for at least one of them. `false`
+ * only when every flavor targets the other platform, the case
+ * {@link localLaunchWarnings}' `'platform'` warning and
+ * `confirmLocalLlamaLaunch` (extension/local-llm-registry.ts) treat as a
+ * hard "can't run here" — see kodo/doc/LLM_REGISTRY.md §4.6b.
+ */
+export function entryHasCompatibleFlavor(entry: LocalRegistryEntry, isMac: boolean): boolean {
+  if (entry.flavors.length === 0) {
+    return true;
+  }
+  return entry.flavors.some((f) => flavorCompatibleWithHost(f, isMac));
+}
+
+/**
  * `null` if `flavor` is fine to launch given the detected hardware (or the
  * check is inactive/inconclusive); otherwise a human-readable explanation
  * — with real detected numbers — suitable for a confirmation dialog's
@@ -274,30 +307,46 @@ export function hardwareFitWarningForFlavor(
 }
 
 export interface LocalLaunchWarning {
-  kind: 'memory' | 'version';
+  kind: 'memory' | 'version' | 'platform';
   level: 'red' | 'yellow';
   text: string;
 }
 
 /**
- * Outstanding memory/llama.cpp-version warnings for `entry` given the
- * currently detected hardware and installed llama.cpp build — the same
- * rules as `ramWarning`/`llamacppVersionWarning` in
- * settings-webview/localLlmUtils.ts, duplicated here (not imported) because
- * that module belongs to the webview bundle while this one is
- * extension-host-importable (see `hardwareFitWarningForFlavor` above for the
- * same reasoning). Used to gate an actual llama-server launch
- * (`confirmLocalLlamaLaunch` in extension/local-llm-registry.ts) rather than
- * just render inline text — keep both copies of these rules in sync if
- * either changes.
+ * Outstanding memory/llama.cpp-version/platform warnings for `entry` given
+ * the currently detected hardware, installed llama.cpp build, and host
+ * platform — the memory/version rules mirror `ramWarning`/
+ * `llamacppVersionWarning` in settings-webview/localLlmUtils.ts, duplicated
+ * here (not imported) because that module belongs to the webview bundle
+ * while this one is extension-host-importable (see
+ * `hardwareFitWarningForFlavor` above for the same reasoning). Used to gate
+ * an actual llama-server launch (`confirmLocalLlamaLaunch` in
+ * extension/local-llm-registry.ts) rather than just render inline text —
+ * keep both copies of these rules in sync if either changes.
+ *
+ * Unlike the other two, the `'platform'` warning (kodo/doc/LLM_REGISTRY.md
+ * §4.6b) is not a "proceed anyway" risk — `confirmLocalLlamaLaunch` treats
+ * it as an unconditional block, since there is genuinely no flavor of
+ * `entry` that can launch on this host. It fires whenever
+ * `entryHasCompatibleFlavor` is `false`, independent of `detectedVramGb`/
+ * `detectedRamGb`/`installedLlamaCppVersion` — a platform mismatch is a
+ * static fact about `entry.flavors`, never a detection question.
  */
 export function localLaunchWarnings(
   entry: LocalRegistryEntry,
   detectedVramGb: number | null,
   detectedRamGb: number | null,
   installedLlamaCppVersion: string | null,
+  isMac: boolean,
 ): LocalLaunchWarning[] {
   const warnings: LocalLaunchWarning[] = [];
+  if (!entryHasCompatibleFlavor(entry, isMac)) {
+    warnings.push({
+      kind: 'platform',
+      level: 'red',
+      text: `⛔ This LLM is not compatible with this platform (${isMac ? 'Apple Silicon' : 'Windows/Linux GPU'}) — none of its flavors support running here.`,
+    });
+  }
   if (detectedVramGb !== null || detectedRamGb !== null) {
     const total = (detectedVramGb || 0) + (detectedRamGb || 0);
     const min = entry.min_memory || 0;

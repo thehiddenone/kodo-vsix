@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { DOWNLOADABLE, CUSTOM, FLAVOR_CAPABLE, ramWarning, llamacppVersionWarning } from './localLlmUtils';
+import { DOWNLOADABLE, CUSTOM, FLAVOR_CAPABLE, ramWarning, llamacppVersionWarning, platformWarning } from './localLlmUtils';
 import type { LocalRegistryEntry } from './types';
 import { vscode } from './vscode';
 
@@ -20,6 +20,7 @@ export function ModelCard({
   const tip = isMac ? entry.mac_tip : entry.gpu_tip;
   const warning = ramWarning(entry, detectedVramGb, detectedRamGb);
   const versionWarning = llamacppVersionWarning(entry, installedLlamaCppVersion);
+  const platformW = platformWarning(entry, isMac);
   const updatable = DOWNLOADABLE.has(entry.kind) && entry.installed && updatableNames.includes(entry.name);
   // Immediate feedback only — the next 'update' (kickoff reply, disk-poll
   // tick, or an error event's registry_state) always re-renders this card
@@ -63,6 +64,8 @@ export function ModelCard({
       {warning && <div className={`ram-warning ${warning.level}`}>{warning.text}</div>}
 
       {versionWarning && <div className={`ram-warning ${versionWarning.level}`}>{versionWarning.text}</div>}
+
+      {platformW && <div className={`ram-warning ${platformW.level}`}>{platformW.text}</div>}
 
       {entry.installed && <span className="installed-tag">Installed</span>}
 
