@@ -707,22 +707,9 @@ export const styles = {
   securityRuleAddedIcon: {
     flexShrink: 0,
   },
-  // Stuck-agent watchdog's continuation nudge (doc/STUCK_DETECTION.md) — the
-  // user-facing explanation of why Kōdo told the agent to keep going.
-  agentUnstuckNudge: {
-    fontSize: '12px',
-    marginTop: '4px',
-    marginBottom: '2px',
-    display: 'flex',
-    gap: '4px',
-    alignItems: 'baseline',
-  },
-  agentUnstuckNudgeIcon: {
-    flexShrink: 0,
-  },
-  agentUnstuckNudgeText: {
-    color: 'var(--vscode-descriptionForeground)',
-  },
+  // Any watchdog nudge (doc/STUCK_DETECTION.md §2.5) now renders via the
+  // Markdown renderer's <kodo_warn> callout (markdown.tsx) — a yellow
+  // warning box with its own styling — rather than a dedicated style here.
   // File events
   fileEvents: {
     borderTop: '1px solid var(--vscode-panel-border)',
@@ -1139,6 +1126,109 @@ export const styles = {
   modalConfirmMessage: {
     fontSize: '12px',
     marginBottom: '4px',
+  },
+  // Sampling modal (kodo/doc/SAMPLING.md). Wider than the shared `modalBox`
+  // and internally scrollable — it carries ~27 fields across two sections,
+  // far more than the feedback composer that box was sized for.
+  samplingModalBox: {
+    width: 'min(620px, 96vw)',
+    maxHeight: '86vh',
+    boxSizing: 'border-box' as const,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    background: 'var(--vscode-editorWidget-background, var(--vscode-editor-background))',
+    color: 'var(--vscode-editorWidget-foreground, var(--vscode-foreground))',
+    border: '1px solid var(--vscode-widget-border, var(--vscode-focusBorder))',
+    borderRadius: '6px',
+    padding: '16px',
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+  },
+  samplingModalBody: {
+    flex: 1,
+    overflowY: 'auto' as const,
+    minHeight: 0,
+    paddingRight: '4px',
+  },
+  samplingSectionHeader: {
+    fontWeight: 'bold' as const,
+    fontSize: '12px',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.04em',
+    color: 'var(--vscode-descriptionForeground)',
+    margin: '12px 0 6px',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+    paddingBottom: '4px',
+  },
+  samplingAdvancedToggle: {
+    background: 'transparent',
+    color: 'var(--vscode-textLink-foreground)',
+    border: 'none',
+    padding: '8px 0 4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 'bold' as const,
+    textAlign: 'left' as const,
+  },
+  samplingField: {
+    marginBottom: '10px',
+  },
+  samplingFieldRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  samplingLabel: {
+    flex: '0 0 46%',
+    fontSize: '12px',
+    minWidth: 0,
+    wordBreak: 'break-word' as const,
+  },
+  samplingInput: {
+    flex: 1,
+    minWidth: 0,
+    boxSizing: 'border-box' as const,
+    background: 'var(--vscode-input-background)',
+    color: 'var(--vscode-input-foreground)',
+    border: '1px solid var(--vscode-input-border)',
+    borderRadius: '2px',
+    padding: '4px 6px',
+    fontFamily: 'inherit',
+    fontSize: '12px',
+  },
+  // Shown in the input as placeholder-adjacent text: what happens if the field
+  // is left blank. "flavor default" when the active flavor sets one, otherwise
+  // "server default", which is the value llama_args launched the server with.
+  samplingInheritHint: {
+    flex: '0 0 auto',
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+    whiteSpace: 'nowrap' as const,
+  },
+  samplingHelp: {
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginTop: '2px',
+    marginLeft: 'calc(46% + 8px)',
+  },
+  samplingClearBtn: {
+    flex: '0 0 auto',
+    background: 'transparent',
+    color: 'var(--vscode-descriptionForeground)',
+    border: '1px solid var(--vscode-panel-border)',
+    borderRadius: '2px',
+    padding: '3px 7px',
+    cursor: 'pointer',
+    fontSize: '11px',
+  },
+  samplingBtn: {
+    background: 'transparent',
+    color: '#c8a400',
+    border: '1px solid #c8a400',
+    borderRadius: '2px',
+    width: '40px',
+    cursor: 'pointer',
+    fontSize: '16px',
+    flexShrink: 0,
   },
   // ask_user question panel (in-feed, interactive until confirmed)
   askUserPanel: {

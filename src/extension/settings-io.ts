@@ -13,6 +13,7 @@ import type { UiSettings } from '../settings-panel/types';
 import { sendControl } from './control-send';
 import { showTransientNotification } from './server-lifecycle';
 import { DEFAULT_CLOUD_VENDOR, DEFAULT_LOCAL_MODEL, state } from './state';
+import { broadcastSamplingContext } from './sampling-context';
 import { broadcastThinkingContext } from './thinking-context';
 
 function kodoHomeDir(): string {
@@ -47,6 +48,7 @@ const DEFAULT_UI_SETTINGS: UiSettings = {
   pinnedLocalModels: [],
   pinnedCloudVendors: [],
   dismissedLocalLaunchWarnings: [],
+  lastAttachDir: '',
 };
 
 /**
@@ -84,6 +86,7 @@ export function readUiSettings(): UiSettings {
     dismissedLocalLaunchWarnings: Array.isArray(raw.dismissedLocalLaunchWarnings)
       ? raw.dismissedLocalLaunchWarnings.filter((n): n is string => typeof n === 'string')
       : DEFAULT_UI_SETTINGS.dismissedLocalLaunchWarnings,
+    lastAttachDir: typeof raw.lastAttachDir === 'string' ? raw.lastAttachDir : DEFAULT_UI_SETTINGS.lastAttachDir,
   };
 }
 
@@ -131,6 +134,13 @@ export function dismissLocalLaunchWarnings(name: string): UiSettings {
     ...settings,
     dismissedLocalLaunchWarnings: [...settings.dismissedLocalLaunchWarnings, name],
   });
+}
+
+/** Remember the directory the "+" attach-file dialog last opened into, so
+ *  the next attach opens there instead of VS Code's own last-used default.
+ *  Host-only; see `UiSettings.lastAttachDir`'s doc comment. */
+export function setLastAttachDir(dir: string): UiSettings {
+  return writeUiSettings({ ...readUiSettings(), lastAttachDir: dir });
 }
 
 /** Push the current "Show Timestamps" flags to every open session tab in
@@ -242,4 +252,5 @@ export function setMode(mode: 'cloud' | 'local'): void {
   const label = mode === 'cloud' ? 'cloud AI (API key required)' : 'local AI via llama.cpp';
   showTransientNotification(`Kōdo: switched to ${label}.`);
   broadcastThinkingContext();
+  broadcastSamplingContext();
 }

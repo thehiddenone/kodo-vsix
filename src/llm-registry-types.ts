@@ -82,6 +82,53 @@ export interface LlamaFlavorInfo {
    * *default*-flavor selection this drives happens server-side, in
    * `get_effective_flavor_id` (kodo/llms/_local_registry.py). */
   platform: LlamaFlavorPlatform;
+  /**
+   * Request-level sampling **defaults** for this flavor (kodo/doc/SAMPLING.md
+   * §9) — the values a session's sampling modal is seeded with the first time
+   * this entry is used. Sparse by design: a parameter absent here is not sent
+   * to llama-server at all, which is *not* the same as sending llama.cpp's
+   * built-in default (an omitted field inherits whatever `llama_args`
+   * launched the server with). Empty `{}` for every built-in flavor.
+   */
+  sampling: SamplingValues;
+}
+
+/**
+ * A sparse set of request-level sampling parameters — `{parameterName: value}`
+ * holding **only** what is actually set. Used for all three layers the feature
+ * has: a flavor's defaults, a session's per-quant overrides, and the resolved
+ * set. Deleting a key is a real operation (it stops the field being sent),
+ * never "reset to a default". See kodo/doc/SAMPLING.md §1.
+ */
+export type SamplingValues = Record<string, number | string[]>;
+
+/**
+ * Static description of one tunable request-level sampling parameter, mirroring
+ * the server's `sampling_specs` payload (one entry per
+ * `SAMPLING_PARAM_SPECS` row in kodo/llms/_sampling.py). Pushed by the server
+ * rather than hardcoded here for the same reason `thinking_families` is: the
+ * table already exists server-side as the single source of truth for
+ * validation, and a client-side duplicate would drift.
+ */
+export interface SamplingParamSpec {
+  /** Request-body key, spelled as llama-server expects it (e.g. `top_k`). */
+  name: string;
+  /** `float`/`int` render a number input, `str_list` a comma-separated text field. */
+  kind: 'float' | 'int' | 'str_list';
+  label: string;
+  /** `false` = the curated set shown up front; `true` = behind "Advanced". */
+  advanced: boolean;
+  minimum: number | null;
+  maximum: number | null;
+  step: number | null;
+  /** The value that *disables* this sampler, as a display string — `""` when
+   * it has none. Distinct from leaving the field empty, which instead means
+   * "don't send it and inherit the launch-time value". */
+  neutral: string;
+  /** Equivalent llama-server CLI flags; drives the flavor editor's warning
+   * about a knob set both as a launch arg and as a request-level default. */
+  cli_flags: string[];
+  help: string;
 }
 
 export interface LocalRegistryEntry {
@@ -417,4 +464,107 @@ export interface ThinkingContext {
   family: ThinkingFamily | null;
   tiers: string[];
   defaultTier: string;
+}
+
+/**
+ * What the footer's sampling button and its modal (SamplingModal.tsx) need,
+ * derived window-wide from `modeState`/`activeLocalModelState`/
+ * `localRegistryState`/`samplingSpecsState` and pushed to every open session
+ * tab (`SessionController.updateSamplingContext`) whenever any of those
+ * change — the active model is a machine-global selection, so every tab shares
+ * one context, exactly like {@link ThinkingContext}.
+ *
+ * `model: ''` means the session is on a cloud model (or the active local entry
+ * is unknown), and the footer button is **not rendered at all** — these are
+ * llama-server parameters with no Anthropic equivalent.
+ *
+ * The session's own overrides are NOT here: those are per-session server state
+ * arriving on `state.sampling`, whereas everything in this interface is
+ * window-global.
+ */
+export interface SamplingContext {
+  /** Active local registry entry ("quant") name, or `''` when not applicable. */
+  model: string;
+  /** The active flavor's request-level defaults for `model`. */
+  defaults: SamplingValues;
+  /** The server's parameter table, in display order. */
+  specs: SamplingParamSpec[];
+}
+
+/** Parse a `sampling`/override map off a wire payload; `{}` if absent or
+ * malformed. Values are trusted as-is — the server validates and clamps them
+ * (`SamplingParams.from_json`), and re-checking here would just duplicate the
+ * bounds table this deliberately does not carry. */
+export function parseSamplingValues(raw: unknown): SamplingValues {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+  return raw as SamplingValues;
+}
+
+/**
+ * Format one sampling value for a text/number input. `str_list` parameters
+ * render as a comma-separated list; numbers render verbatim. An absent value
+ * yields `''` — the empty field that means "not set".
+ */
+export function samplingValueToText(value: number | string[] | undefined): string {
+  if (value === undefined) {
+    return '';
+  }
+  return Array.isArray(value) ? value.join(', ') : String(value);
+}
+
+/**
+ * Parse one field's text back into a sampling value, or `undefined` for "unset".
+ *
+ * An empty (or whitespace-only) field is always `undefined`, never `0` — the
+ * distinction is load-bearing: omitting a parameter inherits whatever the
+ * flavor's CLI args launched llama-server with, while `0` actively sets it
+ * (and for several samplers `0` is the *disable* value). A number that fails
+ * to parse is treated as unset rather than as `NaN`.
+ */
+export function samplingTextToValue(
+  spec: SamplingParamSpec,
+  text: string,
+): number | string[] | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (spec.kind === 'str_list') {
+    const items = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+    return items.length > 0 ? items : undefined;
+  }
+  const parsed = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Knobs a flavor sets both as a CLI launch flag and as a request-level
+ * default — `{cliFlag: parameterName}`, empty when there is no overlap.
+ *
+ * Mirrors `cli_flag_conflicts` (kodo/llms/_sampling.py) so the flavor editor
+ * can warn live, before saving, rather than only after a round trip. Not an
+ * error: the request-level value simply wins for Kōdo's own calls, while the
+ * CLI value still governs any other client pointed at that server.
+ */
+export function samplingCliConflicts(
+  llamaArgs: Record<string, string>,
+  sampling: SamplingValues,
+  specs: SamplingParamSpec[],
+): Record<string, string> {
+  const byFlag = new Map<string, string>();
+  for (const spec of specs) {
+    for (const flag of spec.cli_flags) {
+      byFlag.set(flag, spec.name);
+    }
+  }
+  const conflicts: Record<string, string> = {};
+  for (const flag of Object.keys(llamaArgs)) {
+    const name = byFlag.get(flag);
+    if (name !== undefined && sampling[name] !== undefined) {
+      conflicts[flag] = name;
+    }
+  }
+  return conflicts;
 }

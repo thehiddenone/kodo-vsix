@@ -12,16 +12,29 @@
  */
 
 import { useEffect, useState } from 'preact/hooks';
-import { FLAVOR_PLATFORM_OPTIONS, flavorPlatformBadge, llamaArgsToText, parseNonNegativeInt } from './localLlmUtils';
-import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry } from './types';
+import {
+  FLAVOR_PLATFORM_OPTIONS,
+  flavorPlatformBadge,
+  llamaArgsToText,
+  parseLlamaArgsText,
+  parseNonNegativeInt,
+  samplingCliConflicts,
+  samplingToTextMap,
+  textMapToSampling,
+} from './localLlmUtils';
+import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry, SamplingParamSpec } from './types';
 import { vscode } from './vscode';
 
 interface FlavorModalProps {
   entry: LocalRegistryEntry;
+  /** The server's request-level sampling parameter table (`sampling_specs`,
+   *  kodo/doc/SAMPLING.md). `[]` before the first registry payload lands,
+   *  which simply hides the request-level defaults section. */
+  samplingSpecs: SamplingParamSpec[];
   onClose: () => void;
 }
 
-export function FlavorModal({ entry, onClose }: FlavorModalProps) {
+export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps) {
   const flavors = entry.flavors || [];
   const [selectedFlavorId, setSelectedFlavorId] = useState<string | null>(
     entry.active_flavor || flavors[0]?.id || null,
@@ -32,6 +45,10 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
   const [minRam, setMinRam] = useState('');
   const [minVram, setMinVram] = useState('');
   const [platform, setPlatform] = useState<LlamaFlavorPlatform>('both');
+  // Request-level sampling defaults, held as per-field text (not parsed
+  // values) so a half-typed "0." or "-" survives keystrokes.
+  const [samplingText, setSamplingText] = useState<Record<string, string>>({});
+  const [showAdvancedSampling, setShowAdvancedSampling] = useState(false);
 
   const selected = flavors.find((f) => f.id === selectedFlavorId) || null;
   const readOnly = Boolean(selected?.predefined);
@@ -54,6 +71,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
       setMinRam(selected.min_ram ? String(selected.min_ram) : '');
       setMinVram(selected.min_vram ? String(selected.min_vram) : '');
       setPlatform(selected.platform || 'both');
+      setSamplingText(samplingToTextMap(samplingSpecs, selected.sampling));
     } else {
       setName('');
       setDescription('');
@@ -61,6 +79,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
       setMinRam('');
       setMinVram('');
       setPlatform('both');
+      setSamplingText(samplingToTextMap(samplingSpecs, {}));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFlavorId]);
@@ -82,6 +101,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
 
   function submit() {
     if (!canSubmit) { return; }
+    const sampling = textMapToSampling(samplingSpecs, samplingText);
     if (selectedFlavorId) {
       vscode.postMessage({
         type: 'update_flavor',
@@ -93,6 +113,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
         min_ram: parseNonNegativeInt(minRam),
         min_vram: parseNonNegativeInt(minVram),
         platform,
+        sampling,
       });
     } else {
       vscode.postMessage({
@@ -104,6 +125,7 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
         min_ram: parseNonNegativeInt(minRam),
         min_vram: parseNonNegativeInt(minVram),
         platform,
+        sampling,
       });
       // Stays open in "add another" mode — the freshly-added flavor shows up
       // in the left pane once the next registry_state arrives.
@@ -113,10 +135,48 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
       setMinRam('');
       setMinVram('');
       setPlatform('both');
+      setSamplingText(samplingToTextMap(samplingSpecs, {}));
     }
   }
 
   const activeId = entry.active_flavor || flavors[0]?.id || '';
+
+  const curatedSpecs = samplingSpecs.filter((s) => !s.advanced);
+  const advancedSpecs = samplingSpecs.filter((s) => s.advanced);
+  // Recomputed live off the *form's* current contents, not the saved flavor,
+  // so the warning appears while typing rather than only after a round trip.
+  const samplingConflicts = samplingCliConflicts(
+    parseLlamaArgsText(llamaArgsText),
+    textMapToSampling(samplingSpecs, samplingText),
+    samplingSpecs,
+  );
+
+  function samplingField(spec: SamplingParamSpec) {
+    return (
+      <>
+        <label key={`${spec.name}-label`} for={`flavor-sampling-${spec.name}`} title={spec.help}>
+          {spec.label}
+          {spec.neutral ? ` (off: ${spec.neutral})` : ''}
+        </label>
+        <input
+          key={spec.name}
+          id={`flavor-sampling-${spec.name}`}
+          type={spec.kind === 'str_list' ? 'text' : 'number'}
+          min={spec.minimum ?? undefined}
+          max={spec.maximum ?? undefined}
+          step={spec.step ?? undefined}
+          autocomplete="off"
+          title={spec.help}
+          placeholder="unset"
+          readOnly={readOnly}
+          value={samplingText[spec.name] ?? ''}
+          onInput={(e) =>
+            setSamplingText((prev) => ({ ...prev, [spec.name]: (e.target as HTMLInputElement).value }))
+          }
+        />
+      </>
+    );
+  }
 
   return (
     <div className="li-modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) { onClose(); } }}>
@@ -200,6 +260,42 @@ export function FlavorModal({ entry, onClose }: FlavorModalProps) {
               </div>
             </div>
             <hr className="section-divider" />
+            {samplingSpecs.length > 0 && (
+              <>
+                <div className="field-hint">
+                  Request-level sampling defaults. Unlike the launch arguments above, these ride every request,
+                  so changing them takes effect without restarting llama-server — and they can be fine-tuned
+                  per session from the ⚙ button in the chat footer, which starts from the values set here.
+                  Leave a field blank to not send it at all, letting the launch arguments decide.
+                </div>
+                {Object.keys(samplingConflicts).length > 0 && (
+                  <div className="ram-warning yellow">
+                    Set in both places:{' '}
+                    {Object.entries(samplingConflicts)
+                      .map(([flag, name]) => `${flag} / ${name}`)
+                      .join(', ')}
+                    . The request-level value wins for Kōdo&apos;s own calls; the launch argument still applies
+                    to anything else pointed at this server. Usually you only want one of the two.
+                  </div>
+                )}
+                <div className="sampling-grid">
+                  {curatedSpecs.map((spec) => samplingField(spec))}
+                </div>
+                <button
+                  className="sampling-advanced-toggle"
+                  type="button"
+                  onClick={() => setShowAdvancedSampling((v) => !v)}
+                >
+                  {showAdvancedSampling ? '▼' : '▶'} Advanced sampling ({advancedSpecs.length})
+                </button>
+                {showAdvancedSampling && (
+                  <div className="sampling-grid">
+                    {advancedSpecs.map((spec) => samplingField(spec))}
+                  </div>
+                )}
+                <hr className="section-divider" />
+              </>
+            )}
             <div className="field-hint">
               System RAM (or Apple Silicon unified memory) and discrete GPU VRAM this flavor needs to run — leave
               blank/0 if unknown. Selecting a flavor whose requirement exceeds this machine&apos;s detected

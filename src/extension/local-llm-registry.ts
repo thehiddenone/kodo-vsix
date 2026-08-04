@@ -15,6 +15,7 @@ import { hardwareFitWarningForFlavor, isDownloadableLocalEntry, localLaunchWarni
 import { sendControl } from './control-send';
 import { dismissLocalLaunchWarnings, readSettings, readUiSettings, writeSettings } from './settings-io';
 import { state } from './state';
+import { broadcastSamplingContext, parseSamplingSpecs } from './sampling-context';
 import { broadcastThinkingContext, parseThinkingFamilies } from './thinking-context';
 
 /** Merge server-reported local_registry entries with the client-authoritative
@@ -50,6 +51,7 @@ export function pushLocalInferenceState(): void {
     downloads: state.localDownloadsState,
     isMac: process.platform === 'darwin',
     updatableNames: state.localUpdatableNamesState,
+    samplingSpecs: state.samplingSpecsState,
   });
 }
 
@@ -58,11 +60,13 @@ export function onLocalLlmRegistryState(payload: Record<string, unknown>): void 
   state.llamaServerOverridePathState =
     typeof payload.llama_server_override_path === 'string' ? payload.llama_server_override_path : null;
   state.thinkingFamiliesState = parseThinkingFamilies(payload.thinking_families);
+  state.samplingSpecsState = parseSamplingSpecs(payload.sampling_specs);
   state.sidebarProvider?.update({
     localRegistry: state.localRegistryState,
   });
   pushLocalInferenceState();
   broadcastThinkingContext();
+  broadcastSamplingContext();
 }
 
 /** Reply to `local_llm.check_updates` (doc/LOCAL_MODEL_MANAGER.md §12) —
@@ -100,6 +104,7 @@ export function setActiveLocalModel(name: string): void {
   state.activeLocalModelState = name;
   state.sidebarProvider?.update({ activeLocalModel: name });
   broadcastThinkingContext();
+  broadcastSamplingContext();
 }
 
 /**

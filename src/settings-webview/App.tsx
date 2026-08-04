@@ -138,7 +138,13 @@ export function App() {
         />
       )}
       {serverModalOpen && <AddServerUrlModal localRegistry={state.localRegistry} onClose={() => setServerModalOpen(false)} />}
-      {flavorEntry && <FlavorModal entry={flavorEntry} onClose={() => setFlavorEntryName(null)} />}
+      {flavorEntry && (
+        <FlavorModal
+          entry={flavorEntry}
+          samplingSpecs={state.samplingSpecs}
+          onClose={() => setFlavorEntryName(null)}
+        />
+      )}
     </div>
   );
 }

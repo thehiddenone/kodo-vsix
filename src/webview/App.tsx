@@ -3,6 +3,8 @@ import { vscode } from './vscode';
 import { styles } from './styles';
 import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart, SessionEntry } from './types';
 import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset } from './types';
+import type { SamplingParamSpec } from '../llm-registry-types';
+import { parseSamplingValues } from '../llm-registry-types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
 import { UsagePanel } from './UsagePanel';
@@ -20,6 +22,7 @@ import { StuckAlertPanel } from './StuckAlertPanel';
 import { FileReviewPanel } from './FileReviewPanel';
 import { ModeControls } from './ModeControls';
 import { AttachedFilesArea } from './AttachedFilesArea';
+import { SamplingModal } from './SamplingModal';
 import { FooterButton } from './FooterButton';
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
@@ -323,25 +326,35 @@ export function App() {
           });
           break;
         }
-        case 'agent_unstuck_nudge': {
+        case 'nudge': {
           const rawReasons = Array.isArray(msg.reasons) ? msg.reasons : [];
           dispatch({
-            type: 'agent_unstuck_nudge',
-            note: String(msg.note ?? ''),
+            type: 'nudge',
+            uiText: String(msg.uiText ?? ''),
             reasons: rawReasons.map((r) => String(r)),
             mode: String(msg.mode ?? ''),
+            source: String(msg.source ?? ''),
           });
           break;
         }
         case 'agent_stuck_critical':
           dispatch({ type: 'agent_stuck_critical', message: String(msg.message ?? '') });
           break;
-        case 'cyclic_thinking_notice':
-          dispatch({ type: 'cyclic_thinking_notice', message: String(msg.message ?? '') });
-          break;
         case 'agent_cyclic_thinking_critical':
           dispatch({
             type: 'agent_cyclic_thinking_critical',
+            message: String(msg.message ?? ''),
+          });
+          break;
+        case 'agent_think_in_tool_call_critical':
+          dispatch({
+            type: 'agent_think_in_tool_call_critical',
+            message: String(msg.message ?? ''),
+          });
+          break;
+        case 'agent_tool_call_cyclic_critical':
+          dispatch({
+            type: 'agent_tool_call_cyclic_critical',
             message: String(msg.message ?? ''),
           });
           break;
@@ -391,6 +404,15 @@ export function App() {
             thinkingTiers: Array.isArray(msg.thinkingTiers) ? msg.thinkingTiers.map((t) => String(t)) : [],
             running: Boolean(msg.running),
             workspaceConnected: msg.workspaceConnected !== false,
+          });
+          break;
+        case 'sampling_state':
+          dispatch({
+            type: 'sampling_state',
+            model: String(msg.model ?? ''),
+            specs: Array.isArray(msg.specs) ? (msg.specs as SamplingParamSpec[]) : [],
+            defaults: parseSamplingValues(msg.defaults),
+            values: parseSamplingValues(msg.values),
           });
           break;
         case 'persist_session_id':
@@ -704,6 +726,16 @@ export function App() {
               >
                 +
               </FooterButton>
+              {state.samplingModel !== '' && (
+                <FooterButton
+                  style={styles.samplingBtn}
+                  onClick={() => dispatch({ type: 'sampling_modal_open', open: true })}
+                  disabled={!state.connected}
+                  title={`Sampling parameters for ${state.samplingModel}`}
+                >
+                  {'⚙'}
+                </FooterButton>
+              )}
               <FooterButton
                 style={styles.globalStopBtn}
                 onClick={handleStop}
@@ -723,6 +755,18 @@ export function App() {
             </div>
           </div>
         </div>
+      )}
+      {state.samplingModalOpen && state.samplingModel !== '' && (
+        <SamplingModal
+          model={state.samplingModel}
+          specs={state.samplingSpecs}
+          defaults={state.samplingDefaults}
+          values={state.samplingValues}
+          onApply={(values) =>
+            vscode.postMessage({ type: 'sampling_set', model: state.samplingModel, sampling: values })
+          }
+          onClose={() => dispatch({ type: 'sampling_modal_open', open: false })}
+        />
       )}
     </div>
   );

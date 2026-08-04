@@ -16,6 +16,7 @@ import { applyLlamaState } from './llamacpp';
 import { handleApiKeyRequest, pushCloudAiSettingsState } from './cloud-ai-settings';
 import { handleChooseProjectFolder } from './create-project';
 import { confirmLocalLlamaLaunch } from './local-llm-registry';
+import { currentSamplingContext } from './sampling-context';
 import { reconnectSessionWorkspace } from './session-resume';
 import { sendControlAwait } from './control-send';
 import { buildFolderMap, codeWorkspaceFile, readUiSettings } from './settings-io';
@@ -36,6 +37,7 @@ function sessionDeps(): SessionDeps {
     addWorkspaceFolder,
     reconnectWorkspace: reconnectSessionWorkspace,
     getThinkingContext: currentThinkingContext,
+    getSamplingContext: currentSamplingContext,
     getUiSettings: readUiSettings,
     handleApiKeyRequest: (vendor, requestId, send) => {
       state.apiKeyQueue = state.apiKeyQueue.then(() => handleApiKeyRequest(vendor, requestId, send));

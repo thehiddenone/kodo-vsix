@@ -21,6 +21,7 @@ export const initial: KodoSettingsState = {
   detectedRamGb: null,
   isMac: false,
   updatableNames: [],
+  samplingSpecs: [],
 };
 
 export type Action = { type: 'patch'; data: Partial<KodoSettingsState> };
@@ -69,5 +70,6 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   next.detectedRamGb = data.detectedRamGb !== undefined ? data.detectedRamGb : state.detectedRamGb;
   next.isMac = Boolean(data.isMac);
   next.updatableNames = data.updatableNames !== undefined ? data.updatableNames : state.updatableNames;
+  next.samplingSpecs = data.samplingSpecs !== undefined ? data.samplingSpecs : state.samplingSpecs;
   return next;
 }

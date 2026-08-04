@@ -188,17 +188,20 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
       exclude_from_context: true,
     };
   }
-  if (type === 'agent_unstuck_nudge') {
-    // Replay of a persisted "agent_unstuck_nudge"-kind message
-    // (doc/STUCK_DETECTION.md) — same notice the live 'agent_unstuck_nudge'
-    // action renders, so a reload doesn't lose the record of why the agent
-    // kept going.
+  if (type === 'nudge') {
+    // Replay of a persisted "nudge"-kind message (doc/STUCK_DETECTION.md
+    // §2.5) — same yellow <kodo_warn> notice the live 'nudge' action
+    // renders, so a reload doesn't lose the record of why the agent kept
+    // going. Also the replay target for the two legacy kinds ("agent_unstuck_nudge",
+    // "cyclic_thinking_notice") kodo's HistoryProjector reshapes into this
+    // same {type: "nudge", ...} entry for backward compatibility.
     const reasons = Array.isArray(e.reasons) ? e.reasons.map((r) => String(r)) : [];
     return {
-      type: 'agent_unstuck_nudge',
-      note: String(e.note ?? ''),
+      type: 'nudge',
+      uiText: String(e.uiText ?? ''),
       reasons,
       mode: String(e.mode ?? ''),
+      source: String(e.source ?? ''),
       exclude_from_context: true,
     };
   }
@@ -213,23 +216,32 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
       exclude_from_context: true,
     };
   }
-  if (type === 'cyclic_thinking_notice') {
-    // Replay of a persisted "cyclic_thinking_notice"-kind message
-    // (doc/STUCK_DETECTION.md §2.7) — same notice the live
-    // 'cyclic_thinking_notice' action renders, so a reload doesn't lose the
-    // record of the detected repetition loop.
-    return {
-      type: 'cyclic_thinking_notice',
-      message: String(e.message ?? ''),
-      exclude_from_context: true,
-    };
-  }
   if (type === 'agent_cyclic_thinking_critical') {
     // Replay of the server's persisted "agent_cyclic_thinking_critical"
     // marker (see EngineEmitters.emit_cyclic_thinking_critical) — same
     // callout the live 'agent_cyclic_thinking_critical' action renders.
     return {
       type: 'agent_cyclic_thinking_critical',
+      message: String(e.message ?? ''),
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'agent_think_in_tool_call_critical') {
+    // Replay of the server's persisted "agent_think_in_tool_call_critical"
+    // marker (see EngineEmitters.emit_think_in_tool_call_critical) — same
+    // callout the live action renders.
+    return {
+      type: 'agent_think_in_tool_call_critical',
+      message: String(e.message ?? ''),
+      exclude_from_context: true,
+    };
+  }
+  if (type === 'agent_tool_call_cyclic_critical') {
+    // Replay of the server's persisted "agent_tool_call_cyclic_critical"
+    // marker (see EngineEmitters.emit_tool_call_cyclic_critical) — same
+    // callout the live action renders.
+    return {
+      type: 'agent_tool_call_cyclic_critical',
       message: String(e.message ?? ''),
       exclude_from_context: true,
     };
@@ -683,8 +695,8 @@ export function reducer(state: State, action: Action): State {
     case 'stuck_alert_request':
       // The stuck-agent watchdog wants to know whether to nudge a stalled
       // agent (doc/STUCK_DETECTION.md). Transient like pendingPermission:
-      // once decided, the "unstick" action produces its own
-      // agent_unstuck_nudge session entry recording the outcome.
+      // once decided, the "unstick" action produces its own nudge session
+      // entry recording the outcome.
       return {
         ...state,
         pendingStuckAlert: {
@@ -788,23 +800,62 @@ export function reducer(state: State, action: Action): State {
         ...state,
         fileReviewDrafts: state.fileReviewDrafts.filter((_, i) => i !== action.index),
       };
-    case 'agent_unstuck_nudge':
-      // The watchdog's continuation nudge just landed — a plain append,
-      // mirroring 'security_rule_added': it fires right after the nudge is
-      // persisted, before the agent's next turn starts streaming.
+    case 'nudge': {
+      // Any watchdog course-correction just landed (doc/STUCK_DETECTION.md
+      // §2.5) — rendered as a yellow <kodo_warn> callout
+      // (SessionEntryView.tsx). Two shapes, keyed on `action.source`:
+      //
+      // - 'stall'/'missing_return_result' fire only after a round already
+      //   ended cleanly (no tool call, or a sub-agent that skipped
+      //   return_result) — a plain append, mirroring 'security_rule_added'.
+      // - 'cyclic_thinking'/'think_in_tool_call'/'tool_call_cyclic' fire
+      //   mid-round: the stream was cancelled with live content still
+      //   sitting in streamingThinking (a repeating thinking block) or
+      //   streamingToolgen (a tool call's arguments, possibly containing a
+      //   stray <think> tag or a repeated block) — every fragment was
+      //   forwarded to the client before the detector ever saw it. The turn
+      //   is not ending either: _run_agent_turn immediately starts the next
+      //   round, which sends a fresh llm_turn_start (which does NOT clear
+      //   either buffer) followed by that round's own genuine token events.
+      //   Committing+clearing both buffers here (mirroring 'toolgen_token's
+      //   "starting" branch, which has the same "more streaming is still
+      //   coming" shape) is what keeps the next round's display from
+      //   silently inheriting this round's garbage as a prefix. Clearing
+      //   both unconditionally is harmless — only one is ever actually
+      //   populated depending on which detector fired, and this avoids
+      //   fragile per-source branching for what is otherwise the exact same
+      //   cleanup. Deliberately does NOT touch awaitingLlm/streaming/
+      //   llmWaiting — the next round's imminent llm_turn_start will set
+      //   those correctly, and clearing them here too would just flicker
+      //   the "awaiting response" indicator off and back on within one turn.
+      const midStream =
+        action.source === 'cyclic_thinking' ||
+        action.source === 'think_in_tool_call' ||
+        action.source === 'tool_call_cyclic';
+      const entry: SessionEntry = {
+        type: 'nudge',
+        uiText: action.uiText,
+        reasons: action.reasons,
+        mode: action.mode,
+        source: action.source,
+        exclude_from_context: true,
+      };
+      if (!midStream) {
+        return { ...state, session: [...state.session, entry] };
+      }
       return {
         ...state,
-        session: [
-          ...state.session,
-          {
-            type: 'agent_unstuck_nudge',
-            note: action.note,
-            reasons: action.reasons,
-            mode: action.mode,
-            exclude_from_context: true,
-          },
-        ],
+        session: [...commitStreaming(state), entry],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
       };
+    }
     case 'security_rule_added':
       // The user's own record of a just-granted "always allow" rule
       // (WS_PROTOCOL.md §5.9d) — a plain append, mirroring 'tool_call': it
@@ -829,9 +880,9 @@ export function reducer(state: State, action: Action): State {
       };
     case 'agent_stuck_critical':
       // The watchdog gave up after one failed nudge (doc/STUCK_DETECTION.md)
-      // — a plain append, mirroring 'agent_unstuck_nudge'. The turn has
-      // already ended normally by the time this fires, so there is no
-      // streaming/awaiting state to clear here.
+      // — a plain append, mirroring the 'nudge' case's non-mid-stream shape.
+      // The turn has already ended normally by the time this fires, so
+      // there is no streaming/awaiting state to clear here.
       return {
         ...state,
         session: [
@@ -839,51 +890,78 @@ export function reducer(state: State, action: Action): State {
           { type: 'agent_stuck_critical', message: action.message, exclude_from_context: true },
         ],
       };
-    case 'cyclic_thinking_notice': {
-      // Strike 1 of the mid-stream cyclic-thinking detector
-      // (doc/STUCK_DETECTION.md §2.7): unlike 'agent_unstuck_nudge'/
-      // 'agent_stuck_critical' above, this does NOT fire after a round ended
-      // naturally — the stream was cancelled mid-round, with the repeated
-      // thinking content still live in `streamingThinking` (every fragment
-      // was forwarded to the client before the detector ever saw it). The
-      // turn is not ending either: _run_agent_turn immediately starts round
-      // 2, which sends a fresh llm_turn_start (which does NOT clear
-      // streamingThinking/streamingTokens) followed by that round's own
-      // genuine thinking_token events. Committing+clearing the buffer here
-      // (mirroring 'toolgen_token's "starting" branch, which has the same
-      // "more streaming is still coming" shape) is what keeps round 2's
-      // thinking display from silently inheriting round 1's garbage as a
-      // prefix. Deliberately does NOT touch awaitingLlm/streaming/llmWaiting
-      // — round 2's imminent llm_turn_start will set those correctly, and
-      // clearing them here too would just flicker the "awaiting response"
-      // indicator off and back on within one turn.
-      const session = commitStreaming(state);
-      return {
-        ...state,
-        session: [
-          ...session,
-          { type: 'cyclic_thinking_notice', message: action.message, exclude_from_context: true },
-        ],
-        streamingTokens: '',
-        streamingThinking: '',
-        thinkingActive: false,
-        thinkingStartedAt: null,
-      };
-    }
     case 'agent_cyclic_thinking_critical': {
-      // Strike 2: the entry-agent's thinking hit a *second* detected
-      // repetition loop right after the notice above, so the turn ends here
-      // for good (no round 3 coming) — unlike strike 1, this DOES mirror
+      // Strike 2 of the mid-stream cyclic-thinking detector
+      // (doc/STUCK_DETECTION.md §2.7): the entry-agent's thinking hit a
+      // *second* detected repetition loop right after strike 1's nudge, so
+      // the turn ends here for good (no next round coming) — unlike the
+      // 'nudge' case's mid-stream branch, this DOES mirror
       // 'interrupted'/'runtime_error' fully, clearing every waiting
       // indicator. No dangling tool_call to patch (success === null): a
-      // cyclic abort only ever fires within the thinking-delta phase of a
-      // round, before any tool call for that round can exist.
+      // cyclic-thinking abort only ever fires within the thinking-delta
+      // phase of a round, before any tool call for that round can exist.
       return {
         ...state,
         session: [
           ...commitStreaming(state),
           {
             type: 'agent_cyclic_thinking_critical',
+            message: action.message,
+            exclude_from_context: true,
+          },
+        ],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        streaming: false,
+        awaitingLlm: false,
+        llmWaiting: null,
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
+      };
+    }
+    case 'agent_think_in_tool_call_critical': {
+      // Strike 2 of the mid-stream think-in-tool-call detector
+      // (doc/STUCK_DETECTION.md §2.9) — same full-clear shape as
+      // 'agent_cyclic_thinking_critical' above (the abort happened while
+      // streaming a tool call's arguments, not its thinking, but the turn
+      // still ends here for good either way).
+      return {
+        ...state,
+        session: [
+          ...commitStreaming(state),
+          {
+            type: 'agent_think_in_tool_call_critical',
+            message: action.message,
+            exclude_from_context: true,
+          },
+        ],
+        streamingTokens: '',
+        streamingThinking: '',
+        thinkingActive: false,
+        thinkingStartedAt: null,
+        streaming: false,
+        awaitingLlm: false,
+        llmWaiting: null,
+        streamingToolgen: '',
+        toolgenActive: false,
+        toolgenToolName: '',
+        toolgenStartedAt: null,
+      };
+    }
+    case 'agent_tool_call_cyclic_critical': {
+      // Strike 2 of the mid-stream tool-call-argument cyclic detector
+      // (doc/STUCK_DETECTION.md §2.10) — same shape as the two critical
+      // cases above.
+      return {
+        ...state,
+        session: [
+          ...commitStreaming(state),
+          {
+            type: 'agent_tool_call_cyclic_critical',
             message: action.message,
             exclude_from_context: true,
           },
@@ -917,6 +995,19 @@ export function reducer(state: State, action: Action): State {
         running: action.running,
         workspaceConnected: action.workspaceConnected,
       };
+    case 'sampling_state':
+      return {
+        ...state,
+        samplingModel: action.model,
+        samplingSpecs: action.specs,
+        samplingDefaults: action.defaults,
+        samplingValues: action.values,
+        // Switching to a cloud model unmounts the button, so close the modal
+        // with it rather than leaving an orphaned dialog over the feed.
+        samplingModalOpen: action.model ? state.samplingModalOpen : false,
+      };
+    case 'sampling_modal_open':
+      return { ...state, samplingModalOpen: action.open };
     case 'resume_offer':
       return { ...state, resumeSessionId: action.sessionId };
     case 'resume_dismissed':
@@ -1118,6 +1209,11 @@ export const initial: State = {
   thinkingLevel: '',
   thinkingFamily: null,
   thinkingTiers: [],
+  samplingModel: '',
+  samplingSpecs: [],
+  samplingDefaults: {},
+  samplingValues: {},
+  samplingModalOpen: false,
   running: false,
   workspaceConnected: true,
   resumeSessionId: null,

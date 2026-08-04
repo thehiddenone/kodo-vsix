@@ -2,7 +2,7 @@
  *  modals — parsing form input into the wire shapes the host expects, and
  *  the local-registry name-clash check every add form validates against. */
 
-import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry } from './types';
+import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry, SamplingParamSpec, SamplingValues } from './types';
 
 export const DEFAULT_CONTEXT_WINDOW = 262144;
 export const HF_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -31,6 +31,113 @@ export function llamaArgsToText(llamaArgs: Record<string, string> | undefined): 
   return Object.entries(llamaArgs || {})
     .map(([flag, value]) => (value ? `${flag} ${value}` : flag))
     .join('\n');
+}
+
+// --- Request-level sampling defaults (kodo/doc/SAMPLING.md §9) -------------
+//
+// A flavor carries two independent sampling layers: free-text CLI flags in
+// `llama_args` (fixed at launch) and this structured, all-optional block
+// (sent per request). The helpers below convert between the block and the
+// modal's per-field text boxes. Duplicated from the chat webview's copies in
+// `../llm-registry-types` on purpose — the settings webview keeps its own
+// mirrors of every shared shape (see the header of ./types.ts).
+
+/**
+ * Parse the flavor editor's line-based llama-args textarea into `{flag: value}`.
+ *
+ * Mirrors `parse_llama_args_text` (kodo/llms/_local_registry.py): one flag per
+ * line, a bare flag getting an empty value, blank and non-`-`-prefixed lines
+ * skipped. Deliberately NOT `parseLlamaArgs` above — that one parses the
+ * *Add-LLM* modals' space-separated single-line box and would mangle a bare
+ * flag here. Only the keys matter for the conflict check, but the values come
+ * along for free.
+ */
+export function parseLlamaArgsText(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('-')) { continue; }
+    const spaceAt = line.search(/\s/);
+    if (spaceAt === -1) {
+      result[line] = '';
+    } else {
+      result[line.slice(0, spaceAt)] = line.slice(spaceAt + 1).trim();
+    }
+  }
+  return result;
+}
+
+/** One sampling value as input text; `''` for unset. */
+export function samplingValueToText(value: number | string[] | undefined): string {
+  if (value === undefined) { return ''; }
+  return Array.isArray(value) ? value.join(', ') : String(value);
+}
+
+/**
+ * Parse one field's text back into a sampling value, or `undefined` for unset.
+ *
+ * Blank is always `undefined`, never `0`: omitting a parameter means "don't
+ * send it", so llama-server keeps whatever `llama_args` launched it with,
+ * whereas `0` actively sets it (and disables several samplers outright).
+ */
+export function samplingTextToValue(spec: SamplingParamSpec, text: string): number | string[] | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) { return undefined; }
+  if (spec.kind === 'str_list') {
+    const items = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+    return items.length > 0 ? items : undefined;
+  }
+  const parsed = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** Seed the modal's per-field text map from a flavor's stored defaults. */
+export function samplingToTextMap(
+  specs: SamplingParamSpec[],
+  values: SamplingValues | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const spec of specs) {
+    out[spec.name] = samplingValueToText((values || {})[spec.name]);
+  }
+  return out;
+}
+
+/** Collapse the modal's text map back into a sparse `SamplingValues`. */
+export function textMapToSampling(
+  specs: SamplingParamSpec[],
+  text: Record<string, string>,
+): SamplingValues {
+  const out: SamplingValues = {};
+  for (const spec of specs) {
+    const parsed = samplingTextToValue(spec, text[spec.name] ?? '');
+    if (parsed !== undefined) { out[spec.name] = parsed; }
+  }
+  return out;
+}
+
+/**
+ * Knobs set both as a CLI flag in `llama_args` and as a request-level default
+ * — `{cliFlag: parameterName}`, empty when there is no overlap. Mirrors
+ * `cli_flag_conflicts` in kodo/llms/_sampling.py so the editor can warn before
+ * saving. Not an error: the request-level value wins for Kōdo's own calls,
+ * while the CLI value still governs any other client on that server.
+ */
+export function samplingCliConflicts(
+  llamaArgs: Record<string, string>,
+  sampling: SamplingValues,
+  specs: SamplingParamSpec[],
+): Record<string, string> {
+  const byFlag = new Map<string, string>();
+  for (const spec of specs) {
+    for (const flag of spec.cli_flags) { byFlag.set(flag, spec.name); }
+  }
+  const conflicts: Record<string, string> = {};
+  for (const flag of Object.keys(llamaArgs)) {
+    const name = byFlag.get(flag);
+    if (name !== undefined && sampling[name] !== undefined) { conflicts[flag] = name; }
+  }
+  return conflicts;
 }
 
 // The "Manage flavors" modal's platform radio group — order matters (render

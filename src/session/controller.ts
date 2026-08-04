@@ -33,7 +33,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
-import type { ThinkingContext } from '../llm-registry-types';
+import type { SamplingContext, SamplingValues, ThinkingContext } from '../llm-registry-types';
+import { parseSamplingValues } from '../llm-registry-types';
 import { WsClient } from '../ws-client';
 import { handleStatelessEnvelope } from './agent-event-translation';
 import { ActivityCache } from './activity-cache';
@@ -69,6 +70,15 @@ export class SessionController {
 
   private lastPrompt = '';
   private uiSettings: UiSettings;
+  // Window-global half of the footer sampling control (which quant, its
+  // flavor defaults, the parameter table) — refreshed by the host via
+  // `updateSamplingContext` whenever the active model/registry changes.
+  private samplingContext: SamplingContext;
+  // Per-session half: this session's own per-quant overrides, straight off
+  // the server's `state.sampling`. Server-owned like `thinkingLevel` — never
+  // optimistically updated here, so a parameter the server dropped or
+  // clamped shows its real stored value rather than what was typed.
+  private samplingValues: Record<string, SamplingValues> = {};
 
   private readonly _pendingProjectCreate = new Map<string, (payload: Record<string, unknown>) => void>();
 
@@ -82,10 +92,11 @@ export class SessionController {
     this.isNewSession = sessionId === '';
     this.panel = panel;
     this.uiSettings = deps.getUiSettings();
+    this.samplingContext = deps.getSamplingContext();
 
     const post = (msg: Record<string, unknown>) => this._post(msg);
     const send = (env: Envelope) => this._sendStamped(env);
-    this.attachments = new AttachmentManager(post);
+    this.attachments = new AttachmentManager(post, deps.getProjectRoot);
     this.gates = new PromptGateManager(post);
     this.review = new ReviewGateController(panel, post);
     this.modeToggle = new ModeToggleController(deps.getThinkingContext(), post, send);
@@ -316,6 +327,19 @@ export class SessionController {
           makeRequest('thinking_level.set', { thinking_level: String(msg.thinkingLevel ?? '') }),
         );
         break;
+      case 'sampling_set': {
+        // Server-validated like thinking_level.set, with one difference: bad
+        // individual parameters are dropped/clamped rather than failing the
+        // request, and the `state` event that follows carries the set that
+        // actually stuck — so no optimistic local update here either.
+        const model = String(msg.model ?? '');
+        if (model) {
+          this._sendStamped(
+            makeRequest('sampling.set', { model, sampling: parseSamplingValues(msg.sampling) }),
+          );
+        }
+        break;
+      }
       case 'open_file': {
         const filePath = String(msg.path ?? '');
         const projectRoot = this.deps.getProjectRoot();
@@ -518,6 +542,7 @@ export class SessionController {
     this._post({ type: 'status', connected: this.connected });
     this.activity.rehydrateStage();
     this.modeToggle.postModeState();
+    this._postSamplingState();
     this._post({ type: 'ui_settings', ...this.uiSettings });
     this.activity.rehydrateHistoryAndName();
     if (this.lastPrompt) {
@@ -604,6 +629,7 @@ export class SessionController {
         this._post({ type: 'interrupted' });
       }
       this.modeToggle.applyStateEvent(env.payload);
+      this._adoptSamplingValues(env.payload.sampling);
       return;
     }
 
@@ -824,6 +850,10 @@ export class SessionController {
     // model's family default — doc/SESSIONS.md) — hydrate it uniformly.
     const state = env.payload.state as Record<string, unknown> | undefined;
     this.modeToggle.setThinkingLevelFromHello(String(state?.thinking_level ?? ''));
+    // Same uniform-hydration reasoning as thinking_level: `sampling` is always
+    // present in `state` (empty `{}` for a session that never tuned anything),
+    // for both a new and a resumed session.
+    this._adoptSamplingValues(state?.sampling);
 
     if (this.isNewSession) {
       this.modeToggle.applyNewSessionDefaults();
@@ -860,6 +890,42 @@ export class SessionController {
    */
   updateThinkingContext(ctx: ThinkingContext): void {
     this.modeToggle.updateThinkingContext(ctx);
+  }
+
+  /**
+   * Apply a new window-global `SamplingContext` (the host calls this on every
+   * open tab whenever the active model, the registry, or a flavor changes) and
+   * re-push. Mirrors `updateThinkingContext`: the footer button appears,
+   * disappears (cloud model) or re-seeds its defaults without a round trip.
+   */
+  updateSamplingContext(ctx: SamplingContext): void {
+    this.samplingContext = ctx;
+    this._postSamplingState();
+  }
+
+  /** Adopt the server's `state.sampling` map (all quants) and re-push. */
+  private _adoptSamplingValues(raw: unknown): void {
+    const next: Record<string, SamplingValues> = {};
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [model, values] of Object.entries(raw as Record<string, unknown>)) {
+        next[model] = parseSamplingValues(values);
+      }
+    }
+    this.samplingValues = next;
+    this._postSamplingState();
+  }
+
+  /** Push both halves the footer button and its modal need. `model: ''`
+   *  (cloud) means the webview renders no button at all. */
+  private _postSamplingState(): void {
+    const model = this.samplingContext.model;
+    this._post({
+      type: 'sampling_state',
+      model,
+      specs: this.samplingContext.specs,
+      defaults: this.samplingContext.defaults,
+      values: model ? (this.samplingValues[model] ?? {}) : {},
+    });
   }
 
   /**

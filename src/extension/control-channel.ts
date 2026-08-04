@@ -19,6 +19,7 @@ import { applyLlamaState, onLlamaProgress } from './llamacpp';
 import { mergeLocalRegistry, onLocalLlmRegistryState, onLocalLlmUpdatesAvailable, pushLocalInferenceState } from './local-llm-registry';
 import { resumePendingResumeSession } from './session-resume';
 import { state } from './state';
+import { broadcastSamplingContext, parseSamplingSpecs } from './sampling-context';
 import { broadcastThinkingContext, parseThinkingFamilies } from './thinking-context';
 import { reconcileOpenSessions } from './window-sessions';
 
@@ -81,6 +82,7 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
     state.detectedRamGbState =
       typeof env.payload.detected_ram_gb === 'number' ? env.payload.detected_ram_gb : null;
     state.thinkingFamiliesState = parseThinkingFamilies(env.payload.thinking_families);
+    state.samplingSpecsState = parseSamplingSpecs(env.payload.sampling_specs);
     state.sidebarProvider?.update({
       cloudRegistry: state.cloudRegistryState,
       activeCloudVendor: state.activeCloudVendorState,
@@ -96,6 +98,7 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
     pushLocalInferenceState();
     pushCloudAiSettingsState();
     broadcastThinkingContext();
+    broadcastSamplingContext();
     // The server is provably reachable now — reopen any of this window's
     // sessions that the panel serializer could not restore (see
     // window-sessions.ts's open-session-memory block).

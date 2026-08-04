@@ -7,6 +7,26 @@
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
 
+/** A sparse set of request-level sampling parameters (kodo/doc/SAMPLING.md).
+ * Mirrors the shared `SamplingValues` in ../llm-registry-types, per this
+ * file's webview-local-copy convention. */
+export type SamplingValues = Record<string, number | string[]>;
+
+/** Webview-local mirror of the shared `SamplingParamSpec` (see
+ * ../llm-registry-types for the field docs). */
+export interface SamplingParamSpec {
+  name: string;
+  kind: 'float' | 'int' | 'str_list';
+  label: string;
+  advanced: boolean;
+  minimum: number | null;
+  maximum: number | null;
+  step: number | null;
+  neutral: string;
+  cli_flags: string[];
+  help: string;
+}
+
 export interface GlobalRuleEntry {
   kind: 'command' | 'path';
   executable: string;
@@ -92,6 +112,9 @@ export interface LocalFlavor {
   min_vram?: number;
   predefined?: boolean;
   platform?: LlamaFlavorPlatform;
+  /** Request-level sampling defaults (kodo/doc/SAMPLING.md §9) — sparse,
+   * holding only what is set; `{}` for every built-in flavor. */
+  sampling?: SamplingValues;
 }
 
 export interface LocalRegistryEntry {
@@ -145,6 +168,11 @@ export interface KodoSettingsState {
   downloads: LocalDownloadState[];
   isMac: boolean;
   updatableNames: string[];
+  /** The server's request-level sampling parameter table (`sampling_specs`,
+   * kodo/doc/SAMPLING.md). Drives the flavor editor's request-level defaults
+   * form and its CLI-vs-request conflict warning; `[]` before the first
+   * registry payload lands, which simply hides that section. */
+  samplingSpecs: SamplingParamSpec[];
 }
 
 export const EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'max'];
@@ -241,8 +269,8 @@ export type OutboundMessage =
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
   | { type: 'remove_override' }
-  | { type: 'add_flavor'; name: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
-  | { type: 'update_flavor'; name: string; flavor_id: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
+  | { type: 'add_flavor'; name: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform; sampling: SamplingValues }
+  | { type: 'update_flavor'; name: string; flavor_id: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform; sampling: SamplingValues }
   | { type: 'remove_flavor'; name: string; flavor_id: string };
 
 /** Messages the host can post into this webview. */

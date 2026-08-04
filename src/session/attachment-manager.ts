@@ -7,8 +7,10 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { readUiSettings, setLastAttachDir } from '../extension/settings-io';
 import type { AttachedFile } from './types';
 import { MAX_ATTACHMENTS, MAX_ATTACH_BYTES } from './types';
 
@@ -32,7 +34,10 @@ export class AttachmentManager {
   private readonly files = new Map<string, AttachedFile>();
   private seq = 0;
 
-  constructor(private readonly post: Post) {}
+  constructor(
+    private readonly post: Post,
+    private readonly getProjectRoot: () => string,
+  ) {}
 
   get size(): number {
     return this.files.size;
@@ -87,10 +92,12 @@ export class AttachmentManager {
       canSelectMany: true,
       openLabel: 'Attach',
       title: 'Attach text files to your prompt',
+      defaultUri: vscode.Uri.file(this.defaultAttachDir()),
     });
     if (!uris || uris.length === 0) {
       return;
     }
+    setLastAttachDir(path.dirname(uris[0].fsPath));
     for (const uri of uris) {
       if (this.files.size >= MAX_ATTACHMENTS) {
         void vscode.window.showWarningMessage(
@@ -100,6 +107,23 @@ export class AttachmentManager {
       }
       await this.tryAttachOne(uri);
     }
+  }
+
+  /**
+   * Where the attach dialog should open: the last directory a file was
+   * attached from (if it still exists), else the workspace root, else the
+   * user's home directory.
+   */
+  private defaultAttachDir(): string {
+    const lastDir = readUiSettings().lastAttachDir;
+    if (lastDir && fs.existsSync(lastDir)) {
+      return lastDir;
+    }
+    const projectRoot = this.getProjectRoot();
+    if (projectRoot) {
+      return projectRoot;
+    }
+    return os.homedir();
   }
 
   /**

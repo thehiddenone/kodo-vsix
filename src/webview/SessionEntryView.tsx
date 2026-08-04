@@ -389,31 +389,33 @@ export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
         </div>
       );
     }
-    case 'agent_unstuck_nudge':
-      // The stuck-watchdog's continuation nudge (doc/STUCK_DETECTION.md) —
-      // the actual continuation instruction was sent to the agent as a real
-      // turn, but here we show only the user-facing explanation of why.
-      return (
-        <div style={styles.agentUnstuckNudge}>
-          <span style={styles.agentUnstuckNudgeIcon}>↻</span>
-          <span style={styles.agentUnstuckNudgeText}>{entry.note}</span>
-        </div>
-      );
+    case 'nudge':
+      // Any watchdog course-correction (doc/STUCK_DETECTION.md §2.5) — an
+      // ordinary stall nudge, the missing-`return_result` reminder, or
+      // either mid-stream detector's notice. The actual continuation
+      // instruction was sent to the agent as a real turn, but here we show
+      // only the user-facing explanation of why, as a yellow warning
+      // callout (reused from the Markdown renderer's existing <kodo_warn>
+      // tag — this was the first caller of it).
+      return <Markdown content={`<kodo_warn>${entry.uiText}</kodo_warn>`} />;
     case 'agent_stuck_critical':
       // The watchdog gave up (doc/STUCK_DETECTION.md) — a second consecutive
       // stall right after its one nudge, so the turn ended instead of trying
       // again. Rendered like error_notice: a red <kodo_crit> callout.
       return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
-    case 'cyclic_thinking_notice':
-      // Strike 1 of the mid-stream cyclic-thinking detector
-      // (doc/STUCK_DETECTION.md §2.7) — a thinking block degenerated into a
-      // repetition loop and the stream was aborted. Same single-artifact
-      // shape as the message itself (the agent reads this back as real
-      // context next round); rendered as a red <kodo_crit> callout here too.
-      return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
     case 'agent_cyclic_thinking_critical':
-      // Strike 2: a second detected repetition loop right after the notice
-      // above, so the turn ended instead of trying again.
+      // Strike 2 of the mid-stream cyclic-thinking detector
+      // (doc/STUCK_DETECTION.md §2.7): a second detected repetition loop
+      // right after strike 1's nudge, so the turn ended instead of trying
+      // again.
+      return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
+    case 'agent_think_in_tool_call_critical':
+      // Strike 2 of the mid-stream think-in-tool-call detector
+      // (doc/STUCK_DETECTION.md §2.9) — same shape as the critical case above.
+      return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
+    case 'agent_tool_call_cyclic_critical':
+      // Strike 2 of the mid-stream tool-call-argument cyclic detector
+      // (doc/STUCK_DETECTION.md §2.10) — same shape again.
       return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
     case 'greeting':
       // A brand-new session's server-generated opening greeting

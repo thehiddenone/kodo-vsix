@@ -7,7 +7,7 @@
  */
 
 import type * as vscode from 'vscode';
-import type { CloudRegistry, LocalDownloadState, LocalRegistryEntry, ThinkingFamilies } from '../llm-registry-types';
+import type { CloudRegistry, LocalDownloadState, LocalRegistryEntry, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
 import type { ServerLauncher } from '../server-launcher';
 import type { SessionController } from '../session/controller';
 import type { SidebarProvider } from '../sidebar-provider';
@@ -85,6 +85,13 @@ interface WindowState {
   // thinking_level itself is per-session server-tracked state (doc/SESSIONS.md),
   // not a window-global setting.
   thinkingFamiliesState: ThinkingFamilies;
+  // The server's request-level sampling parameter table, from the
+  // `sampling_specs` field of the same `hello.ack`/`local_llm.registry_state`
+  // payload (kodo/doc/SAMPLING.md). Static for the life of the server, so it
+  // rides the registry push rather than every per-session `state`. Forwarded
+  // to every open session tab; the per-quant override VALUES are per-session
+  // server state instead, arriving on `state.sampling`.
+  samplingSpecsState: SamplingParamSpec[];
   // Live download progress, read off manager-state.json on disk rather than
   // pushed over the WS wire (see local-model-downloads.ts and
   // doc/LOCAL_MODEL_MANAGER.md §11) — keyed by registry entry name.
@@ -159,6 +166,7 @@ export const state: WindowState = {
   detectedVramGbState: null,
   detectedRamGbState: null,
   thinkingFamiliesState: {},
+  samplingSpecsState: [],
   localDownloadsState: [],
   localUpdatableNamesState: [],
 

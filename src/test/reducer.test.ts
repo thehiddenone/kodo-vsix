@@ -21,11 +21,17 @@ suite('reducer — cyclic-thinking', () => {
     };
   }
 
-  suite('live: cyclic_thinking_notice (strike 1)', () => {
+  suite('live: nudge, mid-stream source (strike 1)', () => {
     test('commits streamingThinking into a thinking_block and clears the buffers', () => {
       const state = streamingState();
 
-      const next = reducer(state, { type: 'cyclic_thinking_notice', message: 'reconsidering' });
+      const next = reducer(state, {
+        type: 'nudge',
+        uiText: 'reconsidering',
+        reasons: ['cyclic_thinking'],
+        mode: 'auto',
+        source: 'cyclic_thinking',
+      });
 
       assert.strictEqual(next.streamingThinking, '');
       assert.strictEqual(next.streamingTokens, '');
@@ -33,11 +39,35 @@ suite('reducer — cyclic-thinking', () => {
       assert.strictEqual(next.thinkingStartedAt, null);
 
       const types = next.session.map((e) => e.type);
-      assert.deepStrictEqual(types, ['thinking_block', 'cyclic_thinking_notice']);
+      assert.deepStrictEqual(types, ['thinking_block', 'nudge']);
       const notice = next.session[1];
-      assert.ok(notice.type === 'cyclic_thinking_notice');
-      assert.strictEqual(notice.message, 'reconsidering');
+      assert.ok(notice.type === 'nudge');
+      assert.strictEqual(notice.uiText, 'reconsidering');
+      assert.strictEqual(notice.source, 'cyclic_thinking');
       assert.strictEqual(notice.exclude_from_context, true);
+    });
+
+    test('also clears the toolgen buffer (think-in-tool-call/tool-call-cyclic sources)', () => {
+      const state: State = {
+        ...streamingState(),
+        streamingToolgen: 'still generating',
+        toolgenActive: true,
+        toolgenToolName: 'run_subagent',
+        toolgenStartedAt: 2000,
+      };
+
+      const next = reducer(state, {
+        type: 'nudge',
+        uiText: 'stopped a stray <think> tag',
+        reasons: ['think_in_tool_call'],
+        mode: 'auto',
+        source: 'think_in_tool_call',
+      });
+
+      assert.strictEqual(next.streamingToolgen, '');
+      assert.strictEqual(next.toolgenActive, false);
+      assert.strictEqual(next.toolgenToolName, '');
+      assert.strictEqual(next.toolgenStartedAt, null);
     });
 
     test('does NOT clear awaitingLlm/streaming/llmWaiting -- round 2 starts right after', () => {
@@ -46,11 +76,40 @@ suite('reducer — cyclic-thinking', () => {
       // here too would just flicker the "awaiting response" indicator.
       const state = streamingState();
 
-      const next = reducer(state, { type: 'cyclic_thinking_notice', message: 'reconsidering' });
+      const next = reducer(state, {
+        type: 'nudge',
+        uiText: 'reconsidering',
+        reasons: ['cyclic_thinking'],
+        mode: 'auto',
+        source: 'cyclic_thinking',
+      });
 
       assert.strictEqual(next.awaitingLlm, state.awaitingLlm);
       assert.strictEqual(next.streaming, state.streaming);
       assert.strictEqual(next.llmWaiting, state.llmWaiting);
+    });
+  });
+
+  suite('live: nudge, non-mid-stream source (stall / missing_return_result)', () => {
+    test('plain-appends without touching any streaming buffer', () => {
+      const state = streamingState();
+
+      const next = reducer(state, {
+        type: 'nudge',
+        uiText: 'continued automatically',
+        reasons: ['empty_final_turn'],
+        mode: 'auto',
+        source: 'stall',
+      });
+
+      // Unlike the mid-stream case, streamingThinking is left exactly as-is
+      // -- an ordinary stall nudge only ever fires after a round already
+      // ended cleanly, so there is nothing live to commit.
+      assert.strictEqual(next.streamingThinking, state.streamingThinking);
+      assert.deepStrictEqual(
+        next.session.map((e) => e.type),
+        ['nudge'],
+      );
     });
   });
 
@@ -91,18 +150,31 @@ suite('reducer — cyclic-thinking', () => {
   });
 
   suite('replay: session_history', () => {
-    test('rebuilds both new entry types from persisted wire entries', () => {
+    test('rebuilds both entry types from persisted wire entries', () => {
       const next = reducer(initial, {
         type: 'session_history',
         entries: [
-          { type: 'cyclic_thinking_notice', message: 'reconsidering' },
+          {
+            type: 'nudge',
+            uiText: 'reconsidering',
+            reasons: ['cyclic_thinking'],
+            mode: 'auto',
+            source: 'cyclic_thinking',
+          },
           { type: 'agent_cyclic_thinking_critical', message: 'gave up after a second loop' },
         ],
         subsessions: {},
       });
 
       assert.deepStrictEqual(next.session, [
-        { type: 'cyclic_thinking_notice', message: 'reconsidering', exclude_from_context: true },
+        {
+          type: 'nudge',
+          uiText: 'reconsidering',
+          reasons: ['cyclic_thinking'],
+          mode: 'auto',
+          source: 'cyclic_thinking',
+          exclude_from_context: true,
+        },
         {
           type: 'agent_cyclic_thinking_critical',
           message: 'gave up after a second loop',

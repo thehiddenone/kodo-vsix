@@ -197,13 +197,14 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     return true;
   }
 
-  if (env.kind === 'event' && evtType === 'agent.unstuck_nudge') {
+  if (env.kind === 'event' && evtType === 'agent.nudge') {
     const rawReasons = Array.isArray(env.payload.reasons) ? env.payload.reasons : [];
     post({
-      type: 'agent_unstuck_nudge',
-      note: String(env.payload.note ?? ''),
+      type: 'nudge',
+      uiText: String(env.payload.ui_text ?? ''),
       reasons: rawReasons.map((r) => String(r)),
       mode: String(env.payload.mode ?? ''),
+      source: String(env.payload.source ?? ''),
     });
     return true;
   }
@@ -213,14 +214,25 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     return true;
   }
 
-  if (env.kind === 'event' && evtType === 'agent.cyclic_thinking_notice') {
-    post({ type: 'cyclic_thinking_notice', message: String(env.payload.message ?? '') });
-    return true;
-  }
-
   if (env.kind === 'event' && evtType === 'agent.cyclic_thinking_critical') {
     post({
       type: 'agent_cyclic_thinking_critical',
+      message: String(env.payload.message ?? ''),
+    });
+    return true;
+  }
+
+  if (env.kind === 'event' && evtType === 'agent.think_in_tool_call_critical') {
+    post({
+      type: 'agent_think_in_tool_call_critical',
+      message: String(env.payload.message ?? ''),
+    });
+    return true;
+  }
+
+  if (env.kind === 'event' && evtType === 'agent.tool_call_cyclic_critical') {
+    post({
+      type: 'agent_tool_call_cyclic_critical',
       message: String(env.payload.message ?? ''),
     });
     return true;

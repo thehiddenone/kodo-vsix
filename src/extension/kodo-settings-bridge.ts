@@ -115,6 +115,7 @@ export async function openKodoSettings(selectSection?: string): Promise<void> {
     downloads: state.localDownloadsState,
     isMac: process.platform === 'darwin',
     updatableNames: state.localUpdatableNamesState,
+    samplingSpecs: state.samplingSpecsState,
   };
   const cloudAi = cloudAiStateForPanel();
   const panel = KodoSettingsPanel.createOrShow(
@@ -431,6 +432,7 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
         min_ram: msg.min_ram,
         min_vram: msg.min_vram,
         platform: msg.platform,
+        sampling: msg.sampling,
       }),
     );
   } else if (msg.type === 'update_flavor') {
@@ -444,6 +446,7 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
         min_ram: msg.min_ram,
         min_vram: msg.min_vram,
         platform: msg.platform,
+        sampling: msg.sampling,
       }),
     );
   } else if (msg.type === 'remove_flavor') {

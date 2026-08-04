@@ -12,6 +12,8 @@ import type {
   LlamaFlavorPlatform,
   LocalDownloadState,
   LocalRegistryEntry,
+  SamplingParamSpec,
+  SamplingValues,
 } from '../llm-registry-types';
 import type { RememberedWorkspace } from '../workspace-resume-policy';
 
@@ -103,6 +105,12 @@ export interface UiSettings {
    *  in the product removes an entry from this list once added (no "re-enable
    *  warnings" UI exists), mirroring how this whole file has no in-app editor. */
   dismissedLocalLaunchWarnings: string[];
+  /** Absolute path of the directory the "+" attach-file dialog last opened
+   *  into — updated to the containing folder of the most recently attached
+   *  file. Host-only (never surfaced in this settings panel); falls back to
+   *  the workspace root, then the user's home directory, when empty or when
+   *  the saved directory no longer exists. See `attachment-manager.ts`. */
+  lastAttachDir: string;
 }
 
 /** Payloads shared with the (former, now-merged-in) Local Inference Settings
@@ -142,6 +150,10 @@ export interface AddFlavorPayload {
   min_vram: number;
   /** Defaults server-side to `'both'` if omitted — see LlamaFlavorInfo.platform. */
   platform: LlamaFlavorPlatform;
+  /** Request-level sampling defaults for this flavor (kodo/doc/SAMPLING.md
+   * §9) — sparse, holding only what is set. Not carried forward if omitted,
+   * same as min_ram/min_vram/platform: the modal always resends the full set. */
+  sampling: SamplingValues;
 }
 
 export interface UpdateFlavorPayload {
@@ -159,6 +171,10 @@ export interface UpdateFlavorPayload {
   min_vram: number;
   /** Not carried forward if omitted (resets to `'both'`), same as min_ram/min_vram. */
   platform: LlamaFlavorPlatform;
+  /** Request-level sampling defaults for this flavor (kodo/doc/SAMPLING.md
+   * §9) — sparse, holding only what is set. Not carried forward if omitted,
+   * same as min_ram/min_vram/platform: the modal always resends the full set. */
+  sampling: SamplingValues;
 }
 
 export interface KodoSettingsState {
@@ -196,6 +212,11 @@ export interface KodoSettingsState {
    * replies.
    */
   updatableNames: string[];
+  /** The server's request-level sampling parameter table (`sampling_specs`,
+   * kodo/doc/SAMPLING.md). Drives the flavor editor's request-level defaults
+   * form and its CLI-vs-request conflict warning; `[]` before the first
+   * registry payload lands, which simply hides that section. */
+  samplingSpecs: SamplingParamSpec[];
 }
 
 export type KodoSettingsMessage =

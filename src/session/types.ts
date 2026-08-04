@@ -7,7 +7,7 @@
 
 import type * as vscode from 'vscode';
 import type { Envelope } from '../envelope';
-import type { ThinkingContext } from '../llm-registry-types';
+import type { SamplingContext, ThinkingContext } from '../llm-registry-types';
 import type { SessionController } from './controller';
 
 /** Edit Control posture. `smart` is the default. */
@@ -206,6 +206,11 @@ export interface SessionDeps {
    * via {@link SessionController.updateThinkingContext}).
    */
   getThinkingContext: () => ThinkingContext;
+  /** Window-global sampling context (active quant + its flavor defaults +
+   *  the server's parameter table) for the footer sampling button. The
+   *  session's own override VALUES are not here — those arrive per-session
+   *  on `state.sampling`. See kodo/doc/SAMPLING.md §9. */
+  getSamplingContext: () => SamplingContext;
   /**
    * Current "Show Timestamps" flags, read fresh from
    * `~/.kodo/etc/ui-settings.json` (extension.ts's `_readUiSettings`) at

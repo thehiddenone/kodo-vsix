@@ -1,5 +1,5 @@
 // Shared data, state, and action types for the Kōdo WebView.
-import type { ThinkingFamily } from '../llm-registry-types';
+import type { SamplingParamSpec, SamplingValues, ThinkingFamily } from '../llm-registry-types';
 
 /** Edit Control posture the Edit toggle cycles through. `smart` is the default. */
 export type EditControl = 'review_all' | 'allow_all' | 'smart';
@@ -165,7 +165,7 @@ export interface PermissionData {
 /** The outstanding prompt.stuck_alert request — the stuck-agent watchdog
  *  (doc/STUCK_DETECTION.md) wants to know whether to nudge a stalled agent.
  *  Transient (never a session entry): once decided, an "unstick" produces its
- *  own agent_unstuck_nudge entry recording the outcome. */
+ *  own nudge entry recording the outcome. */
 export interface StuckAlertData {
   requestId: string;
   agentName: string;
@@ -393,36 +393,47 @@ export type SessionEntry =
   // absolute path for a workspace-escape/path rule). Persisted as a
   // "security_rule_added" marker and replayed via session_history on reload.
   | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer; exclude_from_context: true }
-  // The stuck-agent watchdog's continuation nudge (doc/STUCK_DETECTION.md) —
-  // a real user-role turn the agent responds to, but rendered as a distinct
-  // notice (not a fake user-typed bubble), mirroring 'subagent_task'. `note`
-  // is the user-facing explanation of what Kōdo observed; `reasons` are the
-  // matched red-flag codes; `mode` is "auto" (autonomous/auto-unstuck) or
-  // "manual" (the user clicked "Unstick it"). Persisted as an
-  // "agent_unstuck_nudge"-kind message and replayed via session_history.
-  | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string; exclude_from_context: true }
+  // Any watchdog course-correction (doc/STUCK_DETECTION.md §2.5) — an
+  // ordinary stall nudge, the missing-`return_result` reminder, or either
+  // mid-stream detector's notice (cyclic-thinking §2.7, think-in-tool-call
+  // §2.9, tool-call-cyclic §2.10). A real user- or assistant-role turn the
+  // agent responds to/reads back, but rendered as a distinct notice (not a
+  // fake user-typed bubble) — a yellow `<kodo_warn>` callout
+  // (SessionEntryView.tsx). `uiText` is the user-facing explanation of what
+  // Kōdo observed; `reasons` are the matched red-flag/detector codes; `mode`
+  // is "auto" (autonomous/auto-unstuck) or "manual" (the user clicked
+  // "Unstick it"); `source` identifies which detector fired
+  // ("stall" | "missing_return_result" | "cyclic_thinking" |
+  // "think_in_tool_call" | "tool_call_cyclic") — used live (not on replay)
+  // to decide whether a mid-stream buffer needs flushing, see reducer.ts.
+  // Persisted as a "nudge"-kind message and replayed via session_history.
+  // Replaces the former 'agent_unstuck_nudge'/'cyclic_thinking_notice' pair
+  // (unified 2026-08-03); old sessions with those kinds still replay as this
+  // same type (kodo's `_history.py` backward-compat shim).
+  | { type: 'nudge'; uiText: string; reasons: string[]; mode: string; source: string; exclude_from_context: true }
   // The stuck-agent watchdog gave up: an entry-agent turn stalled a second
   // consecutive time right after its one nudge, so the turn ended instead of
   // nudging (or asking) again. Display-only, like error_notice — rendered as
   // a <kodo_crit> callout. Persisted as an "agent_stuck_critical" marker and
   // replayed via session_history on reload.
   | { type: 'agent_stuck_critical'; message: string; exclude_from_context: true }
-  // The mid-stream cyclic-thinking detector's strike-1 notice
-  // (doc/STUCK_DETECTION.md §2.7): a thinking block degenerated into a
-  // repetition loop and the stream was aborted before it could burn through
-  // the rest of the budget. `message` is the same real, LLM-visible
-  // course-correction turn the agent reads back next round — rendered here
-  // as a <kodo_crit> callout, not a fake user-typed bubble, mirroring
-  // 'agent_unstuck_nudge'. Persisted as a "cyclic_thinking_notice"-kind
-  // message and replayed via session_history.
-  | { type: 'cyclic_thinking_notice'; message: string; exclude_from_context: true }
-  // Strike 2: the entry-agent's thinking hit a *second* detected repetition
-  // loop right after the notice above, so the turn ended instead of trying
-  // again. Display-only, mirroring 'agent_stuck_critical' — a distinct type
-  // (not a reuse of that one) since the root cause and message differ.
-  // Persisted as an "agent_cyclic_thinking_critical" marker and replayed via
-  // session_history on reload.
+  // The mid-stream cyclic-thinking detector hit a *second* detected
+  // repetition loop right after its one nudge (doc/STUCK_DETECTION.md §2.7),
+  // so the turn ended instead of trying again. Display-only, mirroring
+  // 'agent_stuck_critical' — a distinct type since the root cause and
+  // message differ. Persisted as an "agent_cyclic_thinking_critical" marker
+  // and replayed via session_history on reload.
   | { type: 'agent_cyclic_thinking_critical'; message: string; exclude_from_context: true }
+  // Same shape as the above, for the mid-stream think-in-tool-call detector
+  // (doc/STUCK_DETECTION.md §2.9) — a second consecutive stray `<think>` tag
+  // in tool-call arguments ended the turn instead of nudging again.
+  // Persisted as an "agent_think_in_tool_call_critical" marker.
+  | { type: 'agent_think_in_tool_call_critical'; message: string; exclude_from_context: true }
+  // Same shape again, for the mid-stream tool-call-argument cyclic detector
+  // (doc/STUCK_DETECTION.md §2.10) — a second consecutive repetition loop in
+  // tool-call arguments ended the turn instead of nudging again. Persisted
+  // as an "agent_tool_call_cyclic_critical" marker.
+  | { type: 'agent_tool_call_cyclic_critical'; message: string; exclude_from_context: true }
   // The server-generated opening greeting for a brand-new session
   // (kodo.titling.generate_greeting, runtime._engine._greeting.SessionGreeter)
   // — replaces this WebView's own previously-hardcoded empty-state
@@ -501,6 +512,24 @@ export interface State {
   thinkingLevel: string;
   thinkingFamily: ThinkingFamily | null;
   thinkingTiers: string[];
+  /**
+   * Request-level llama-server sampling state (kodo/doc/SAMPLING.md). All four
+   * fields arrive together on `sampling_state`.
+   *
+   * `samplingModel` is the active local quant these apply to, or `''` on a
+   * cloud model — in which case the footer button is not rendered at all.
+   * `samplingValues` holds only this session's explicit overrides for that
+   * quant, `samplingDefaults` the active flavor's defaults underneath them.
+   * Both are sparse: a parameter missing from both is not sent to
+   * llama-server at all, which is NOT the same as sending llama.cpp's
+   * built-in default.
+   */
+  samplingModel: string;
+  samplingSpecs: SamplingParamSpec[];
+  samplingDefaults: SamplingValues;
+  samplingValues: SamplingValues;
+  /** True while the sampling modal is open (webview-local UI state). */
+  samplingModalOpen: boolean;
   /** True while a turn is in progress (server phase "running"); gates the frozen toggles' "queued" status. */
   running: boolean;
   /**
@@ -622,10 +651,11 @@ export type Action =
   | { type: 'file_review_close_composer' }
   | { type: 'file_review_apply_draft'; text: string }
   | { type: 'file_review_remove_draft'; index: number }
-  | { type: 'agent_unstuck_nudge'; note: string; reasons: string[]; mode: string }
+  | { type: 'nudge'; uiText: string; reasons: string[]; mode: string; source: string }
   | { type: 'agent_stuck_critical'; message: string }
-  | { type: 'cyclic_thinking_notice'; message: string }
   | { type: 'agent_cyclic_thinking_critical'; message: string }
+  | { type: 'agent_think_in_tool_call_critical'; message: string }
+  | { type: 'agent_tool_call_cyclic_critical'; message: string }
   | {
       type: 'mode_state';
       autonomous: boolean;
@@ -641,6 +671,14 @@ export type Action =
       running: boolean;
       workspaceConnected: boolean;
     }
+  | {
+      type: 'sampling_state';
+      model: string;
+      specs: SamplingParamSpec[];
+      defaults: SamplingValues;
+      values: SamplingValues;
+    }
+  | { type: 'sampling_modal_open'; open: boolean }
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
   | { type: 'session_name'; name: string }
