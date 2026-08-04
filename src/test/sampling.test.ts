@@ -3,6 +3,7 @@ import * as assert from 'assert';
 import {
   cliArgValueToSamplingValue,
   flavorSamplingDefaults,
+  samplingRangeWarning,
   samplingTextToValue,
   samplingValueToCliArgValue,
   samplingValueToText,
@@ -21,6 +22,8 @@ const TEMPERATURE: SamplingParamSpec = {
   advanced: false,
   minimum: 0,
   maximum: 4,
+  sensible_minimum: 0,
+  sensible_maximum: 2,
   step: 0.05,
   neutral: '1.0',
   cli_flags: ['--temp', '--temperature'],
@@ -34,9 +37,44 @@ const TOP_K: SamplingParamSpec = {
   advanced: false,
   minimum: 0,
   maximum: 1000,
+  sensible_minimum: 0,
+  sensible_maximum: 200,
   step: 1,
   neutral: '0',
   cli_flags: ['--top-k'],
+  help: '',
+};
+
+// Its "off" value (0.0) sits *below* its useful active band — the case the
+// neutral-value exemption exists for.
+const MIN_P: SamplingParamSpec = {
+  name: 'min_p',
+  kind: 'float',
+  label: 'Min-P',
+  advanced: false,
+  minimum: 0,
+  maximum: 1,
+  sensible_minimum: 0.01,
+  sensible_maximum: 0.2,
+  step: 0.01,
+  neutral: '0.0',
+  cli_flags: ['--min-p'],
+  help: '',
+};
+
+// No recommended band at all — every accepted seed is as good as any other.
+const SEED: SamplingParamSpec = {
+  name: 'seed',
+  kind: 'int',
+  label: 'Seed',
+  advanced: false,
+  minimum: -1,
+  maximum: 2147483647,
+  sensible_minimum: null,
+  sensible_maximum: null,
+  step: 1,
+  neutral: '',
+  cli_flags: ['-s', '--seed'],
   help: '',
 };
 
@@ -47,6 +85,8 @@ const BREAKERS: SamplingParamSpec = {
   advanced: true,
   minimum: null,
   maximum: null,
+  sensible_minimum: null,
+  sensible_maximum: null,
   step: null,
   neutral: '',
   cli_flags: ['--dry-sequence-breaker'],
@@ -60,6 +100,8 @@ const SAMPLERS: SamplingParamSpec = {
   advanced: true,
   minimum: null,
   maximum: null,
+  sensible_minimum: null,
+  sensible_maximum: null,
   step: null,
   neutral: '',
   cli_flags: ['--samplers'],
@@ -73,6 +115,8 @@ const MIN_KEEP: SamplingParamSpec = {
   advanced: true,
   minimum: 0,
   maximum: 100,
+  sensible_minimum: 0,
+  sensible_maximum: 10,
   step: 1,
   neutral: '0',
   cli_flags: [],
@@ -82,6 +126,60 @@ const MIN_KEEP: SamplingParamSpec = {
 function fakeFlavor(llama_args: Record<string, string>): LlamaFlavorInfo {
   return { id: 'x', name: 'x', description: '', llama_args, predefined: false, min_ram: 0, min_vram: 0, platform: 'both' };
 }
+
+suite('sampling — recommended-range warning', () => {
+  test('in-band values are clean, out-of-band ones warn', () => {
+    assert.strictEqual(samplingRangeWarning(TEMPERATURE, '0.7'), null);
+    assert.strictEqual(samplingRangeWarning(TEMPERATURE, '2'), null, 'the bound itself is in band');
+    assert.strictEqual(samplingRangeWarning(TEMPERATURE, '0'), null, 'greedy is a real choice');
+    assert.notStrictEqual(samplingRangeWarning(TEMPERATURE, '2.6'), null);
+    assert.notStrictEqual(samplingRangeWarning(MIN_P, '0.5'), null);
+  });
+
+  test('the warning names the band and how to turn the parameter off', () => {
+    const warning = samplingRangeWarning(TEMPERATURE, '3.5') ?? '';
+    assert.ok(warning.includes('0 to 2'), warning);
+    assert.ok(warning.includes('Temperature'), warning);
+    assert.ok(warning.includes('1.0'), 'should point at the neutral value: ' + warning);
+  });
+
+  test('the neutral value never warns, even from outside the band', () => {
+    // Min-P is useful at 0.01–0.2 but *disabled* at 0.0. Flagging a
+    // deliberate "off" would be pure noise — see SAMPLING.md §8d.
+    assert.strictEqual(samplingRangeWarning(MIN_P, '0.0'), null);
+    assert.strictEqual(samplingRangeWarning(MIN_P, '0'), null, 'same value, other spelling');
+    assert.notStrictEqual(samplingRangeWarning(MIN_P, '0.005'), null, 'still warns just above off');
+  });
+
+  test('blank, half-typed and non-numeric fields never warn', () => {
+    // Recomputed per keystroke, so an intermediate parse must not flicker.
+    assert.strictEqual(samplingRangeWarning(TEMPERATURE, ''), null);
+    assert.strictEqual(samplingRangeWarning(TEMPERATURE, '  '), null);
+    assert.strictEqual(samplingRangeWarning(TEMPERATURE, '-'), null);
+    assert.strictEqual(samplingRangeWarning(TEMPERATURE, 'abc'), null);
+  });
+
+  test('specs with no band, and str_list specs, never warn', () => {
+    assert.strictEqual(samplingRangeWarning(SEED, '999999999'), null);
+    assert.strictEqual(samplingRangeWarning(BREAKERS, 'a, b, c'), null);
+    assert.strictEqual(samplingRangeWarning(SAMPLERS, 'top_k, temperature'), null);
+  });
+
+  test('a spec from an older server (no band fields) never warns', () => {
+    // `parseSamplingSpecs` is a pass-through cast, so a kodo predating this
+    // feature yields `undefined` here — it must degrade to "no guidance"
+    // rather than failing every comparison and flagging every value.
+    const legacy = { ...TEMPERATURE } as Partial<SamplingParamSpec>;
+    delete legacy.sensible_minimum;
+    delete legacy.sensible_maximum;
+    assert.strictEqual(samplingRangeWarning(legacy as SamplingParamSpec, '3.9'), null);
+  });
+
+  test('int specs parse as ints', () => {
+    assert.strictEqual(samplingRangeWarning(TOP_K, '40'), null);
+    assert.notStrictEqual(samplingRangeWarning(TOP_K, '900'), null);
+  });
+});
 
 suite('sampling — text <-> value', () => {
   test('a blank field is unset, NOT zero', () => {

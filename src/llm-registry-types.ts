@@ -109,12 +109,25 @@ export interface SamplingParamSpec {
   label: string;
   /** `false` = the curated set shown up front; `true` = behind "Advanced". */
   advanced: boolean;
+  /** Hard validation bounds — what llama-server/`SamplingParams.from_json`
+   *  will accept (a value outside is clamped server-side). Deliberately
+   *  generous; the *advisory* band is `sensible_minimum`/`sensible_maximum`. */
   minimum: number | null;
   maximum: number | null;
+  /** The **recommended** band, always inside `[minimum, maximum]` and usually
+   * far narrower — see kodo/doc/SAMPLING.md §8d for each parameter's exact
+   * endpoints and why they were picked. Advisory only: nothing clamps or
+   * rejects against it, {@link samplingRangeWarning} just produces the yellow
+   * ⚠ both modals render. `null` (both together) = no guidance for this
+   * parameter, because no accepted value is unreasonable (`seed`, `mirostat`)
+   * or it isn't numeric. */
+  sensible_minimum: number | null;
+  sensible_maximum: number | null;
   step: number | null;
   /** The value that *disables* this sampler, as a display string — `""` when
    * it has none. Distinct from leaving the field empty, which instead means
-   * "don't send it and inherit the launch-time value". */
+   * "don't send it and inherit the launch-time value". Also exempt from the
+   * sensible-range warning — see {@link samplingRangeWarning}. */
   neutral: string;
   /** Equivalent llama-server CLI flags. `cli_flags[0]` is what the flavor
    * editor's structured sampling form writes into `llama_args` when a field
@@ -535,6 +548,65 @@ export function samplingTextToValue(
   }
   const parsed = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * The tooltip for `spec`'s yellow ⚠, or `null` when `text` needs no warning.
+ *
+ * Purely advisory guidance against the spec's *recommended* band
+ * (`sensible_minimum`/`sensible_maximum`, kodo/doc/SAMPLING.md §8d) — never
+ * validation. The server's hard `minimum`/`maximum` still clamp on their own,
+ * and a warned value is submitted unchanged; this only tells the user that a
+ * value llama.cpp accepts is one that will probably make output worse.
+ *
+ * Four things deliberately do NOT warn:
+ *  - **A blank field.** Unset means "inherit the launch args" (§1), not zero.
+ *  - **A `str_list` parameter**, or one with no band — nothing to compare.
+ *  - **A half-typed number** (`"0."`, `"-"`). The warning is recomputed on
+ *    every keystroke, so flagging an intermediate parse would make the mark
+ *    flicker while typing a perfectly good value.
+ *  - **Exactly the spec's `neutral` value.** Several samplers disable at a
+ *    value outside their useful active band (`min_p` is useful at 0.02–0.2 but
+ *    off at 0.0), and marking a deliberate "off" as suspicious is pure noise.
+ *
+ * The settings webview keeps its own copy of this (settings-webview/
+ * localLlmUtils.ts), same as it does for every other shared shape.
+ */
+export function samplingRangeWarning(spec: SamplingParamSpec, text: string): string | null {
+  // `?? null` rather than a plain read: an older kodo server's `sampling_specs`
+  // has no such field at all, and `undefined` must degrade to "no guidance"
+  // instead of failing every comparison and warning on every value.
+  const low = spec.sensible_minimum ?? null;
+  const high = spec.sensible_maximum ?? null;
+  if (spec.kind === 'str_list' || (low === null && high === null)) {
+    return null;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const value = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  if (spec.neutral !== '' && value === parseFloat(spec.neutral)) {
+    return null;
+  }
+  if ((low === null || value >= low) && (high === null || value <= high)) {
+    return null;
+  }
+
+  let range: string;
+  if (low !== null && high !== null) {
+    range = `${low} to ${high}`;
+  } else if (low !== null) {
+    range = `${low} or above`;
+  } else {
+    range = `${high} or below`;
+  }
+  const off = spec.neutral === '' ? '' : ` Set it to ${spec.neutral} to turn ${spec.label} off.`;
+  return `${trimmed} is outside the recommended range for ${spec.label} (${range}). ` +
+    `Values outside that range are accepted but usually degrade output quality.${off}`;
 }
 
 // --- Flavor sampling shortcuts: llama_args <-> structured sampling values --

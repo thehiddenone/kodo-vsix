@@ -1204,11 +1204,33 @@ export const styles = {
     color: 'var(--vscode-descriptionForeground)',
     whiteSpace: 'nowrap' as const,
   },
+  // Full width, deliberately NOT indented under the input column: the help
+  // text is a sentence or two per parameter and reads far better across the
+  // whole modal than in a 54%-wide gutter. The `samplingDivider` under it is
+  // what keeps one parameter's label/input/help visually grouped now that the
+  // indent no longer does that job.
   samplingHelp: {
     fontSize: '11px',
     color: 'var(--vscode-descriptionForeground)',
-    marginTop: '2px',
-    marginLeft: 'calc(46% + 8px)',
+    marginTop: '3px',
+  },
+  // Closes each parameter's label/input/help group. One after every field,
+  // including the last of a section — the rule then doubles as the boundary
+  // before the "Advanced" toggle / the end of the scroll body.
+  samplingDivider: {
+    border: 'none',
+    borderTop: '1px solid var(--vscode-panel-border)',
+    margin: '8px 0 0',
+  },
+  // Yellow ⚠ shown between a parameter's label and its input when the entered
+  // value falls outside the recommended band the server ships for it
+  // (`sensible_minimum`/`sensible_maximum`, kodo/doc/SAMPLING.md §8d). Its
+  // `title` names the band. Advisory only — the value is still submitted.
+  samplingWarn: {
+    flex: '0 0 auto',
+    color: 'var(--vscode-editorWarning-foreground, #c8a400)',
+    fontSize: '13px',
+    cursor: 'help',
   },
   samplingClearBtn: {
     flex: '0 0 auto',
@@ -1220,10 +1242,14 @@ export const styles = {
     cursor: 'pointer',
     fontSize: '11px',
   },
+  // Neutral grey, unlike its yellow/green/red neighbours: opening the sampling
+  // modal is an inspect-and-tune action, not a state change, and the yellow it
+  // used to share with the attach button is now reserved in this feature for
+  // the out-of-recommended-range ⚠ (`samplingWarn`).
   samplingBtn: {
     background: 'transparent',
-    color: '#c8a400',
-    border: '1px solid #c8a400',
+    color: 'var(--vscode-descriptionForeground)',
+    border: '1px solid var(--vscode-descriptionForeground)',
     borderRadius: '2px',
     width: '40px',
     cursor: 'pointer',

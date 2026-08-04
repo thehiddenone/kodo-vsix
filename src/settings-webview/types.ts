@@ -21,6 +21,8 @@ export interface SamplingParamSpec {
   advanced: boolean;
   minimum: number | null;
   maximum: number | null;
+  sensible_minimum: number | null;
+  sensible_maximum: number | null;
   step: number | null;
   neutral: string;
   cli_flags: string[];

@@ -435,6 +435,17 @@
     .sampling-grid > input[readonly] {
       opacity: 0.7;
     }
+    /* Yellow ⚠ in a sampling field's label cell, shown when the entered value
+       falls outside the recommended band the server ships for that parameter
+       (sensible_minimum/sensible_maximum, kodo/doc/SAMPLING.md §8d). Its title
+       names the band. Advisory only — the value is still written into
+       llama_args and still submitted. Mirrors the session sampling modal's
+       `samplingWarn` (src/webview/styles.ts). */
+    .sampling-warn {
+      color: var(--vscode-editorWarning-foreground, #c8a400);
+      cursor: help;
+      margin-right: 4px;
+    }
     .sampling-advanced-toggle {
       background: none;
       border: none;

@@ -139,6 +139,58 @@ export function applySamplingFieldToLlamaArgsText(
   return llamaArgsToText(llamaArgs);
 }
 
+/**
+ * The tooltip for `spec`'s yellow ⚠ next to a flavor-editor sampling field, or
+ * `null` when `fieldText` needs no warning.
+ *
+ * Advisory guidance against the spec's *recommended* band
+ * (`sensible_minimum`/`sensible_maximum`, kodo/doc/SAMPLING.md §8d) — never
+ * validation: the flagged value is still written into `llama_args` verbatim,
+ * and the server's own hard `minimum`/`maximum` are what actually clamp.
+ *
+ * A blank field, a `str_list` parameter, a spec with no band, a half-typed
+ * number and a value exactly equal to the spec's `neutral` (disable) value all
+ * warn-free — see the chat webview's copy in ../llm-registry-types for why
+ * each of those exemptions exists. Duplicated from that copy on purpose, same
+ * as every other shared shape in this module (see its header).
+ */
+export function samplingRangeWarning(spec: SamplingParamSpec, fieldText: string): string | null {
+  // `?? null` rather than a plain read: an older kodo server's `sampling_specs`
+  // omits these fields entirely, and `undefined` must degrade to "no guidance"
+  // instead of failing every comparison and warning on every value.
+  const low = spec.sensible_minimum ?? null;
+  const high = spec.sensible_maximum ?? null;
+  if (spec.kind === 'str_list' || (low === null && high === null)) {
+    return null;
+  }
+  const trimmed = fieldText.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const value = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  if (spec.neutral !== '' && value === parseFloat(spec.neutral)) {
+    return null;
+  }
+  if ((low === null || value >= low) && (high === null || value <= high)) {
+    return null;
+  }
+
+  let range: string;
+  if (low !== null && high !== null) {
+    range = `${low} to ${high}`;
+  } else if (low !== null) {
+    range = `${low} or above`;
+  } else {
+    range = `${high} or below`;
+  }
+  const off = spec.neutral === '' ? '' : ` Set it to ${spec.neutral} to turn ${spec.label} off.`;
+  return `${trimmed} is outside the recommended range for ${spec.label} (${range}). ` +
+    `Values outside that range are accepted but usually degrade output quality.${off}`;
+}
+
 // The "Manage flavors" modal's platform radio group — order matters (render
 // order). `both` (no restriction) is the default for a brand-new flavor,
 // mirroring the server's LlamaFlavorPlatform.BOTH default.

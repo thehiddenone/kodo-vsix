@@ -21,8 +21,19 @@
  *    llama-server restart).
  *
  * Nothing is rendered from a hardcoded parameter list: the field set, bounds,
- * grouping and help text all come from `specs`, which the server pushes
- * (`sampling_specs`). A llama.cpp that gains a knob needs no change here.
+ * grouping, help text and recommended ranges all come from `specs`, which the
+ * server pushes (`sampling_specs`). A llama.cpp that gains a knob needs no
+ * change here.
+ *
+ * Each parameter renders as one group — label + ⚠ + input + clear, then its
+ * help text across the full modal width, then a divider closing the group.
+ * The ⚠ appears only when the entered value falls outside the *recommended*
+ * band the spec ships (`sensible_minimum`/`sensible_maximum`,
+ * SAMPLING.md §8d), which is much narrower than the hard `minimum`/`maximum`
+ * the server clamps against. It is advisory: it never blocks Apply, and its
+ * tooltip just names the band. The same mechanism, from the same spec fields,
+ * marks the flavor editor's launch-arg shortcuts (settings-webview/
+ * FlavorModal.tsx).
  *
  * Edits are local until Apply, which posts the COMPLETE set (a full replace,
  * not a patch — a cleared parameter has to disappear). The server validates,
@@ -32,7 +43,7 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import type { SamplingParamSpec, SamplingValues } from '../llm-registry-types';
-import { samplingTextToValue, samplingValueToText } from '../llm-registry-types';
+import { samplingRangeWarning, samplingTextToValue, samplingValueToText } from '../llm-registry-types';
 import { styles } from './styles';
 
 interface SamplingModalProps {
@@ -98,6 +109,10 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
 
   function field(spec: SamplingParamSpec) {
     const current = text[spec.name] ?? '';
+    // Recomputed per keystroke; `null` for a blank, half-typed, deliberately
+    // disabled, or in-band value. Never blocks Apply — it is guidance, and the
+    // server clamps against its own (much wider) hard bounds regardless.
+    const warning = samplingRangeWarning(spec, current);
     return (
       <div key={spec.name} style={styles.samplingField}>
         <div style={styles.samplingFieldRow}>
@@ -105,6 +120,11 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
             {spec.label}
             {spec.neutral ? ` (off: ${spec.neutral})` : ''}
           </label>
+          {warning !== null && (
+            <span style={styles.samplingWarn} title={warning} role="img" aria-label={warning}>
+              ⚠
+            </span>
+          )}
           <input
             id={`sampling-${spec.name}`}
             style={styles.samplingInput}
@@ -130,6 +150,7 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
           </button>
         </div>
         <div style={styles.samplingHelp}>{spec.help}</div>
+        <hr style={styles.samplingDivider} />
       </div>
     );
   }

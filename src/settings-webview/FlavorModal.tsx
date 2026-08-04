@@ -19,6 +19,7 @@ import {
   flavorPlatformBadge,
   llamaArgsToText,
   parseNonNegativeInt,
+  samplingRangeWarning,
 } from './localLlmUtils';
 import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry, SamplingParamSpec } from './types';
 import { vscode } from './vscode';
@@ -143,9 +144,18 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
   const samplingText = deriveSamplingTextFromLlamaArgsText(llamaArgsText, flavorSamplingSpecs);
 
   function samplingField(spec: SamplingParamSpec) {
+    const fieldText = samplingText[spec.name] ?? '';
+    // Advisory only — a flagged value is still written into `llama_args` and
+    // still submitted. Same spec fields and same rules as the session sampling
+    // modal's ⚠ (kodo/doc/SAMPLING.md §8d); it sits in the label cell because
+    // this is a dense two-column grid with no room for a third column.
+    const warning = samplingRangeWarning(spec, fieldText);
     return (
       <>
         <label key={`${spec.name}-label`} for={`flavor-sampling-${spec.name}`} title={spec.help}>
+          {warning !== null && (
+            <span className="sampling-warn" title={warning} role="img" aria-label={warning}>⚠</span>
+          )}
           {spec.label}
           {spec.neutral ? ` (off: ${spec.neutral})` : ''}
         </label>
@@ -160,7 +170,7 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
           title={spec.help}
           placeholder="unset"
           readOnly={readOnly}
-          value={samplingText[spec.name] ?? ''}
+          value={fieldText}
           onInput={(e) =>
             setLlamaArgsText(
               applySamplingFieldToLlamaArgsText(llamaArgsText, spec, (e.target as HTMLInputElement).value),
@@ -259,8 +269,10 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
                   Sampling shortcuts — a friendlier way to set the launch arguments above for common sampling
                   knobs (temperature, top-k, …). Editing a field here writes straight into the arguments text,
                   and vice versa; the two are always in sync, so changes here need a llama-server restart just
-                  like anything else in that box. Leave a field blank to not set it at all. These can still be
-                  fine-tuned per session, live and without a restart, from the ⚙ button in the chat footer.
+                  like anything else in that box. Leave a field blank to not set it at all. A ⚠ next to a field
+                  means the value is outside the range normally worth using — hover it for the recommended one;
+                  the value is still accepted either way. These can still be fine-tuned per session, live and
+                  without a restart, from the ⚙ button in the chat footer.
                 </div>
                 <div className="sampling-grid">
                   {curatedSpecs.map((spec) => samplingField(spec))}
