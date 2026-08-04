@@ -82,15 +82,6 @@ export interface LlamaFlavorInfo {
    * *default*-flavor selection this drives happens server-side, in
    * `get_effective_flavor_id` (kodo/llms/_local_registry.py). */
   platform: LlamaFlavorPlatform;
-  /**
-   * Request-level sampling **defaults** for this flavor (kodo/doc/SAMPLING.md
-   * §9) — the values a session's sampling modal is seeded with the first time
-   * this entry is used. Sparse by design: a parameter absent here is not sent
-   * to llama-server at all, which is *not* the same as sending llama.cpp's
-   * built-in default (an omitted field inherits whatever `llama_args`
-   * launched the server with). Empty `{}` for every built-in flavor.
-   */
-  sampling: SamplingValues;
 }
 
 /**
@@ -125,8 +116,11 @@ export interface SamplingParamSpec {
    * it has none. Distinct from leaving the field empty, which instead means
    * "don't send it and inherit the launch-time value". */
   neutral: string;
-  /** Equivalent llama-server CLI flags; drives the flavor editor's warning
-   * about a knob set both as a launch arg and as a request-level default. */
+  /** Equivalent llama-server CLI flags. `cli_flags[0]` is what the flavor
+   * editor's structured sampling form writes into `llama_args` when a field
+   * is set (see {@link flavorSamplingDefaults}) — every alias is checked when
+   * reading a value back out. Empty only for `min_keep`, which has no CLI
+   * flag and is therefore session-override only. */
   cli_flags: string[];
   help: string;
 }
@@ -485,7 +479,11 @@ export interface ThinkingContext {
 export interface SamplingContext {
   /** Active local registry entry ("quant") name, or `''` when not applicable. */
   model: string;
-  /** The active flavor's request-level defaults for `model`. */
+  /** What `model`'s active flavor will launch llama-server with for each
+   *  sampling parameter, parsed out of its `llama_args` (see
+   *  {@link flavorSamplingDefaults}) — shown as the inherited value in the
+   *  session sampling modal's placeholders. Not a separately stored value:
+   *  a flavor has no request-level sampling state of its own any more. */
   defaults: SamplingValues;
   /** The server's parameter table, in display order. */
   specs: SamplingParamSpec[];
@@ -539,32 +537,82 @@ export function samplingTextToValue(
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+// --- Flavor sampling shortcuts: llama_args <-> structured sampling values --
+//
+// A flavor carries no request-level sampling state of its own (kodo/doc/
+// SAMPLING.md §9) — the flavor editor's structured sampling form is a
+// friendlier view of a subset of `llama_args` itself, kept in sync live in
+// both directions (settings-webview/FlavorModal.tsx does the two-way sync
+// using its own copy of these helpers, settings-webview/localLlmUtils.ts).
+// The functions here are for reading that same relationship out of an
+// already-launched flavor, for the session sampling modal's "inherited
+// value" placeholder (`SamplingContext.defaults`).
+
 /**
- * Knobs a flavor sets both as a CLI launch flag and as a request-level
- * default — `{cliFlag: parameterName}`, empty when there is no overlap.
- *
- * Mirrors `cli_flag_conflicts` (kodo/llms/_sampling.py) so the flavor editor
- * can warn live, before saving, rather than only after a round trip. Not an
- * error: the request-level value simply wins for Kōdo's own calls, while the
- * CLI value still governs any other client pointed at that server.
+ * The CLI-argument list separator for a `str_list` parameter — llama.cpp
+ * spells `samplers` semicolon-joined on the command line but everything
+ * else (`dry_sequence_breakers`) comma-joined, matching the request-body
+ * JSON-array-as-comma-list convention {@link samplingValueToText} already
+ * uses for display. See doc/SAMPLING.md §8b.
  */
-export function samplingCliConflicts(
-  llamaArgs: Record<string, string>,
-  sampling: SamplingValues,
+function cliListSeparator(spec: SamplingParamSpec): string {
+  return spec.name === 'samplers' ? ';' : ',';
+}
+
+/**
+ * Parse one flavor `llama_args` string value into a typed sampling value, or
+ * `undefined` if it doesn't parse — mirrors {@link samplingTextToValue} but
+ * reads a raw CLI argument value (already-typed for `llama_args`, not a
+ * text-box string) and applies {@link cliListSeparator} for `str_list` kinds.
+ */
+export function cliArgValueToSamplingValue(
+  spec: SamplingParamSpec,
+  raw: string,
+): number | string[] | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (spec.kind === 'str_list') {
+    const items = trimmed.split(cliListSeparator(spec)).map((s) => s.trim()).filter(Boolean);
+    return items.length > 0 ? items : undefined;
+  }
+  const parsed = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** Inverse of {@link cliArgValueToSamplingValue} — a typed sampling value as
+ *  the `llama_args` string it should be written as. */
+export function samplingValueToCliArgValue(
+  spec: SamplingParamSpec,
+  value: number | string[],
+): string {
+  return Array.isArray(value) ? value.join(cliListSeparator(spec)) : String(value);
+}
+
+/**
+ * `flavor`'s effective sampling parameters, read out of its own `llama_args`
+ * rather than a separate stored field (there isn't one — see the module
+ * header above). For each spec with at least one CLI flag (excludes
+ * `min_keep`, session-override only), checks every alias in `cli_flags`
+ * order and uses whichever is present in `llama_args`.
+ */
+export function flavorSamplingDefaults(
+  flavor: LlamaFlavorInfo,
   specs: SamplingParamSpec[],
-): Record<string, string> {
-  const byFlag = new Map<string, string>();
+): SamplingValues {
+  const defaults: SamplingValues = {};
   for (const spec of specs) {
     for (const flag of spec.cli_flags) {
-      byFlag.set(flag, spec.name);
+      const raw = flavor.llama_args[flag];
+      if (raw !== undefined) {
+        const value = cliArgValueToSamplingValue(spec, raw);
+        if (value !== undefined) {
+          defaults[spec.name] = value;
+        }
+        break;
+      }
     }
   }
-  const conflicts: Record<string, string> = {};
-  for (const flag of Object.keys(llamaArgs)) {
-    const name = byFlag.get(flag);
-    if (name !== undefined && sampling[name] !== undefined) {
-      conflicts[flag] = name;
-    }
-  }
-  return conflicts;
+  return defaults;
 }

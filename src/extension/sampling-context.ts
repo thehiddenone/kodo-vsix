@@ -14,7 +14,8 @@
  * selection shared by every tab.
  */
 
-import type { SamplingContext, SamplingParamSpec, SamplingValues } from '../llm-registry-types';
+import type { SamplingContext, SamplingParamSpec } from '../llm-registry-types';
+import { flavorSamplingDefaults } from '../llm-registry-types';
 import { state } from './state';
 
 /** Parse the `sampling_specs` table off a `hello.ack`/`local_llm.registry_state`
@@ -33,7 +34,9 @@ export function parseSamplingSpecs(raw: unknown): SamplingParamSpec[] {
  *
  * `defaults` resolves through the same effective-flavor rule the server uses
  * (`get_effective_flavor_id`): the explicitly active flavor if it still
- * exists, otherwise the first one listed.
+ * exists, otherwise the first one listed — then parsed out of that flavor's
+ * own `llama_args` (a flavor has no separate sampling state, see
+ * `flavorSamplingDefaults`).
  */
 export function currentSamplingContext(): SamplingContext {
   const entry = state.localRegistryState.find((e) => e.name === state.activeLocalModelState);
@@ -42,7 +45,7 @@ export function currentSamplingContext(): SamplingContext {
   }
   const flavors = entry.flavors || [];
   const active = flavors.find((f) => f.id === entry.active_flavor) || flavors[0];
-  const defaults: SamplingValues = active?.sampling || {};
+  const defaults = active ? flavorSamplingDefaults(active, state.samplingSpecsState) : {};
   return { model: entry.name, defaults, specs: state.samplingSpecsState };
 }
 

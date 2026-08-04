@@ -2,7 +2,7 @@
  *  modals — parsing form input into the wire shapes the host expects, and
  *  the local-registry name-clash check every add form validates against. */
 
-import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry, SamplingParamSpec, SamplingValues } from './types';
+import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry, SamplingParamSpec } from './types';
 
 export const DEFAULT_CONTEXT_WINDOW = 262144;
 export const HF_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -33,14 +33,18 @@ export function llamaArgsToText(llamaArgs: Record<string, string> | undefined): 
     .join('\n');
 }
 
-// --- Request-level sampling defaults (kodo/doc/SAMPLING.md §9) -------------
+// --- Flavor sampling shortcuts (kodo/doc/SAMPLING.md §9) --------------------
 //
-// A flavor carries two independent sampling layers: free-text CLI flags in
-// `llama_args` (fixed at launch) and this structured, all-optional block
-// (sent per request). The helpers below convert between the block and the
-// modal's per-field text boxes. Duplicated from the chat webview's copies in
-// `../llm-registry-types` on purpose — the settings webview keeps its own
-// mirrors of every shared shape (see the header of ./types.ts).
+// A flavor carries no request-level sampling state of its own — only
+// `llama_args`. FlavorModal.tsx's structured sampling form is a friendlier
+// view of a subset of those same CLI flags, kept in sync live in both
+// directions: editing a sampling field rewrites the corresponding `--flag`
+// in `llama_args`, and editing `llama_args` re-derives the sampling fields.
+// There is no separate stored sampling value to hold as React state — the
+// helpers below read/write `llama_args` text directly. Duplicated from the
+// chat webview's copies in `../llm-registry-types` on purpose — the settings
+// webview keeps its own mirrors of every shared shape (see the header of
+// ./types.ts).
 
 /**
  * Parse the flavor editor's line-based llama-args textarea into `{flag: value}`.
@@ -67,77 +71,72 @@ export function parseLlamaArgsText(text: string): Record<string, string> {
   return result;
 }
 
-/** One sampling value as input text; `''` for unset. */
-export function samplingValueToText(value: number | string[] | undefined): string {
-  if (value === undefined) { return ''; }
-  return Array.isArray(value) ? value.join(', ') : String(value);
+/**
+ * The CLI-argument list separator for a `str_list` parameter — llama.cpp
+ * spells `samplers` semicolon-joined on the command line but everything else
+ * comma-joined; the sampling field's own display text is always
+ * comma-joined regardless (matches the session modal's convention). See
+ * kodo/doc/SAMPLING.md §8b.
+ */
+function cliListSeparator(spec: SamplingParamSpec): string {
+  return spec.name === 'samplers' ? ';' : ',';
 }
 
 /**
- * Parse one field's text back into a sampling value, or `undefined` for unset.
- *
- * Blank is always `undefined`, never `0`: omitting a parameter means "don't
- * send it", so llama-server keeps whatever `llama_args` launched it with,
- * whereas `0` actively sets it (and disables several samplers outright).
+ * Derive the flavor editor's per-field sampling display text straight out of
+ * the (possibly half-edited) `llama_args` textarea contents — there is no
+ * separate stored sampling value to seed from. For each spec with at least
+ * one CLI flag (excludes `min_keep`, session-override only, see
+ * kodo/doc/SAMPLING.md §9), checks every alias in `cli_flags` order and uses
+ * whichever is present.
  */
-export function samplingTextToValue(spec: SamplingParamSpec, text: string): number | string[] | undefined {
-  const trimmed = text.trim();
-  if (!trimmed) { return undefined; }
-  if (spec.kind === 'str_list') {
-    const items = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
-    return items.length > 0 ? items : undefined;
-  }
-  const parsed = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-/** Seed the modal's per-field text map from a flavor's stored defaults. */
-export function samplingToTextMap(
+export function deriveSamplingTextFromLlamaArgsText(
+  llamaArgsText: string,
   specs: SamplingParamSpec[],
-  values: SamplingValues | undefined,
 ): Record<string, string> {
+  const llamaArgs = parseLlamaArgsText(llamaArgsText);
   const out: Record<string, string> = {};
   for (const spec of specs) {
-    out[spec.name] = samplingValueToText((values || {})[spec.name]);
-  }
-  return out;
-}
-
-/** Collapse the modal's text map back into a sparse `SamplingValues`. */
-export function textMapToSampling(
-  specs: SamplingParamSpec[],
-  text: Record<string, string>,
-): SamplingValues {
-  const out: SamplingValues = {};
-  for (const spec of specs) {
-    const parsed = samplingTextToValue(spec, text[spec.name] ?? '');
-    if (parsed !== undefined) { out[spec.name] = parsed; }
+    let text = '';
+    for (const flag of spec.cli_flags) {
+      const raw = llamaArgs[flag];
+      if (raw !== undefined) {
+        text = spec.kind === 'str_list'
+          ? raw.split(cliListSeparator(spec)).map((s) => s.trim()).filter(Boolean).join(', ')
+          : raw;
+        break;
+      }
+    }
+    out[spec.name] = text;
   }
   return out;
 }
 
 /**
- * Knobs set both as a CLI flag in `llama_args` and as a request-level default
- * — `{cliFlag: parameterName}`, empty when there is no overlap. Mirrors
- * `cli_flag_conflicts` in kodo/llms/_sampling.py so the editor can warn before
- * saving. Not an error: the request-level value wins for Kōdo's own calls,
- * while the CLI value still governs any other client on that server.
+ * Apply one sampling field's edited text back into the `llama_args` textarea
+ * contents — the inverse of {@link deriveSamplingTextFromLlamaArgsText} for a
+ * single field. Removes every one of `spec`'s CLI-flag aliases first (so
+ * re-editing a field never leaves a stale `--temperature` behind a freshly
+ * written `--temp`), then, if `fieldText` isn't blank, writes it back under
+ * `cli_flags[0]` — the canonical spelling this editor always writes, even if
+ * the flavor originally used an alias.
  */
-export function samplingCliConflicts(
-  llamaArgs: Record<string, string>,
-  sampling: SamplingValues,
-  specs: SamplingParamSpec[],
-): Record<string, string> {
-  const byFlag = new Map<string, string>();
-  for (const spec of specs) {
-    for (const flag of spec.cli_flags) { byFlag.set(flag, spec.name); }
+export function applySamplingFieldToLlamaArgsText(
+  llamaArgsText: string,
+  spec: SamplingParamSpec,
+  fieldText: string,
+): string {
+  const llamaArgs = parseLlamaArgsText(llamaArgsText);
+  for (const flag of spec.cli_flags) {
+    delete llamaArgs[flag];
   }
-  const conflicts: Record<string, string> = {};
-  for (const flag of Object.keys(llamaArgs)) {
-    const name = byFlag.get(flag);
-    if (name !== undefined && sampling[name] !== undefined) { conflicts[flag] = name; }
+  const trimmed = fieldText.trim();
+  if (trimmed && spec.cli_flags.length > 0) {
+    llamaArgs[spec.cli_flags[0]] = spec.kind === 'str_list'
+      ? trimmed.split(',').map((s) => s.trim()).filter(Boolean).join(cliListSeparator(spec))
+      : trimmed;
   }
-  return conflicts;
+  return llamaArgsToText(llamaArgs);
 }
 
 // The "Manage flavors" modal's platform radio group — order matters (render

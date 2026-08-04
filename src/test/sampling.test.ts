@@ -1,12 +1,14 @@
 import * as assert from 'assert';
 
 import {
-  samplingCliConflicts,
+  cliArgValueToSamplingValue,
+  flavorSamplingDefaults,
   samplingTextToValue,
+  samplingValueToCliArgValue,
   samplingValueToText,
   parseSamplingValues,
 } from '../llm-registry-types';
-import type { SamplingParamSpec } from '../llm-registry-types';
+import type { LlamaFlavorInfo, SamplingParamSpec } from '../llm-registry-types';
 import { reducer, initial } from '../webview/reducer';
 
 // Request-level sampling parameters (kodo/doc/SAMPLING.md). Pure functions
@@ -51,6 +53,36 @@ const BREAKERS: SamplingParamSpec = {
   help: '',
 };
 
+const SAMPLERS: SamplingParamSpec = {
+  name: 'samplers',
+  kind: 'str_list',
+  label: 'Sampler order',
+  advanced: true,
+  minimum: null,
+  maximum: null,
+  step: null,
+  neutral: '',
+  cli_flags: ['--samplers'],
+  help: '',
+};
+
+const MIN_KEEP: SamplingParamSpec = {
+  name: 'min_keep',
+  kind: 'int',
+  label: 'Min keep',
+  advanced: true,
+  minimum: 0,
+  maximum: 100,
+  step: 1,
+  neutral: '0',
+  cli_flags: [],
+  help: '',
+};
+
+function fakeFlavor(llama_args: Record<string, string>): LlamaFlavorInfo {
+  return { id: 'x', name: 'x', description: '', llama_args, predefined: false, min_ram: 0, min_vram: 0, platform: 'both' };
+}
+
 suite('sampling — text <-> value', () => {
   test('a blank field is unset, NOT zero', () => {
     // The distinction is load-bearing: omitting a parameter inherits the
@@ -86,31 +118,57 @@ suite('sampling — text <-> value', () => {
   });
 });
 
-suite('sampling — CLI/request conflicts', () => {
-  const specs = [TEMPERATURE, TOP_K, BREAKERS];
+suite('sampling — CLI arg value <-> typed value', () => {
+  test('numbers round-trip verbatim', () => {
+    assert.strictEqual(cliArgValueToSamplingValue(TEMPERATURE, '0.6'), 0.6);
+    assert.strictEqual(samplingValueToCliArgValue(TEMPERATURE, 0.6), '0.6');
+  });
 
-  test('flags a knob set both as a launch arg and a request default', () => {
-    const conflicts = samplingCliConflicts({ '--temp': '0.6' }, { temperature: 0.2 }, specs);
-    assert.deepStrictEqual(conflicts, { '--temp': 'temperature' });
+  test('str_list uses comma except `samplers`, which uses semicolon', () => {
+    assert.deepStrictEqual(cliArgValueToSamplingValue(BREAKERS, 'nl, colon, quote'), ['nl', 'colon', 'quote']);
+    assert.strictEqual(samplingValueToCliArgValue(BREAKERS, ['nl', 'colon', 'quote']), 'nl,colon,quote');
+
+    assert.deepStrictEqual(cliArgValueToSamplingValue(SAMPLERS, 'top_k;top_p;temperature'), [
+      'top_k',
+      'top_p',
+      'temperature',
+    ]);
+    assert.strictEqual(samplingValueToCliArgValue(SAMPLERS, ['top_k', 'top_p']), 'top_k;top_p');
+  });
+
+  test('a blank raw value is unset', () => {
+    assert.strictEqual(cliArgValueToSamplingValue(TEMPERATURE, ''), undefined);
+    assert.strictEqual(cliArgValueToSamplingValue(TEMPERATURE, '   '), undefined);
+  });
+});
+
+suite('sampling — flavorSamplingDefaults (a flavor has no separate sampling state)', () => {
+  const specs = [TEMPERATURE, TOP_K, MIN_KEEP];
+
+  test('reads values straight out of llama_args', () => {
+    const flavor = fakeFlavor({ '--temp': '0.6', '--top-k': '40' });
+    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), { temperature: 0.6, top_k: 40 });
   });
 
   test('recognises every CLI alias of the same knob', () => {
-    assert.deepStrictEqual(
-      samplingCliConflicts({ '--temperature': '0.6' }, { temperature: 0.2 }, specs),
-      { '--temperature': 'temperature' },
-    );
+    const flavor = fakeFlavor({ '--temperature': '0.6' });
+    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), { temperature: 0.6 });
   });
 
-  test('no conflict when only one side is set', () => {
-    assert.deepStrictEqual(samplingCliConflicts({ '--temp': '0.6' }, {}, specs), {});
-    assert.deepStrictEqual(samplingCliConflicts({}, { temperature: 0.2 }, specs), {});
+  test('empty llama_args yields no defaults', () => {
+    assert.deepStrictEqual(flavorSamplingDefaults(fakeFlavor({}), specs), {});
   });
 
-  test('ignores non-sampling launch args', () => {
-    assert.deepStrictEqual(
-      samplingCliConflicts({ '--ctx-size': '0', '--jinja': '' }, { temperature: 0.2 }, specs),
-      {},
-    );
+  test('min_keep has no CLI flag, so it never appears even if somehow present', () => {
+    // min_keep.cli_flags is [] — the loop over cli_flags never runs for it,
+    // regardless of what unrelated flags llama_args happens to carry.
+    const flavor = fakeFlavor({ '--temp': '0.6' });
+    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), { temperature: 0.6 });
+  });
+
+  test('ignores unrelated launch args', () => {
+    const flavor = fakeFlavor({ '--ctx-size': '0', '--jinja': '' });
+    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), {});
   });
 });
 

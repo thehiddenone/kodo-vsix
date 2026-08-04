@@ -112,9 +112,6 @@ export interface LocalFlavor {
   min_vram?: number;
   predefined?: boolean;
   platform?: LlamaFlavorPlatform;
-  /** Request-level sampling defaults (kodo/doc/SAMPLING.md §9) — sparse,
-   * holding only what is set; `{}` for every built-in flavor. */
-  sampling?: SamplingValues;
 }
 
 export interface LocalRegistryEntry {
@@ -169,9 +166,9 @@ export interface KodoSettingsState {
   isMac: boolean;
   updatableNames: string[];
   /** The server's request-level sampling parameter table (`sampling_specs`,
-   * kodo/doc/SAMPLING.md). Drives the flavor editor's request-level defaults
-   * form and its CLI-vs-request conflict warning; `[]` before the first
-   * registry payload lands, which simply hides that section. */
+   * kodo/doc/SAMPLING.md). Drives the flavor editor's structured `llama_args`
+   * shortcut form; `[]` before the first registry payload lands, which simply
+   * hides that section. */
   samplingSpecs: SamplingParamSpec[];
 }
 
@@ -269,8 +266,8 @@ export type OutboundMessage =
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
   | { type: 'remove_override' }
-  | { type: 'add_flavor'; name: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform; sampling: SamplingValues }
-  | { type: 'update_flavor'; name: string; flavor_id: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform; sampling: SamplingValues }
+  | { type: 'add_flavor'; name: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
+  | { type: 'update_flavor'; name: string; flavor_id: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
   | { type: 'remove_flavor'; name: string; flavor_id: string };
 
 /** Messages the host can post into this webview. */

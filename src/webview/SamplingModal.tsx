@@ -11,10 +11,14 @@
  * placeholder names what it would inherit rather than showing a number the
  * user never chose.
  *
- * Two layers are visible here:
- *  - the active flavor's request-level *defaults* (`defaults`), shown as the
+ * Two things are visible here:
+ *  - what the active flavor's `llama_args` actually launched llama-server
+ *    with (`defaults`, parsed out of those launch args — a flavor has no
+ *    separate sampling state of its own, SAMPLING.md §9), shown as the
  *    inherited value in each field's placeholder, and
- *  - this session's own *overrides* (`values`), which are what the inputs edit.
+ *  - this session's own *overrides* (`values`), which are what the inputs edit
+ *    and the only thing here that is genuinely request-level and hot (no
+ *    llama-server restart).
  *
  * Nothing is rendered from a hardcoded parameter list: the field set, bounds,
  * grouping and help text all come from `specs`, which the server pushes

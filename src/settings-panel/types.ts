@@ -13,7 +13,6 @@ import type {
   LocalDownloadState,
   LocalRegistryEntry,
   SamplingParamSpec,
-  SamplingValues,
 } from '../llm-registry-types';
 import type { RememberedWorkspace } from '../workspace-resume-policy';
 
@@ -150,10 +149,6 @@ export interface AddFlavorPayload {
   min_vram: number;
   /** Defaults server-side to `'both'` if omitted — see LlamaFlavorInfo.platform. */
   platform: LlamaFlavorPlatform;
-  /** Request-level sampling defaults for this flavor (kodo/doc/SAMPLING.md
-   * §9) — sparse, holding only what is set. Not carried forward if omitted,
-   * same as min_ram/min_vram/platform: the modal always resends the full set. */
-  sampling: SamplingValues;
 }
 
 export interface UpdateFlavorPayload {
@@ -171,10 +166,6 @@ export interface UpdateFlavorPayload {
   min_vram: number;
   /** Not carried forward if omitted (resets to `'both'`), same as min_ram/min_vram. */
   platform: LlamaFlavorPlatform;
-  /** Request-level sampling defaults for this flavor (kodo/doc/SAMPLING.md
-   * §9) — sparse, holding only what is set. Not carried forward if omitted,
-   * same as min_ram/min_vram/platform: the modal always resends the full set. */
-  sampling: SamplingValues;
 }
 
 export interface KodoSettingsState {
@@ -213,9 +204,9 @@ export interface KodoSettingsState {
    */
   updatableNames: string[];
   /** The server's request-level sampling parameter table (`sampling_specs`,
-   * kodo/doc/SAMPLING.md). Drives the flavor editor's request-level defaults
-   * form and its CLI-vs-request conflict warning; `[]` before the first
-   * registry payload lands, which simply hides that section. */
+   * kodo/doc/SAMPLING.md). Drives both the session sampling modal and the
+   * flavor editor's structured `llama_args` shortcut form; `[]` before the
+   * first registry payload lands, which simply hides that section. */
   samplingSpecs: SamplingParamSpec[];
 }
 
