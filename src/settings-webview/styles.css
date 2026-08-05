@@ -435,12 +435,54 @@
     .sampling-grid > input[readonly] {
       opacity: 0.7;
     }
-    /* Yellow ⚠ in a sampling field's label cell, shown when the entered value
+    /* "Sampler order" (`samplers`) holds a long comma-separated list of
+       sampler names, unlike the grid's other fields — give that one row its
+       own full-width flex layout (30/60 label/input split, input pushed
+       right) instead of the grid's shared 92px input column. `>` no longer
+       matches once the label/input are nested here instead of being direct
+       children of `.sampling-grid`, so this restates what it needs rather
+       than relying on the rules above. Mirrors samplingOrderLabel/
+       samplingOrderInput in the session sampling modal (src/webview/styles.ts). */
+    .sampling-order-row {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .sampling-order-row > label {
+      flex: 0 0 30%;
+      font-size: 0.85em;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .sampling-order-row > input {
+      flex: 0 0 60%;
+      margin-left: auto;
+      box-sizing: border-box;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 2px;
+      padding: 3px 5px;
+      font-size: 0.85em;
+      font-family: inherit;
+    }
+    .sampling-order-row > input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+    .sampling-order-row > input[readonly] {
+      opacity: 0.7;
+    }
+    /* Yellow ⚠ in a sampling field's label cell — either the entered value
        falls outside the recommended band the server ships for that parameter
-       (sensible_minimum/sensible_maximum, kodo/doc/SAMPLING.md §8d). Its title
-       names the band. Advisory only — the value is still written into
-       llama_args and still submitted. Mirrors the session sampling modal's
-       `samplingWarn` (src/webview/styles.ts). */
+       (sensible_minimum/sensible_maximum), or it's one the server would
+       silently drop outright (an unknown `samplers` stage name, unparseable
+       number). `samplingFieldIssue` (kodo/doc/SAMPLING.md §8d/§8e) covers
+       both; its title says which. Always rendered, one per field — visibility
+       (not `display`) toggles, so the label text never shifts. Mirrors the
+       session sampling modal's `samplingWarn` (src/webview/styles.ts); purely
+       informational here, since this form has no per-field Apply to gate. */
     .sampling-warn {
       color: var(--vscode-editorWarning-foreground, #c8a400);
       cursor: help;

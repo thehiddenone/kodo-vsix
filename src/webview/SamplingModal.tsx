@@ -25,15 +25,32 @@
  * server pushes (`sampling_specs`). A llama.cpp that gains a knob needs no
  * change here.
  *
- * Each parameter renders as one group — label + ⚠ + input + clear, then its
- * help text across the full modal width, then a divider closing the group.
- * The ⚠ appears only when the entered value falls outside the *recommended*
- * band the spec ships (`sensible_minimum`/`sensible_maximum`,
- * SAMPLING.md §8d), which is much narrower than the hard `minimum`/`maximum`
- * the server clamps against. It is advisory: it never blocks Apply, and its
- * tooltip just names the band. The same mechanism, from the same spec fields,
- * marks the flavor editor's launch-arg shortcuts (settings-webview/
- * FlavorModal.tsx).
+ * Each parameter renders as one group — label + ⚠-slot + input + clear, then
+ * its help text across the full modal width, then a divider closing the
+ * group. The label states the *recommended* band and the value that disables
+ * the sampler up front ("Temperature (0.0 to 2.0, 1.0 disables)", {@link
+ * samplingLabelText}), so the guidance is readable before typing rather than
+ * only after going out of band.
+ *
+ * The yellow ⚠ (`samplingFieldIssue`, SAMPLING.md §8d/§8e) covers two kinds
+ * of problem with one mark, distinguished only by its tooltip text: a value
+ * outside the recommended band (`sensible_minimum`/`sensible_maximum`, much
+ * narrower than the hard `minimum`/`maximum` the server clamps against), or
+ * one the server would silently *drop* rather than clamp — an unknown
+ * `samplers` stage name (checked against that spec's `valid_values`), or
+ * numeric text that doesn't parse. Either one **disables Apply** for the
+ * whole modal — this is the fix for edits that used to vanish with no
+ * feedback (SAMPLING.md §1a covers the reverse case, an unknown *field*,
+ * which is harmlessly ignored, not dropped). The same mark, from the same
+ * spec fields, appears on the flavor editor's launch-arg shortcuts
+ * (settings-webview/FlavorModal.tsx) — there it is purely informational,
+ * since that form has no per-field Apply to gate.
+ *
+ * The ⚠'s `<span>` is **always rendered**, one per field, and toggles
+ * `visibility` rather than mounting/unmounting — an icon popping in and out
+ * of a flex row shifts everything after it (the input, the clear button) on
+ * every keystroke that crosses the threshold. `visibility: hidden` keeps the
+ * slot's width reserved so nothing downstream ever moves.
  *
  * Edits are local until Apply, which posts the COMPLETE set (a full replace,
  * not a patch — a cleared parameter has to disappear). The server validates,
@@ -43,7 +60,12 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import type { SamplingParamSpec, SamplingValues } from '../llm-registry-types';
-import { samplingRangeWarning, samplingTextToValue, samplingValueToText } from '../llm-registry-types';
+import {
+  samplingFieldIssue,
+  samplingLabelText,
+  samplingTextToValue,
+  samplingValueToText,
+} from '../llm-registry-types';
 import { styles } from './styles';
 
 interface SamplingModalProps {
@@ -106,28 +128,39 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
   const curated = specs.filter((s) => !s.advanced);
   const advanced = specs.filter((s) => s.advanced);
   const overriddenCount = specs.filter((s) => (text[s.name] ?? '').trim() !== '').length;
+  // Either a hard error (unknown sampler name, unparseable number) or an
+  // out-of-band value blocks Apply for the whole modal.
+  const invalidCount = specs.filter((s) => samplingFieldIssue(s, text[s.name] ?? '') !== null).length;
 
   function field(spec: SamplingParamSpec) {
     const current = text[spec.name] ?? '';
     // Recomputed per keystroke; `null` for a blank, half-typed, deliberately
-    // disabled, or in-band value. Never blocks Apply — it is guidance, and the
-    // server clamps against its own (much wider) hard bounds regardless.
-    const warning = samplingRangeWarning(spec, current);
+    // disabled, or in-band value.
+    const issue = samplingFieldIssue(spec, current);
+    // "Sampler order" (`samplers`) holds a long comma-separated list of
+    // sampler names — swap the usual 60/30 label/input split for 30/60 so
+    // the value has room to be read without scrolling the input.
+    const isOrder = spec.name === 'samplers';
     return (
       <div key={spec.name} style={styles.samplingField}>
         <div style={styles.samplingFieldRow}>
-          <label style={styles.samplingLabel} for={`sampling-${spec.name}`}>
-            {spec.label}
-            {spec.neutral ? ` (off: ${spec.neutral})` : ''}
+          <label style={isOrder ? styles.samplingOrderLabel : styles.samplingLabel} for={`sampling-${spec.name}`}>
+            {samplingLabelText(spec)}
           </label>
-          {warning !== null && (
-            <span style={styles.samplingWarn} title={warning} role="img" aria-label={warning}>
-              ⚠
-            </span>
-          )}
+          {/* Always mounted — visibility (not presence) toggles, so the row's
+              layout never shifts as `issue` flips while typing. */}
+          <span
+            style={{ ...styles.samplingWarn, visibility: issue !== null ? 'visible' : 'hidden' }}
+            title={issue ?? undefined}
+            role={issue !== null ? 'img' : undefined}
+            aria-hidden={issue === null}
+            aria-label={issue ?? undefined}
+          >
+            ⚠
+          </span>
           <input
             id={`sampling-${spec.name}`}
-            style={styles.samplingInput}
+            style={isOrder ? styles.samplingOrderInput : styles.samplingInput}
             type={spec.kind === 'str_list' ? 'text' : 'number'}
             min={spec.minimum ?? undefined}
             max={spec.maximum ?? undefined}
@@ -172,6 +205,8 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
           at all, letting the flavor&apos;s launch arguments decide. {overriddenCount === 0
             ? 'Nothing is overridden right now.'
             : `${overriddenCount} parameter${overriddenCount === 1 ? '' : 's'} overridden.`}
+          {invalidCount > 0 &&
+            ` Fix ${invalidCount} parameter${invalidCount === 1 ? '' : 's'} marked ⚠ before applying.`}
         </div>
         <div style={styles.samplingModalBody}>
           <div style={styles.samplingSectionHeader}>Common</div>
@@ -192,7 +227,12 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
           <button style={styles.modalCancelBtn} type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" onClick={apply}>
+          <button
+            type="button"
+            disabled={invalidCount > 0}
+            title={invalidCount > 0 ? 'Fix the parameter(s) marked ⚠ before applying' : undefined}
+            onClick={apply}
+          >
             Apply
           </button>
         </div>

@@ -116,11 +116,13 @@ export interface SamplingParamSpec {
   maximum: number | null;
   /** The **recommended** band, always inside `[minimum, maximum]` and usually
    * far narrower — see kodo/doc/SAMPLING.md §8d for each parameter's exact
-   * endpoints and why they were picked. Advisory only: nothing clamps or
-   * rejects against it, {@link samplingRangeWarning} just produces the yellow
-   * ⚠ both modals render. `null` (both together) = no guidance for this
-   * parameter, because no accepted value is unreasonable (`seed`, `mirostat`)
-   * or it isn't numeric. */
+   * endpoints and why they were picked. The server never clamps or rejects
+   * against it — {@link samplingRangeWarning} just produces the yellow ⚠ both
+   * modals render — but the session sampling modal treats an out-of-band
+   * value as reason enough to disable Apply, same as a hard error
+   * ({@link samplingFieldIssue}). `null` (both together) = no guidance for
+   * this parameter, because no accepted value is unreasonable (`seed`,
+   * `mirostat`) or it isn't numeric. */
   sensible_minimum: number | null;
   sensible_maximum: number | null;
   step: number | null;
@@ -136,6 +138,16 @@ export interface SamplingParamSpec {
    * flag and is therefore session-override only. */
   cli_flags: string[];
   help: string;
+  /** The exact accepted strings for a `str_list` parameter, or `null` when
+   * any string is acceptable (every numeric parameter, and
+   * `dry_sequence_breakers`). Only `samplers` sets this. Unlike
+   * `sensible_minimum`/`sensible_maximum`, an entry outside this set is a
+   * **hard** error — the server drops it rather than clamping, because one
+   * bad stage name makes llama-server reject the whole request. Reported by
+   * {@link samplingFieldError}, which renders identically to an out-of-band
+   * warning (see {@link samplingFieldIssue}) — both are reason enough to
+   * disable Apply in the session sampling modal. */
+  valid_values: string[] | null;
 }
 
 export interface LocalRegistryEntry {
@@ -551,13 +563,81 @@ export function samplingTextToValue(
 }
 
 /**
+ * `spec`'s **recommended** band as display text ("0 to 2", "0.5 or above"), or
+ * `null` when the spec ships no guidance at all (`seed`, `mirostat`, the
+ * `str_list` parameters — see {@link SamplingParamSpec.sensible_minimum}).
+ *
+ * Spelt with the word "to" rather than a hyphen because several bands start
+ * negative (`repeat_last_n` is -1 to 2048, the penalties are -1 to 1), where a
+ * hyphen would read as a minus sign.
+ *
+ * Feeds both places the band surfaces: every field's label
+ * ({@link samplingLabelText}) and the out-of-band ⚠ tooltip
+ * ({@link samplingRangeWarning}), so the two can never quote different numbers.
+ */
+export function sensibleRangeText(spec: SamplingParamSpec): string | null {
+  // `?? null` rather than a plain read: an older kodo server's `sampling_specs`
+  // has no such field at all, and `undefined` must degrade to "no guidance"
+  // instead of being formatted into the label as literal "undefined".
+  const low = spec.sensible_minimum ?? null;
+  const high = spec.sensible_maximum ?? null;
+  if (spec.kind === 'str_list' || (low === null && high === null)) {
+    return null;
+  }
+  // A float bound that happens to be whole keeps its ".0" — JSON gave us `2`
+  // for `2.0`, and "0 to 2" on a field whose values are decimals reads as if
+  // only integers belong there. Ints stay bare. Matches how SAMPLING.md §8d
+  // and the specs' own `neutral` strings spell the same numbers.
+  const show = (value: number): string =>
+    spec.kind === 'float' && Number.isInteger(value) ? value.toFixed(1) : String(value);
+  if (low !== null && high !== null) {
+    return `${show(low)} to ${show(high)}`;
+  }
+  return low !== null ? `${show(low)} or above` : `${show(high as number)} or below`;
+}
+
+/**
+ * One sampling field's label: the parameter name followed by the guidance a
+ * user needs *before* typing — the recommended band and, when the parameter
+ * has one, the value that turns it off ("Temperature (0.0 to 2.0, 1.0 disables)").
+ *
+ * Both are advisory: nothing clamps to the band (the server's own hard
+ * `minimum`/`maximum` do that), and "disables" is the sampler's neutral value,
+ * which is a real value to send — quite different from leaving the field blank,
+ * which sends nothing and inherits the launch args (kodo/doc/SAMPLING.md §1).
+ *
+ * A parameter with neither (`seed`) is just its label, unadorned.
+ *
+ * Used by the session sampling modal (webview/SamplingModal.tsx); the settings
+ * webview renders the same text in the flavor editor from its own copy
+ * (settings-webview/localLlmUtils.ts).
+ */
+export function samplingLabelText(spec: SamplingParamSpec): string {
+  const parts: string[] = [];
+  const range = sensibleRangeText(spec);
+  if (range !== null) {
+    parts.push(range);
+  }
+  if (spec.neutral !== '') {
+    parts.push(`${spec.neutral} disables`);
+  }
+  return parts.length === 0 ? spec.label : `${spec.label} (${parts.join(', ')})`;
+}
+
+/**
  * The tooltip for `spec`'s yellow ⚠, or `null` when `text` needs no warning.
  *
- * Purely advisory guidance against the spec's *recommended* band
- * (`sensible_minimum`/`sensible_maximum`, kodo/doc/SAMPLING.md §8d) — never
- * validation. The server's hard `minimum`/`maximum` still clamp on their own,
- * and a warned value is submitted unchanged; this only tells the user that a
- * value llama.cpp accepts is one that will probably make output worse.
+ * Guidance against the spec's *recommended* band (`sensible_minimum`/
+ * `sensible_maximum`, kodo/doc/SAMPLING.md §8d), not the server's own
+ * validation — the server's hard `minimum`/`maximum` still clamp on their
+ * own regardless of this function, and a value it flags is submitted
+ * unchanged if it ever reaches the server; this only says a value llama.cpp
+ * accepts will probably make output worse. That said, the session sampling
+ * modal does gate on it client-side: it disables Apply while any field is
+ * flagged, same as a hard error ({@link samplingFieldIssue}) — the flavor
+ * editor shows the identical mark purely for information, with nothing
+ * gated. Merge point for both severities, and the doc comment for the
+ * severity split, live on {@link samplingFieldIssue}.
  *
  * Four things deliberately do NOT warn:
  *  - **A blank field.** Unset means "inherit the launch args" (§1), not zero.
@@ -573,14 +653,14 @@ export function samplingTextToValue(
  * localLlmUtils.ts), same as it does for every other shared shape.
  */
 export function samplingRangeWarning(spec: SamplingParamSpec, text: string): string | null {
-  // `?? null` rather than a plain read: an older kodo server's `sampling_specs`
-  // has no such field at all, and `undefined` must degrade to "no guidance"
-  // instead of failing every comparison and warning on every value.
-  const low = spec.sensible_minimum ?? null;
-  const high = spec.sensible_maximum ?? null;
-  if (spec.kind === 'str_list' || (low === null && high === null)) {
+  // Same source as the label's band, so the two can't quote different numbers;
+  // `null` means the spec ships no guidance and nothing can be out of band.
+  const range = sensibleRangeText(spec);
+  if (range === null) {
     return null;
   }
+  const low = spec.sensible_minimum ?? null;
+  const high = spec.sensible_maximum ?? null;
   const trimmed = text.trim();
   if (!trimmed) {
     return null;
@@ -596,17 +676,73 @@ export function samplingRangeWarning(spec: SamplingParamSpec, text: string): str
     return null;
   }
 
-  let range: string;
-  if (low !== null && high !== null) {
-    range = `${low} to ${high}`;
-  } else if (low !== null) {
-    range = `${low} or above`;
-  } else {
-    range = `${high} or below`;
-  }
   const off = spec.neutral === '' ? '' : ` Set it to ${spec.neutral} to turn ${spec.label} off.`;
   return `${trimmed} is outside the recommended range for ${spec.label} (${range}). ` +
     `Values outside that range are accepted but usually degrade output quality.${off}`;
+}
+
+/**
+ * The **hard**-error message for `spec`'s field given `text`, or `null` if it
+ * would parse cleanly (including blank, which just means "unset").
+ *
+ * Unlike {@link samplingRangeWarning} (a value the server accepts but
+ * probably shouldn't be used), this flags a value the server would silently
+ * *drop* — the exact failure mode that made it look like sampler-order edits
+ * were vanishing into nowhere: a typoed stage name never reaches
+ * `transient.jsonl` because `SamplingParams.from_json` filters unknown
+ * `samplers` entries and logs a warning nobody sees client-side
+ * (kodo/doc/SAMPLING.md §8e). The session sampling modal disables Apply
+ * whenever any field has one of these.
+ *
+ * Two shapes of "would be dropped":
+ *  - **A `str_list` parameter with `valid_values`** (only `samplers` today)
+ *    containing a name outside that set.
+ *  - **A numeric field** whose text contains a digit but still fails to
+ *    parse (`"1.2.3"`, `"12x"`). Checked with `Number(...)` rather than
+ *    `parseInt`/`parseFloat` — those parse a leading numeric *prefix* and
+ *    would wave "1.2.3" through as `1.2`. A bare sign/decimal-point prefix
+ *    (`"-"`, `"."`, `"-."`) is a legitimate mid-typing state for a negative
+ *    or fractional value, not an error — same reasoning as
+ *    {@link samplingRangeWarning}'s half-typed-number exemption, just
+ *    narrowed to digitless text so it doesn't also swallow real garbage.
+ */
+export function samplingFieldError(spec: SamplingParamSpec, text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (spec.kind === 'str_list') {
+    if (!spec.valid_values) {
+      return null;
+    }
+    const items = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+    const unknown = items.filter((item) => !spec.valid_values!.includes(item));
+    if (unknown.length === 0) {
+      return null;
+    }
+    return `Unknown ${spec.label.toLowerCase()} name(s): ${unknown.join(', ')}. ` +
+      `Valid names: ${spec.valid_values.join(', ')}.`;
+  }
+  if (Number.isFinite(Number(trimmed)) || !/\d/.test(trimmed)) {
+    return null;
+  }
+  return `"${trimmed}" is not a valid number.`;
+}
+
+/**
+ * Whether `spec`'s field has *any* problem worth flagging — a hard error
+ * ({@link samplingFieldError}, a value the server would silently drop) or an
+ * advisory out-of-band value ({@link samplingFieldError}'s cousin
+ * {@link samplingRangeWarning}, a value the server accepts but is probably a
+ * bad idea) — whichever applies, hard error first. Deliberately the single
+ * function both editors call to decide what to render and (session modal
+ * only) what to gate Apply on: asking a user to distinguish "this would
+ * vanish" from "this is unwise" via icon color alone isn't a distinction
+ * worth making at a glance, so both render as the same yellow ⚠ and the
+ * tooltip text is what actually explains which one it is.
+ */
+export function samplingFieldIssue(spec: SamplingParamSpec, text: string): string | null {
+  return samplingFieldError(spec, text) ?? samplingRangeWarning(spec, text);
 }
 
 // --- Flavor sampling shortcuts: llama_args <-> structured sampling values --

@@ -27,6 +27,7 @@ export interface SamplingParamSpec {
   neutral: string;
   cli_flags: string[];
   help: string;
+  valid_values: string[] | null;
 }
 
 export interface GlobalRuleEntry {

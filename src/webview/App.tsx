@@ -733,7 +733,7 @@ export function App() {
                   disabled={!state.connected}
                   title={`Sampling parameters for ${state.samplingModel}`}
                 >
-                  {'⚙'}
+                  {'🎛'}
                 </FooterButton>
               )}
               <FooterButton

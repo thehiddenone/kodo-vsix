@@ -9,6 +9,15 @@
  * selectable/copyable into a new flavor) but disables Submit and Remove; the
  * server independently rejects update_flavor/remove_flavor for a predefined
  * flavor_id regardless of this client-side gate.
+ *
+ * Submit is also disabled while any sampling shortcut field has an issue
+ * (`samplingInvalid`, from `samplingFieldIssue` — an unknown `samplers` name,
+ * unparseable text, or a value outside its recommended band; kodo/doc/
+ * SAMPLING.md §8d/§8e), same yellow ⚠ and same gating rule as the session
+ * sampling modal's Apply button. Unlike that modal, a value here writes
+ * straight into `llama_args` on every keystroke regardless (there is no
+ * separate "apply" step for a single field) — the gate only stops the whole
+ * *form* from being submitted with a bad value sitting in it.
  */
 
 import { useEffect, useState } from 'preact/hooks';
@@ -19,7 +28,8 @@ import {
   flavorPlatformBadge,
   llamaArgsToText,
   parseNonNegativeInt,
-  samplingRangeWarning,
+  samplingFieldIssue,
+  samplingLabelText,
 } from './localLlmUtils';
 import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry, SamplingParamSpec } from './types';
 import { vscode } from './vscode';
@@ -96,7 +106,14 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
   // under its own unchanged name isn't flagged as a clash with itself.
   const trimmedName = name.trim();
   const nameDup = Boolean(trimmedName) && flavors.some((f) => f.id !== selectedFlavorId && f.name === trimmedName);
-  const canSubmit = !readOnly && Boolean(trimmedName) && !nameDup;
+  // Derived straight from the current (possibly half-edited) llama_args
+  // textarea contents — there is no separate stored sampling value, so this
+  // and the textarea can never disagree.
+  const samplingText = deriveSamplingTextFromLlamaArgsText(llamaArgsText, flavorSamplingSpecs);
+  const samplingInvalid = flavorSamplingSpecs.some(
+    (spec) => samplingFieldIssue(spec, samplingText[spec.name] ?? '') !== null,
+  );
+  const canSubmit = !readOnly && Boolean(trimmedName) && !nameDup && !samplingInvalid;
 
   function submit() {
     if (!canSubmit) { return; }
@@ -138,45 +155,67 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
 
   const curatedSpecs = flavorSamplingSpecs.filter((s) => !s.advanced);
   const advancedSpecs = flavorSamplingSpecs.filter((s) => s.advanced);
-  // Derived straight from the current (possibly half-edited) llama_args
-  // textarea contents on every render — there is no separate stored sampling
-  // value, so this and the textarea can never disagree.
-  const samplingText = deriveSamplingTextFromLlamaArgsText(llamaArgsText, flavorSamplingSpecs);
 
   function samplingField(spec: SamplingParamSpec) {
     const fieldText = samplingText[spec.name] ?? '';
-    // Advisory only — a flagged value is still written into `llama_args` and
-    // still submitted. Same spec fields and same rules as the session sampling
-    // modal's ⚠ (kodo/doc/SAMPLING.md §8d); it sits in the label cell because
-    // this is a dense two-column grid with no room for a third column.
-    const warning = samplingRangeWarning(spec, fieldText);
+    // A hard error (unknown sampler name, unparseable number) or an
+    // out-of-band value (kodo/doc/SAMPLING.md §8d/§8e) — both render as the
+    // same yellow ⚠, the tooltip says which, and both disable Submit
+    // (`samplingInvalid`, above) so a bad value can't be written into
+    // `llama_args` in the first place.
+    const issue = samplingFieldIssue(spec, fieldText);
+    const label = (
+      <label key={`${spec.name}-label`} for={`flavor-sampling-${spec.name}`} title={spec.help}>
+        {/* Always mounted — visibility (not presence) toggles, so the label
+            text never shifts as `issue` flips while typing. */}
+        <span
+          className="sampling-warn"
+          style={{ visibility: issue !== null ? 'visible' : 'hidden' }}
+          title={issue ?? undefined}
+          role={issue !== null ? 'img' : undefined}
+          aria-hidden={issue === null}
+          aria-label={issue ?? undefined}
+        >⚠</span>
+        {samplingLabelText(spec)}
+      </label>
+    );
+    const input = (
+      <input
+        key={spec.name}
+        id={`flavor-sampling-${spec.name}`}
+        type={spec.kind === 'str_list' ? 'text' : 'number'}
+        min={spec.minimum ?? undefined}
+        max={spec.maximum ?? undefined}
+        step={spec.step ?? undefined}
+        autocomplete="off"
+        title={spec.help}
+        placeholder="unset"
+        readOnly={readOnly}
+        value={fieldText}
+        onInput={(e) =>
+          setLlamaArgsText(
+            applySamplingFieldToLlamaArgsText(llamaArgsText, spec, (e.target as HTMLInputElement).value),
+          )
+        }
+      />
+    );
+    // "Sampler order" (`samplers`) holds a long comma-separated list of
+    // sampler names — give it its own full-width row with a 30/60 label/input
+    // split instead of the grid's shared 92px input column, which is sized
+    // for the short numeric fields. Mirrors samplingOrderLabel/
+    // samplingOrderInput in the session sampling modal (src/webview/styles.ts).
+    if (spec.name === 'samplers') {
+      return (
+        <div key={`${spec.name}-row`} className="sampling-order-row">
+          {label}
+          {input}
+        </div>
+      );
+    }
     return (
       <>
-        <label key={`${spec.name}-label`} for={`flavor-sampling-${spec.name}`} title={spec.help}>
-          {warning !== null && (
-            <span className="sampling-warn" title={warning} role="img" aria-label={warning}>⚠</span>
-          )}
-          {spec.label}
-          {spec.neutral ? ` (off: ${spec.neutral})` : ''}
-        </label>
-        <input
-          key={spec.name}
-          id={`flavor-sampling-${spec.name}`}
-          type={spec.kind === 'str_list' ? 'text' : 'number'}
-          min={spec.minimum ?? undefined}
-          max={spec.maximum ?? undefined}
-          step={spec.step ?? undefined}
-          autocomplete="off"
-          title={spec.help}
-          placeholder="unset"
-          readOnly={readOnly}
-          value={fieldText}
-          onInput={(e) =>
-            setLlamaArgsText(
-              applySamplingFieldToLlamaArgsText(llamaArgsText, spec, (e.target as HTMLInputElement).value),
-            )
-          }
-        />
+        {label}
+        {input}
       </>
     );
   }
@@ -270,9 +309,9 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
                   knobs (temperature, top-k, …). Editing a field here writes straight into the arguments text,
                   and vice versa; the two are always in sync, so changes here need a llama-server restart just
                   like anything else in that box. Leave a field blank to not set it at all. A ⚠ next to a field
-                  means the value is outside the range normally worth using — hover it for the recommended one;
-                  the value is still accepted either way. These can still be fine-tuned per session, live and
-                  without a restart, from the ⚙ button in the chat footer.
+                  means the value is outside the range normally worth using, or isn&apos;t valid at all — hover it
+                  for details; fix or clear it to re-enable Submit. These can still be fine-tuned per session,
+                  live and without a restart, from the ⚙ button in the chat footer.
                 </div>
                 <div className="sampling-grid">
                   {curatedSpecs.map((spec) => samplingField(spec))}
@@ -349,7 +388,14 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
               &quot;Add&quot; if you want to customize it.
             </div>
             <div className="modal-actions">
-              <button id="flavor-submit-btn" disabled={!canSubmit} onClick={submit}>Submit</button>
+              <button
+                id="flavor-submit-btn"
+                disabled={!canSubmit}
+                title={samplingInvalid ? 'Fix the sampling parameter(s) marked ⚠ before submitting' : undefined}
+                onClick={submit}
+              >
+                Submit
+              </button>
               <button className="secondary-btn" onClick={onClose}>Close</button>
             </div>
           </div>

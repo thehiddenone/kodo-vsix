@@ -1131,7 +1131,7 @@ export const styles = {
   // and internally scrollable — it carries ~27 fields across two sections,
   // far more than the feedback composer that box was sized for.
   samplingModalBox: {
-    width: 'min(620px, 96vw)',
+    width: 'min(640px, 96vw)',
     maxHeight: '86vh',
     boxSizing: 'border-box' as const,
     display: 'flex',
@@ -1178,14 +1178,34 @@ export const styles = {
     gap: '8px',
   },
   samplingLabel: {
-    flex: '0 0 46%',
+    flex: '0 0 60%',
     fontSize: '12px',
-    minWidth: 0,
+    minWidth: '320px',
     wordBreak: 'break-word' as const,
   },
   samplingInput: {
-    flex: 1,
-    minWidth: 0,
+    flex: '0 0 30%',
+    marginLeft: 'auto',
+    minWidth: '160px',
+    boxSizing: 'border-box' as const,
+    background: 'var(--vscode-input-background)',
+    color: 'var(--vscode-input-foreground)',
+    border: '1px solid var(--vscode-input-border)',
+    borderRadius: '2px',
+    padding: '4px 6px',
+    fontFamily: 'inherit',
+    fontSize: '12px',
+  },
+  samplingOrderLabel: {
+    flex: '0 0 30%',
+    fontSize: '12px',
+    minWidth: '160px',
+    wordBreak: 'break-word' as const,
+  },
+  samplingOrderInput: {
+    flex: '0 0 60%',
+    marginLeft: 'auto',
+    minWidth: '320px',
     boxSizing: 'border-box' as const,
     background: 'var(--vscode-input-background)',
     color: 'var(--vscode-input-foreground)',
@@ -1222,10 +1242,14 @@ export const styles = {
     borderTop: '1px solid var(--vscode-panel-border)',
     margin: '8px 0 0',
   },
-  // Yellow ⚠ shown between a parameter's label and its input when the entered
+  // Yellow ⚠ between a parameter's label and its input — either the entered
   // value falls outside the recommended band the server ships for it
-  // (`sensible_minimum`/`sensible_maximum`, kodo/doc/SAMPLING.md §8d). Its
-  // `title` names the band. Advisory only — the value is still submitted.
+  // (`sensible_minimum`/`sensible_maximum`), or it's one the server would
+  // silently drop outright (an unknown `samplers` stage name, unparseable
+  // number). `samplingFieldIssue` (kodo/doc/SAMPLING.md §8d/§8e) covers both;
+  // its `title` says which. Always rendered, one per field — `visibility`
+  // toggles, not mount/unmount, so the row's layout never shifts. Disables
+  // Apply for the whole modal.
   samplingWarn: {
     flex: '0 0 auto',
     color: 'var(--vscode-editorWarning-foreground, #c8a400)',
