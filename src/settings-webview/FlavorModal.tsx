@@ -1,14 +1,27 @@
 /**
  * Manage-flavors modal: a list-detail layout — the left pane lists every
  * flavor for the entry the button was opened from; selecting one populates
- * the right pane's form. `selectedFlavorId === null` means "add new" mode
- * (the form is blank and Submit creates a brand-new flavor); otherwise
- * Submit updates the selected *custom* flavor in place. Predefined flavors
- * are strictly read-only (kodo/doc/LLM_REGISTRY.md §4.6) — selecting one
- * fills the form for reference (fields become readonly, so their text stays
- * selectable/copyable into a new flavor) but disables Submit and Remove; the
- * server independently rejects update_flavor/remove_flavor for a predefined
- * flavor_id regardless of this client-side gate.
+ * the right pane's form and Submit updates that *custom* flavor in place.
+ * Predefined flavors are strictly read-only (kodo/doc/LLM_REGISTRY.md §4.6)
+ * — selecting one fills the form for reference (fields become readonly, so
+ * their text stays selectable/copyable into a new flavor) but disables
+ * Submit and Remove; the server independently rejects
+ * update_flavor/remove_flavor for a predefined flavor_id regardless of this
+ * client-side gate.
+ *
+ * "Add" does not open a blank form to fill in by hand — it creates a real
+ * flavor immediately (`addFlavor`, below): a unique "New flavor" name
+ * (appending " 2", " 3", … against existing flavor names), description
+ * "Custom flavor", and `llama_args` copied from the entry's `"default"`-id
+ * flavor — the built-in default every flavor-capable entry ships or is
+ * seeded with (kodo/doc/LLM_REGISTRY.md's `_seed_default_flavor`/
+ * `LlamaFlavor.make_default_kv_q8`) — or left empty if that flavor doesn't
+ * exist (e.g. a custom entry whose seeded `"default"` was since removed).
+ * `selectedFlavorId` briefly goes to `null` (blank form) while the create
+ * round-trips to the server, then flips to the new flavor's server-assigned
+ * id once it appears in the next registry_state push, selecting it for
+ * further editing. `selectedFlavorId === null` otherwise only happens when
+ * the entry has no flavors left at all to select.
  *
  * Submit is also disabled while any sampling shortcut field has an issue
  * (`samplingInvalid`, from `samplingFieldIssue` — an unknown `samplers` name,
@@ -60,6 +73,10 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
   const [minVram, setMinVram] = useState('');
   const [platform, setPlatform] = useState<LlamaFlavorPlatform>('both');
   const [showAdvancedSampling, setShowAdvancedSampling] = useState(false);
+  // Name of a flavor just created via `addFlavor`, waiting for its
+  // server-assigned id to show up in `flavors` so it can be selected — see
+  // the effect below and the file-level doc comment.
+  const [pendingNewFlavorName, setPendingNewFlavorName] = useState<string | null>(null);
 
   const selected = flavors.find((f) => f.id === selectedFlavorId) || null;
   const readOnly = Boolean(selected?.predefined);
@@ -102,6 +119,19 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flavors]);
 
+  // Selects the flavor `addFlavor` just created once it shows up in this
+  // registry_state push — its id is server-assigned (slugified from the
+  // name, de-duplicated), so it isn't known until this round-trips back.
+  useEffect(() => {
+    if (!pendingNewFlavorName) { return; }
+    const created = flavors.find((f) => f.name === pendingNewFlavorName);
+    if (created) {
+      setSelectedFlavorId(created.id);
+      setPendingNewFlavorName(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flavors, pendingNewFlavorName]);
+
   // Excludes the flavor currently being edited, so re-submitting a flavor
   // under its own unchanged name isn't flagged as a clash with itself.
   const trimmedName = name.trim();
@@ -140,8 +170,12 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
         min_vram: parseNonNegativeInt(minVram),
         platform,
       });
-      // Stays open in "add another" mode — the freshly-added flavor shows up
-      // in the left pane once the next registry_state arrives.
+      // Only reachable with `selectedFlavorId === null` and a hand-filled
+      // form — normally just the entry-has-zero-flavors case, since `Add`
+      // itself now creates flavors directly (`addFlavor`, below) rather
+      // than leaving the form open for manual entry. Stays open in "add
+      // another" mode — the freshly-added flavor shows up in the left pane
+      // once the next registry_state arrives.
       setName('');
       setDescription('');
       setLlamaArgsText('');
@@ -149,6 +183,33 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
       setMinVram('');
       setPlatform('both');
     }
+  }
+
+  // Creates a new custom flavor immediately, without requiring the user to
+  // fill in and submit a form first — see the file-level doc comment for
+  // the exact defaults and the "default"-id flavor this copies llama_args
+  // from.
+  function addFlavor() {
+    const existingNames = new Set(flavors.map((f) => f.name));
+    let newName = 'New flavor';
+    let suffix = 2;
+    while (existingNames.has(newName)) {
+      newName = `New flavor ${suffix}`;
+      suffix += 1;
+    }
+    const defaultFlavor = flavors.find((f) => f.id === 'default') || null;
+    setSelectedFlavorId(null);
+    setPendingNewFlavorName(newName);
+    vscode.postMessage({
+      type: 'add_flavor',
+      name: entry.name,
+      flavor_name: newName,
+      description: 'Custom flavor',
+      llama_args_text: defaultFlavor ? llamaArgsToText(defaultFlavor.llama_args) : '',
+      min_ram: 0,
+      min_vram: 0,
+      platform: 'both',
+    });
   }
 
   const activeId = entry.active_flavor || flavors[0]?.id || '';
@@ -248,7 +309,7 @@ export function FlavorModal({ entry, samplingSpecs, onClose }: FlavorModalProps)
               ))}
             </div>
             <div className="flavor-list-actions">
-              <button className="secondary-btn" type="button" onClick={() => setSelectedFlavorId(null)}>Add</button>
+              <button className="secondary-btn" type="button" onClick={addFlavor}>Add</button>
               <button
                 className="secondary-btn"
                 type="button"
