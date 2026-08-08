@@ -2,7 +2,7 @@ import * as assert from 'assert';
 
 import {
   cliArgValueToSamplingValue,
-  flavorSamplingDefaults,
+  launchSamplingValues,
   samplingFieldError,
   samplingFieldIssue,
   samplingLabelText,
@@ -13,7 +13,7 @@ import {
   parseSamplingValues,
   sensibleRangeText,
 } from '../llm-registry-types';
-import type { LlamaFlavorInfo, SamplingParamSpec } from '../llm-registry-types';
+import type { SamplingParamSpec } from '../llm-registry-types';
 import { reducer, initial } from '../webview/reducer';
 
 // Request-level sampling parameters (kodo/doc/SAMPLING.md). Pure functions
@@ -133,10 +133,6 @@ const MIN_KEEP: SamplingParamSpec = {
   help: '',
   valid_values: null,
 };
-
-function fakeFlavor(llama_args: Record<string, string>): LlamaFlavorInfo {
-  return { id: 'x', name: 'x', description: '', llama_args, predefined: false, min_ram: 0, min_vram: 0, platform: 'both' };
-}
 
 suite('sampling — recommended-range warning', () => {
   test('in-band values are clean, out-of-band ones warn', () => {
@@ -303,7 +299,7 @@ suite('sampling — field hard errors (samplingFieldError)', () => {
 });
 
 suite('sampling — combined field issue (samplingFieldIssue)', () => {
-  // Both the session sampling modal and the flavor editor render this one
+  // Both the session sampling modal and the profile editor render this one
   // function's result as a single yellow ⚠ and (session modal only) gate
   // Apply on it — a hard error and an out-of-band value are no longer
   // visually or behaviorally distinguished, only the tooltip text differs.
@@ -398,33 +394,33 @@ suite('sampling — CLI arg value <-> typed value', () => {
   });
 });
 
-suite('sampling — flavorSamplingDefaults (a flavor has no separate sampling state)', () => {
+suite('sampling — launchSamplingValues (sampling has no state of its own at the launch layer)', () => {
   const specs = [TEMPERATURE, TOP_K, MIN_KEEP];
 
   test('reads values straight out of llama_args', () => {
-    const flavor = fakeFlavor({ '--temp': '0.6', '--top-k': '40' });
-    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), { temperature: 0.6, top_k: 40 });
+    const llamaArgs = { '--temp': '0.6', '--top-k': '40' };
+    assert.deepStrictEqual(launchSamplingValues(llamaArgs, specs), { temperature: 0.6, top_k: 40 });
   });
 
   test('recognises every CLI alias of the same knob', () => {
-    const flavor = fakeFlavor({ '--temperature': '0.6' });
-    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), { temperature: 0.6 });
+    const llamaArgs = { '--temperature': '0.6' };
+    assert.deepStrictEqual(launchSamplingValues(llamaArgs, specs), { temperature: 0.6 });
   });
 
   test('empty llama_args yields no defaults', () => {
-    assert.deepStrictEqual(flavorSamplingDefaults(fakeFlavor({}), specs), {});
+    assert.deepStrictEqual(launchSamplingValues({}, specs), {});
   });
 
   test('min_keep has no CLI flag, so it never appears even if somehow present', () => {
     // min_keep.cli_flags is [] — the loop over cli_flags never runs for it,
     // regardless of what unrelated flags llama_args happens to carry.
-    const flavor = fakeFlavor({ '--temp': '0.6' });
-    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), { temperature: 0.6 });
+    const llamaArgs = { '--temp': '0.6' };
+    assert.deepStrictEqual(launchSamplingValues(llamaArgs, specs), { temperature: 0.6 });
   });
 
   test('ignores unrelated launch args', () => {
-    const flavor = fakeFlavor({ '--ctx-size': '0', '--jinja': '' });
-    assert.deepStrictEqual(flavorSamplingDefaults(flavor, specs), {});
+    const llamaArgs = { '--ctx-size': '0', '--jinja': '' };
+    assert.deepStrictEqual(launchSamplingValues(llamaArgs, specs), {});
   });
 });
 

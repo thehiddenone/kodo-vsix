@@ -71,7 +71,7 @@ export class SessionController {
   private lastPrompt = '';
   private uiSettings: UiSettings;
   // Window-global half of the footer sampling control (which quant, its
-  // flavor defaults, the parameter table) — refreshed by the host via
+  // launch-arg values, the parameter table) — refreshed by the host via
   // `updateSamplingContext` whenever the active model/registry changes.
   private samplingContext: SamplingContext;
   // Per-session half: this session's own per-quant overrides, straight off
@@ -894,7 +894,7 @@ export class SessionController {
 
   /**
    * Apply a new window-global `SamplingContext` (the host calls this on every
-   * open tab whenever the active model, the registry, or a flavor changes) and
+   * open tab whenever the active model, the registry, or a profile/knob changes) and
    * re-push. Mirrors `updateThinkingContext`: the footer button appears,
    * disappears (cloud model) or re-seeds its defaults without a round trip.
    */

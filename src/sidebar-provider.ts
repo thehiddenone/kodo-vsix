@@ -22,10 +22,9 @@ export interface SidebarState {
   detectedVramGb: number | null;
   detectedRamGb: number | null;
   /** `true` on Apple Silicon (`process.platform === 'darwin'`), `false` for a
-   *  Windows/Linux discrete-GPU host — mirrors `current_host_platform`
-   *  (kodo/llms/_local_registry.py). Never changes at runtime; set once at
-   *  startup. Drives both `_computeLocalWarnings`' `'platform'` warning and
-   *  the webview script's own flavor-compatibility filter (§4.6b). */
+   *  Windows/Linux discrete-GPU host. Never changes at runtime; set once at
+   *  startup. Only used for hardware-tip wording now — the per-configuration
+   *  platform filter went away with flavors (kodo/doc/LLM_REGISTRY.md §4.6). */
   isMac: boolean;
   /** Pinned local LLM registry names, in pin order (oldest pin first/topmost)
    *  — pinned cards render above unpinned ones in `renderLocalCards`.
@@ -40,7 +39,8 @@ export type SidebarMessage =
   | { type: 'new_session' }
   | { type: 'set_mode'; mode: 'local' | 'cloud' }
   | { type: 'set_active_model'; name: string }
-  | { type: 'set_active_flavor'; name: string; flavor_id: string }
+  | { type: 'set_active_profile'; name: string; profile_id: string }
+  | { type: 'configure_local_model'; name: string }
   | { type: 'set_cloud_vendor'; vendor: string }
   | { type: 'toggle_pin_local_model'; name: string }
   | { type: 'toggle_pin_cloud_vendor'; vendor: string }
@@ -105,7 +105,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         state.detectedVramGb,
         state.detectedRamGb,
         installedVersion,
-        state.isMac,
       );
       if (warnings.length > 0) {
         result[entry.name] = warnings;
@@ -274,10 +273,37 @@ function buildHtml(): string {
       border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
       margin: 4px 0;
     }
-    select.flavor-select {
-      width: 100%;
-      box-sizing: border-box;
+    .profile-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       margin-top: 6px;
+    }
+    button.configure-btn {
+      /* Secondary styling — the card's primary action is the radio that
+         selects the model, not this. Square gear button sitting beside the
+         profile picker; disabled (never hidden) whenever a user-defined
+         profile is selected, since knobs only exist on the Default profile —
+         disabling instead of hiding keeps the row's layout stable. */
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      padding: 3px 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.95em;
+      line-height: 1;
+      background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+      color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+    }
+    button.configure-btn:hover:not(:disabled) {
+      background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+    }
+    select.profile-select {
+      flex: 1;
+      min-width: 0;
+      box-sizing: border-box;
       padding: 3px 5px;
       background: var(--vscode-dropdown-background);
       color: var(--vscode-dropdown-foreground);
@@ -530,12 +556,13 @@ function buildHtml(): string {
       }
     }
 
-    // Mirrors kodo's LlamaFlavor.get_context_size()/resolve_context_window
-    // (kodo/llms/_local_registry.py) — see doc/LLM_REGISTRY.md §4.4. Can't
-    // import the TS copy in llm-registry-types.ts from this plain-JS webview
-    // script, so it's duplicated here; keep both in sync by hand.
-    function flavorContextSize(flavor) {
-      const raw = flavor.llama_args['--ctx-size'] ?? flavor.llama_args['-c'];
+    // Mirrors llm-registry-types.ts's llamaArgsContextSize/resolveContextSize,
+    // which in turn mirror kodo's LlmProfile.get_context_size()/
+    // resolve_context_window — see doc/LLM_REGISTRY.md §4.4. Can't import the
+    // TS copy from this plain-JS webview script, so it's duplicated here;
+    // keep both in sync by hand.
+    function llamaArgsContextSize(llamaArgs) {
+      const raw = llamaArgs['--ctx-size'] ?? llamaArgs['-c'];
       if (raw === undefined) {
         return 0;
       }
@@ -543,24 +570,22 @@ function buildHtml(): string {
       return Number.isFinite(value) ? value : 0;
     }
 
-    function resolveContextSize(model, flavor) {
-      if (flavor) {
-        const size = flavorContextSize(flavor);
-        if (size > 0) {
-          return size;
-        }
-      }
-      return model.context_window;
+    function resolveContextSize(model, llamaArgs) {
+      const size = llamaArgsContextSize(llamaArgs || {});
+      return size > 0 ? size : model.context_window;
     }
 
-    // Mirrors kodo's _flavor_compatible_with_host/current_host_platform
-    // (kodo/llms/_local_registry.py) and llm-registry-types.ts's
-    // flavorCompatibleWithHost — see doc/LLM_REGISTRY.md §4.6b. Duplicated
-    // here for the same reason flavorContextSize is above (plain-JS webview
-    // script, can't import the TS module); keep in sync by hand.
-    function flavorCompatibleWithHost(flavor, isMac) {
-      if (!flavor.platform || flavor.platform === 'both') { return true; }
-      return isMac ? flavor.platform === 'mac' : flavor.platform === 'gpu';
+    // The launch args a given profile id would start llama-server with: a
+    // user-defined profile's own args, or the server-computed Default profile
+    // args for ''. Mirrors effectiveLlamaArgs in llm-registry-types.ts, but
+    // takes the id explicitly so the Context line can be recomputed for a
+    // *pending* selection before the server round trip lands.
+    function profileLlamaArgs(model, profileId) {
+      if (profileId) {
+        const profile = (model.profiles || []).find(p => p.id === profileId);
+        if (profile) { return profile.llama_args || {}; }
+      }
+      return model.default_profile_args || {};
     }
 
     function renderLocalCards(section) {
@@ -617,49 +642,64 @@ function buildHtml(): string {
 
         card.appendChild(header);
 
-        const flavors = model.flavors || [];
-        // Only flavors launchable on this host are ever offered as a choice
-        // — picking an incompatible one used to be possible here and would
-        // silently start llama-server with args that don't fit this
-        // platform (doc/LLM_REGISTRY.md §4.6b). An entry with zero
-        // compatible flavors shows no picker at all; its ⚠ warning icon
-        // (via localWarnings' 'platform' kind) is the only indicator, and
-        // starting it fails with a dedicated error (confirmLocalLlamaLaunch).
-        const compatibleFlavors = flavors.filter(f => flavorCompatibleWithHost(f, _state.isMac));
-
         const quantLine = document.createElement('div');
         quantLine.className = 'card-meta-line';
         quantLine.textContent = 'Quant: ' + (model.quant_type || '—');
         card.appendChild(quantLine);
 
+        const activeProfileId = model.active_profile || '';
         const contextLine = document.createElement('div');
         contextLine.className = 'card-meta-line';
-        const activeFlavor = compatibleFlavors.find(f => f.id === model.active_flavor) || compatibleFlavors[0];
-        contextLine.textContent = 'Context: ' + resolveContextSize(model, activeFlavor).toLocaleString();
+        contextLine.textContent =
+          'Context: ' + resolveContextSize(model, profileLlamaArgs(model, activeProfileId)).toLocaleString();
         card.appendChild(contextLine);
 
-        // Flavor picker: not offered for custom_server_url (not a process
-        // kodo launches, so it has no launch args to vary), an entry with no
-        // compatible flavors (nothing valid to offer — see above), or an
-        // entry with no flavors at all (every entry that reaches here
-        // normally has at least a built-in/seeded "default" one — see
-        // LLM_REGISTRY.md §4.6).
-        if (model.kind !== 'custom_server_url' && compatibleFlavors.length > 0) {
+        // Launch configuration: a picker over "Default" + the entry's
+        // user-defined profiles, plus a Configure button that opens the
+        // Default profile's knobs in Kōdo Settings. Not offered for
+        // custom_server_url — kodo doesn't launch that process, so it has no
+        // launch args to configure (doc/LLM_REGISTRY.md §4.6).
+        if (model.kind !== 'custom_server_url') {
+          const profiles = model.profiles || [];
           const select = document.createElement('select');
-          select.className = 'flavor-select';
-          compatibleFlavors.forEach(f => {
+          select.className = 'profile-select';
+          const defaultOption = document.createElement('option');
+          defaultOption.value = '';
+          defaultOption.textContent = 'Profile: Default';
+          select.appendChild(defaultOption);
+          profiles.forEach(p => {
             const option = document.createElement('option');
-            option.value = f.id;
-            option.textContent = 'Flavor: ' + f.name;
+            option.value = p.id;
+            option.textContent = 'Profile: ' + p.name;
             select.appendChild(option);
           });
-          select.value = model.active_flavor || compatibleFlavors[0].id;
-          select.addEventListener('change', () => {
-            const selected = compatibleFlavors.find(f => f.id === select.value);
-            contextLine.textContent = 'Context: ' + resolveContextSize(model, selected).toLocaleString();
-            vsc.postMessage({ type: 'set_active_flavor', name: model.name, flavor_id: select.value });
+          select.value = activeProfileId;
+
+          // Enabled only while the Default profile is selected — knobs exist
+          // only on that one; a user-defined profile is edited as raw args in
+          // Kōdo Settings' "Manage profiles" instead. Disabled rather than
+          // hidden so the row's layout never shifts on selection.
+          const configureBtn = document.createElement('button');
+          configureBtn.className = 'configure-btn';
+          configureBtn.textContent = '⚙';
+          configureBtn.title = 'Configure';
+          configureBtn.disabled = !!activeProfileId;
+          configureBtn.addEventListener('click', () => {
+            vsc.postMessage({ type: 'configure_local_model', name: model.name });
           });
-          card.appendChild(select);
+
+          select.addEventListener('change', () => {
+            contextLine.textContent =
+              'Context: ' + resolveContextSize(model, profileLlamaArgs(model, select.value)).toLocaleString();
+            configureBtn.disabled = !!select.value;
+            vsc.postMessage({ type: 'set_active_profile', name: model.name, profile_id: select.value });
+          });
+
+          const profileRow = document.createElement('div');
+          profileRow.className = 'profile-row';
+          profileRow.appendChild(select);
+          profileRow.appendChild(configureBtn);
+          card.appendChild(profileRow);
         }
 
         section.appendChild(card);

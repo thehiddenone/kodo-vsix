@@ -26,69 +26,132 @@ export type CloudRegistry = Record<string, CloudVendorInfo>;
 export type LocalEntryKind = 'hardcoded_hf' | 'custom_hf' | 'custom_file' | 'custom_server_url';
 
 /**
- * Which host platform(s) a flavor may be launched on (kodo/llms/
- * _local_registry.py's `LlamaFlavorPlatform`) — `'mac'`/`'gpu'` restrict a
- * flavor to Apple Silicon or a Windows/Linux discrete-GPU PC respectively
- * (e.g. a huge YaRN-extended-context flavor that only fits in Apple
- * Silicon's unified memory), `'both'` (the default for a new custom flavor)
- * means no restriction.
+ * How a knob is rendered and what its selection string means (mirrors
+ * `KnobKind` in kodo/llms/local_registry/_knobs.py).
+ *
+ * - `checkbox` — exactly two options, ids `"off"`/`"on"`.
+ * - `dropdown` — two or more options; selection is an option id.
+ * - `number` — no options; a single `flag` whose numeric value the user types.
+ *   Selection is the value as text, `''` meaning "don't pass the flag at all"
+ *   (which is NOT the same as zero).
  */
-export type LlamaFlavorPlatform = 'mac' | 'gpu' | 'both';
+export type KnobKind = 'checkbox' | 'dropdown' | 'number';
 
-/**
- * A named llama-server launch config for one local registry entry — the
- * *only* source of its launch args (a local registry entry carries none of
- * its own). E.g. a "1M context" variant (YaRN rope-scaling + a much larger
- * `--ctx-size`) or a "VRAM-tight" variant (`--n-cpu-moe`/`--override-tensor`
- * tuned for a smaller GPU). Switching the active flavor **fully replaces**
- * the previously-active one's `llama_args` — flavors are never merged
- * together (kodo/doc/LLM_REGISTRY.md §4.6). There is no `context_window`
- * field here any more — the effective context size is deduced server-side
- * from `llama_args`' own `-c`/`--ctx-size` value (falling back to the
- * entry's own `context_window`), so it's never sent over the wire.
- */
-export interface LlamaFlavorInfo {
+/** One selectable state of a checkbox/dropdown knob. `llama_args` is what
+ *  picking it contributes to the Default profile's launch args. */
+export interface KnobOptionInfo {
   id: string;
   name: string;
   description: string;
   llama_args: Record<string, string>;
-  /**
-   * `true` when `id` is one of the entry's built-in predefined flavors —
-   * stays `true` even after the user edits it (which stores a same-id
-   * *override* rather than changing the predefined definition itself, see
-   * LLM_REGISTRY.md §4.6). Drives the "Manage flavors" modal's "Remove"
-   * button, which stays disabled for these ids.
-   */
-  predefined: boolean;
-  /**
-   * Minimum system RAM (GB) this flavor needs, or the minimum *unified
-   * memory* on Apple Silicon (there, compare against `detectedVramGb` —
-   * `detectedRamGb` is always `null` on macOS, see `detect_ram_gb` in
-   * kodo/llms/_hardware.py). `0` = unknown/no requirement.
-   */
-  min_ram: number;
-  /**
-   * Minimum discrete GPU VRAM (GB) this flavor needs, for a Windows/Linux
-   * GPU setup (always `0` on an Apple Silicon-oriented flavor — see
-   * `min_ram`). `0` = unknown/no requirement. When both `min_ram` and
-   * `min_vram` are `0` the hardware-fit check is inactive — the flavor is
-   * treated as runnable everywhere (see `hardwareFitWarningForFlavor` in
-   * extension.ts).
-   */
-  min_vram: number;
-  /** Which host platform(s) this flavor may be launched on — see
-   * {@link LlamaFlavorPlatform}. Purely informational client-side today
-   * (shown as a badge in the "Manage flavors" modal); the platform-aware
-   * *default*-flavor selection this drives happens server-side, in
-   * `get_effective_flavor_id` (kodo/llms/_local_registry.py). */
-  platform: LlamaFlavorPlatform;
+}
+
+/**
+ * One configurable control on an LLM's **Default profile** — the hardcoded
+ * checkbox/dropdown/number knobs kodo ships (kodo/doc/LLM_REGISTRY.md §4.6).
+ *
+ * Definitions arrive **once** per payload, in the top-level `knob_defs` table,
+ * because they are overwhelmingly shared: every built-in entry offers the same
+ * six, and only the YaRN context knobs are per-family. A `LocalRegistryEntry`
+ * lists the ids it offers in `knobs` and looks them up here.
+ *
+ * Two knobs on one entry can never own the same CLI flag — the server rejects
+ * that at import time — which is why the client can compose their args with a
+ * plain merge and never needs precedence rules.
+ */
+export interface KnobDefInfo {
+  id: string;
+  name: string;
+  description: string;
+  kind: KnobKind;
+  /** `false` = shown in the Configure modal's main body; `true` = behind its
+   *  "Advanced" section, collapsed when the modal opens. */
+  advanced: boolean;
+  /** The selection used when the user hasn't chosen one — already resolved
+   *  server-side against the entry's own `knob_defaults`. */
+  default: string;
+  /** Selectable states, in display order. `[]` for a `number` knob. */
+  options: KnobOptionInfo[];
+  /** `number` knobs only — the single CLI flag this knob writes. */
+  flag: string;
+  /** `number` knobs only — advisory input bounds/step. Nothing clamps. */
+  minimum: number | null;
+  maximum: number | null;
+  step: number | null;
+  /** `number` knobs only — what an empty value means, as placeholder text
+   *  (e.g. `"off"`). The flag is genuinely not emitted; not a synonym for 0. */
+  unset_label: string;
+}
+
+/** `knob_id` -> definition, shipped once per registry payload. */
+export type KnobDefs = Record<string, KnobDefInfo>;
+
+/**
+ * A **user-defined** llama-server launch config for one local registry entry
+ * — a raw arg set the user built in the "Manage profiles" editor.
+ *
+ * Selecting a profile **fully replaces** the Default profile's args; the two
+ * are never merged (kodo/doc/LLM_REGISTRY.md §4.6). Every profile is
+ * user-defined: there is no predefined/read-only variant, because everything
+ * that used to be a predefined *flavor* is a knob on the Default profile now.
+ */
+export interface LlmProfileInfo {
+  id: string;
+  name: string;
+  description: string;
+  llama_args: Record<string, string>;
+}
+
+/**
+ * One `llama-server` flag offered in the user-defined profile editor's "Add
+ * argument" picker, mirroring the server's `llama_arg_catalog` payload (one
+ * entry per `LLAMA_ARG_CATALOG` row in kodo/llms/_arg_catalog.py).
+ *
+ * Curated, not exhaustive — anything absent is still reachable through the
+ * editor's raw "one flag per line" box. Nothing here is enforced server-side;
+ * the bounds drive input widgets and the advisory ⚠, same posture as
+ * {@link SamplingParamSpec.sensible_minimum}.
+ */
+export interface LlamaArgSpec {
+  /** The flag as it appears on the command line, long form (`"--ctx-size"`).
+   *  This is the key written into a profile's `llama_args`. */
+  flag: string;
+  label: string;
+  /** `bool` is a bare flag (present with an empty value, no input at all);
+   *  `enum` renders a `<select>` over `choices`; `str_list` is a
+   *  delimiter-joined list (only `samplers`). */
+  kind: 'str' | 'int' | 'float' | 'bool' | 'enum' | 'str_list';
+  /** Grouping header in the picker, e.g. `"Context & memory"`. Group by exact
+   *  string in first-seen order. */
+  category: string;
+  help: string;
+  advanced: boolean;
+  minimum: number | null;
+  maximum: number | null;
+  step: number | null;
+  /** Accepted values for an `enum` flag, in display order; `[]` otherwise. */
+  choices: string[];
+  /** Hint text for a free-form `str` input; `''` when there's nothing useful. */
+  placeholder: string;
+  /** What llama.cpp does when the flag is absent, as display text; `''` when
+   *  there's no meaningful default to name. Informational only. */
+  default: string;
+  /** The recommended band, carried through from the sampling spec table for
+   *  the flags that mirror a sampling parameter — so the profile editor raises
+   *  the same yellow ⚠ as the session sampling modal
+   *  ({@link samplingRangeWarning}). `null` for every non-sampling flag. */
+  sensible_minimum: number | null;
+  sensible_maximum: number | null;
+  /** Hard whitelist for a `str_list` flag (only `samplers`); an entry outside
+   *  it is a hard error, not advice. `null` otherwise. */
+  valid_values: string[] | null;
 }
 
 /**
  * A sparse set of request-level sampling parameters — `{parameterName: value}`
  * holding **only** what is actually set. Used for all three layers the feature
- * has: a flavor's defaults, a session's per-quant overrides, and the resolved
- * set. Deleting a key is a real operation (it stops the field being sent),
+ * has: the launch args' values, a session's per-quant overrides, and the
+ * resolved set. Deleting a key is a real operation (it stops the field being sent),
  * never "reset to a default". See kodo/doc/SAMPLING.md §1.
  */
 export type SamplingValues = Record<string, number | string[]>;
@@ -131,10 +194,10 @@ export interface SamplingParamSpec {
    * "don't send it and inherit the launch-time value". Also exempt from the
    * sensible-range warning — see {@link samplingRangeWarning}. */
   neutral: string;
-  /** Equivalent llama-server CLI flags. `cli_flags[0]` is what the flavor
-   * editor's structured sampling form writes into `llama_args` when a field
-   * is set (see {@link flavorSamplingDefaults}) — every alias is checked when
-   * reading a value back out. Empty only for `min_keep`, which has no CLI
+  /** Equivalent llama-server CLI flags. `cli_flags[0]` is the flag this
+   * parameter contributes to the profile editor's argument catalog — every
+   * alias is checked when reading a value back out (see
+   * {@link launchSamplingValues}). Empty only for `min_keep`, which has no CLI
    * flag and is therefore session-override only. */
   cli_flags: string[];
   help: string;
@@ -184,21 +247,40 @@ export interface LocalRegistryEntry {
   /**
    * Maximum input-context size in tokens, as configured on the
    * `LocalLLMEntry` itself (kodo/llms/_local_registry.py) — the fallback
-   * used when the active flavor's own `-c`/`--ctx-size` is absent/`0`, see
-   * {@link resolveContextSize}. Not the effective, flavor-resolved figure —
-   * that's never sent as its own field, since it depends on which flavor is
-   * active (which kodo-vsix already knows via `active_flavor`/`flavors`).
+   * used when the launch args' own `-c`/`--ctx-size` is absent/`0`, see
+   * {@link resolveContextSize}. Not the effective figure — that's never sent
+   * as its own field, since it depends on which profile/knobs are selected
+   * (which kodo-vsix already knows via `default_profile_args`/`profiles`).
    */
   context_window: number;
   /**
-   * Predefined + custom flavors, predefined first. Empty for
-   * `custom_server_url`; every other kind normally has at least one (a
-   * built-in "default" for `hardcoded_hf`, or one seeded at creation time
-   * for `custom_hf`/`custom_file` — see LLM_REGISTRY.md §4.6).
+   * Ids of the knobs this entry's Default profile offers, in display order —
+   * look each up in the payload-level {@link KnobDefs} table. `[]` for
+   * `custom_server_url` (not a process kodo launches); every other kind gets
+   * at least the shared knobs, user-added entries included.
    */
-  flavors: LlamaFlavorInfo[];
-  /** Active flavor id, or "" for unset — falls back to `flavors[0]`. */
-  active_flavor: string;
+  knobs: string[];
+  /**
+   * The current selection for every knob in `knobs` — **resolved, never
+   * sparse**, so a `<select>`/input can bind straight to it without the
+   * client re-deriving defaults. An option id for a checkbox/dropdown knob,
+   * the value as text (`''` = unset) for a number knob.
+   */
+  knob_selections: Record<string, string>;
+  /**
+   * What `knob_selections` currently resolves to: the entry's base args with
+   * its knob args layered on top. Sent so the client can show the effective
+   * context size — and the exact flags a knob produced — without
+   * re-implementing knob composition or making a round trip. `{}` for
+   * `custom_server_url`.
+   */
+  default_profile_args: Record<string, string>;
+  /** The entry's user-defined profiles, in the order they were added. Does
+   *  NOT include the Default profile, which has no stored args at all. */
+  profiles: LlmProfileInfo[];
+  /** Active profile id, or `""` for the Default profile. A stale id is
+   *  resolved back to `""` server-side, so this always names something real. */
+  active_profile: string;
 }
 
 export type DownloadStatus = 'downloading' | 'paused' | 'failed';
@@ -241,15 +323,15 @@ export function isDownloadableLocalEntry(kind: LocalEntryKind): boolean {
 }
 
 /**
- * The context size (tokens) `flavor`'s own `llama_args` declare, mirroring
- * `LlamaFlavor.get_context_size()` (kodo/llms/_local_registry.py): scans for
- * `--ctx-size` (checked first) or `-c`, parsed as an integer. `0` if neither
- * key is present or the value doesn't parse — including the `--ctx-size: "0"`
- * "use the GGUF's own trained context length" sentinel every built-in flavor
- * sets by default.
+ * The context size (tokens) `llamaArgs` declares, mirroring
+ * `LlmProfile.get_context_size()` (kodo/llms/local_registry/_types.py): scans
+ * for `--ctx-size` (checked first) or `-c`, parsed as an integer. `0` if
+ * neither key is present or the value doesn't parse — including the
+ * `--ctx-size: "0"` "use the GGUF's own trained context length" sentinel the
+ * base args set.
  */
-export function flavorContextSize(flavor: LlamaFlavorInfo): number {
-  const raw = flavor.llama_args['--ctx-size'] ?? flavor.llama_args['-c'];
+export function llamaArgsContextSize(llamaArgs: Record<string, string>): number {
+  const raw = llamaArgs['--ctx-size'] ?? llamaArgs['-c'];
   if (raw === undefined) {
     return 0;
   }
@@ -258,161 +340,71 @@ export function flavorContextSize(flavor: LlamaFlavorInfo): number {
 }
 
 /**
- * The effective context window (tokens) for `entry` given its currently
- * selected `flavor`, mirroring `resolve_context_window` (kodo/llms/
- * _local_registry.py): `flavor`'s own declared size wins when positive,
- * otherwise falls back to `entry.context_window`.
+ * The launch args `entry` would actually start llama-server with, mirroring
+ * `resolve_effective_llama_config` (kodo/llms/local_registry/_profiles.py):
+ * the active user-defined profile's args verbatim if one is selected — a
+ * profile fully replaces the Default profile, never merges with it —
+ * otherwise the server-computed `default_profile_args`.
+ */
+export function effectiveLlamaArgs(entry: LocalRegistryEntry): Record<string, string> {
+  if (entry.active_profile) {
+    const profile = entry.profiles.find((p) => p.id === entry.active_profile);
+    if (profile) {
+      return profile.llama_args;
+    }
+  }
+  return entry.default_profile_args;
+}
+
+/**
+ * The effective context window (tokens) for `entry` under `llamaArgs`,
+ * mirroring `resolve_context_window` (kodo/llms/local_registry/_profiles.py):
+ * the declared size wins when positive, otherwise falls back to
+ * `entry.context_window`.
+ *
+ * Callers that just want "what would launch right now" pass
+ * {@link effectiveLlamaArgs}; the sidebar passes a *pending* profile's args
+ * instead, so its Context line updates the moment the picker changes, before
+ * any server round trip.
  */
 export function resolveContextSize(
   entry: LocalRegistryEntry,
-  flavor: LlamaFlavorInfo | undefined,
+  llamaArgs: Record<string, string>,
 ): number {
-  if (flavor) {
-    const size = flavorContextSize(flavor);
-    if (size > 0) {
-      return size;
-    }
-  }
-  return entry.context_window;
-}
-
-/**
- * Whether `flavor` may be launched on this host, mirroring
- * `_flavor_compatible_with_host`/`current_host_platform` (kodo/llms/
- * _local_registry.py): `'both'` is always compatible; `'mac'`/`'gpu'` must
- * match `isMac`. `platform` is normally always one of the three
- * `LlamaFlavorPlatform` values, but a payload that somehow omits it (e.g. an
- * older cached state) is treated as `'both'`, same as the server's own
- * `_parse_flavor_platform` fallback.
- */
-export function flavorCompatibleWithHost(flavor: LlamaFlavorInfo, isMac: boolean): boolean {
-  if (!flavor.platform || flavor.platform === 'both') {
-    return true;
-  }
-  return isMac ? flavor.platform === 'mac' : flavor.platform === 'gpu';
-}
-
-/**
- * Whether `entry` has at least one flavor launchable on this host, mirroring
- * `has_compatible_flavor` (kodo/llms/_local_registry.py) — `true` when
- * `entry` has no flavors at all (nothing to be incompatible about) or when
- * {@link flavorCompatibleWithHost} passes for at least one of them. `false`
- * only when every flavor targets the other platform, the case
- * {@link localLaunchWarnings}' `'platform'` warning and
- * `confirmLocalLlamaLaunch` (extension/local-llm-registry.ts) treat as a
- * hard "can't run here" — see kodo/doc/LLM_REGISTRY.md §4.6b.
- */
-export function entryHasCompatibleFlavor(entry: LocalRegistryEntry, isMac: boolean): boolean {
-  if (entry.flavors.length === 0) {
-    return true;
-  }
-  return entry.flavors.some((f) => flavorCompatibleWithHost(f, isMac));
-}
-
-/**
- * `null` if `flavor` is fine to launch given the detected hardware (or the
- * check is inactive/inconclusive); otherwise a human-readable explanation
- * — with real detected numbers — suitable for a confirmation dialog's
- * detail text (see `hardwareFitConfirm` in extension.ts, which gates the
- * sidebar's flavor `<select>` behind a native "I understand the risk,
- * proceed" / "Cancel" modal using this).
- *
- * `min_ram`/`min_vram` are independent thresholds, never summed — unlike
- * the entry-level `min_memory`/`memory` combined-pool warning rendered in
- * the Local Inference Settings panel (kodo/doc/LLM_REGISTRY.md §4.4), this
- * checks discrete GPU VRAM and system RAM as two separate pools, since a
- * flavor's launch args (e.g. `--n-gpu-layers -1`, fully on GPU) can have a
- * real per-pool minimum.
- *
- * On Apple Silicon there is one unified memory pool, reported in full via
- * `detectedVramGb` — `detectedRamGb` is always `null` there (see
- * `detect_ram_gb` in kodo/llms/_hardware.py). A Mac-oriented flavor
- * expresses its unified-memory requirement via `min_ram` by convention
- * (leaving `min_vram` at `0`), so on Mac this checks `min_ram` against
- * `detectedVramGb` instead of the always-null `detectedRamGb`.
- *
- * A `null` detected figure is treated as `0` once at least one of
- * VRAM/RAM is known; if *both* are `null` (nothing could be detected at
- * all) the check is skipped entirely rather than blocking on a guess.
- */
-export function hardwareFitWarningForFlavor(
-  flavor: LlamaFlavorInfo,
-  detectedVramGb: number | null,
-  detectedRamGb: number | null,
-  isMac: boolean,
-): string | null {
-  if (flavor.min_ram <= 0 && flavor.min_vram <= 0) {
-    return null;
-  }
-  const effectiveRamGb = isMac ? detectedVramGb : detectedRamGb;
-  if (detectedVramGb === null && effectiveRamGb === null) {
-    return null;
-  }
-  const vram = detectedVramGb ?? 0;
-  const ram = effectiveRamGb ?? 0;
-  const vramShort = flavor.min_vram > 0 && vram < flavor.min_vram;
-  const ramShort = flavor.min_ram > 0 && ram < flavor.min_ram;
-  if (!vramShort && !ramShort) {
-    return null;
-  }
-
-  const ramLabel = isMac ? 'unified memory' : 'RAM';
-  const needs: string[] = [];
-  const has: string[] = [];
-  if (flavor.min_vram > 0) {
-    needs.push(flavor.min_vram + ' GB VRAM');
-    has.push(vram + ' GB VRAM');
-  }
-  if (flavor.min_ram > 0) {
-    needs.push(flavor.min_ram + ' GB ' + ramLabel);
-    has.push(ram + ' GB ' + ramLabel);
-  }
-  return 'The "' + flavor.name + '" flavor needs at least ' + needs.join(' and ') +
-    ', but this system has ' + has.join(' and ') + ' detected. Proceeding may cause ' +
-    'llama.cpp to crash from running out of memory.';
+  const size = llamaArgsContextSize(llamaArgs);
+  return size > 0 ? size : entry.context_window;
 }
 
 export interface LocalLaunchWarning {
-  kind: 'memory' | 'version' | 'platform';
+  kind: 'memory' | 'version';
   level: 'red' | 'yellow';
   text: string;
 }
 
 /**
- * Outstanding memory/llama.cpp-version/platform warnings for `entry` given
- * the currently detected hardware, installed llama.cpp build, and host
- * platform — the memory/version rules mirror `ramWarning`/
- * `llamacppVersionWarning` in settings-webview/localLlmUtils.ts, duplicated
- * here (not imported) because that module belongs to the webview bundle
- * while this one is extension-host-importable (see
- * `hardwareFitWarningForFlavor` above for the same reasoning). Used to gate
- * an actual llama-server launch (`confirmLocalLlamaLaunch` in
- * extension/local-llm-registry.ts) rather than just render inline text —
- * keep both copies of these rules in sync if either changes.
+ * Outstanding memory/llama.cpp-version warnings for `entry` given the
+ * currently detected hardware and installed llama.cpp build. These rules
+ * mirror `ramWarning`/`llamacppVersionWarning` in
+ * settings-webview/localLlmUtils.ts, duplicated here (not imported) because
+ * that module belongs to the webview bundle while this one is
+ * extension-host-importable. Used to gate an actual llama-server launch
+ * (`confirmLocalLlamaLaunch` in extension/local-llm-registry.ts) rather than
+ * just render inline text — keep both copies in sync if either changes.
  *
- * Unlike the other two, the `'platform'` warning (kodo/doc/LLM_REGISTRY.md
- * §4.6b) is not a "proceed anyway" risk — `confirmLocalLlamaLaunch` treats
- * it as an unconditional block, since there is genuinely no flavor of
- * `entry` that can launch on this host. It fires whenever
- * `entryHasCompatibleFlavor` is `false`, independent of `detectedVramGb`/
- * `detectedRamGb`/`installedLlamaCppVersion` — a platform mismatch is a
- * static fact about `entry.flavors`, never a detection question.
+ * The entry-level `min_memory`/`memory` figures are now the **only** hardware
+ * check: the per-configuration `min_ram`/`min_vram` gate and the
+ * platform-compatibility block both went away with flavors (a knob option
+ * carries no hardware or platform restriction, so every option is offered on
+ * every host — a large YaRN context option says so in its own description
+ * instead). See kodo/doc/LLM_REGISTRY.md §4.6.
  */
 export function localLaunchWarnings(
   entry: LocalRegistryEntry,
   detectedVramGb: number | null,
   detectedRamGb: number | null,
   installedLlamaCppVersion: string | null,
-  isMac: boolean,
 ): LocalLaunchWarning[] {
   const warnings: LocalLaunchWarning[] = [];
-  if (!entryHasCompatibleFlavor(entry, isMac)) {
-    warnings.push({
-      kind: 'platform',
-      level: 'red',
-      text: `⛔ This LLM is not compatible with this platform (${isMac ? 'Apple Silicon' : 'Windows/Linux GPU'}) — none of its flavors support running here.`,
-    });
-  }
   if (detectedVramGb !== null || detectedRamGb !== null) {
     const total = (detectedVramGb || 0) + (detectedRamGb || 0);
     const min = entry.min_memory || 0;
@@ -504,11 +496,12 @@ export interface ThinkingContext {
 export interface SamplingContext {
   /** Active local registry entry ("quant") name, or `''` when not applicable. */
   model: string;
-  /** What `model`'s active flavor will launch llama-server with for each
-   *  sampling parameter, parsed out of its `llama_args` (see
-   *  {@link flavorSamplingDefaults}) — shown as the inherited value in the
+  /** What `model`'s active launch configuration will start llama-server with
+   *  for each sampling parameter, parsed out of its resolved `llama_args` (see
+   *  {@link launchSamplingValues}) — shown as the inherited value in the
    *  session sampling modal's placeholders. Not a separately stored value:
-   *  a flavor has no request-level sampling state of its own any more. */
+   *  sampling reaches llama-server only as a launch arg or a session override
+   *  (kodo/doc/SAMPLING.md §9). */
   defaults: SamplingValues;
   /** The server's parameter table, in display order. */
   specs: SamplingParamSpec[];
@@ -542,7 +535,7 @@ export function samplingValueToText(value: number | string[] | undefined): strin
  *
  * An empty (or whitespace-only) field is always `undefined`, never `0` — the
  * distinction is load-bearing: omitting a parameter inherits whatever the
- * flavor's CLI args launched llama-server with, while `0` actively sets it
+ * launch args started llama-server with, while `0` actively sets it
  * (and for several samplers `0` is the *disable* value). A number that fails
  * to parse is treated as unset rather than as `NaN`.
  */
@@ -609,7 +602,7 @@ export function sensibleRangeText(spec: SamplingParamSpec): string | null {
  * A parameter with neither (`seed`) is just its label, unadorned.
  *
  * Used by the session sampling modal (webview/SamplingModal.tsx); the settings
- * webview renders the same text in the flavor editor from its own copy
+ * webview renders the same text in the profile editor from its own copy
  * (settings-webview/localLlmUtils.ts).
  */
 export function samplingLabelText(spec: SamplingParamSpec): string {
@@ -634,9 +627,8 @@ export function samplingLabelText(spec: SamplingParamSpec): string {
  * unchanged if it ever reaches the server; this only says a value llama.cpp
  * accepts will probably make output worse. That said, the session sampling
  * modal does gate on it client-side: it disables Apply while any field is
- * flagged, same as a hard error ({@link samplingFieldIssue}) — the flavor
- * editor shows the identical mark purely for information, with nothing
- * gated. Merge point for both severities, and the doc comment for the
+ * flagged, same as a hard error ({@link samplingFieldIssue}) — the profile
+ * editor shows and gates on the identical mark. Merge point for both severities, and the doc comment for the
  * severity split, live on {@link samplingFieldIssue}.
  *
  * Four things deliberately do NOT warn:
@@ -745,15 +737,13 @@ export function samplingFieldIssue(spec: SamplingParamSpec, text: string): strin
   return samplingFieldError(spec, text) ?? samplingRangeWarning(spec, text);
 }
 
-// --- Flavor sampling shortcuts: llama_args <-> structured sampling values --
+// --- Launch args <-> structured sampling values -----------------------------
 //
-// A flavor carries no request-level sampling state of its own (kodo/doc/
-// SAMPLING.md §9) — the flavor editor's structured sampling form is a
-// friendlier view of a subset of `llama_args` itself, kept in sync live in
-// both directions (settings-webview/FlavorModal.tsx does the two-way sync
-// using its own copy of these helpers, settings-webview/localLlmUtils.ts).
-// The functions here are for reading that same relationship out of an
-// already-launched flavor, for the session sampling modal's "inherited
+// Sampling has no state of its own at the launch layer (kodo/doc/SAMPLING.md
+// §9): it reaches llama-server either through the shared Tail culling /
+// Temperature knobs on the Default profile, or as an ordinary flag on a
+// user-defined profile. The functions here read that relationship back out of
+// already-resolved launch args, for the session sampling modal's "inherited
 // value" placeholder (`SamplingContext.defaults`).
 
 /**
@@ -768,7 +758,7 @@ function cliListSeparator(spec: SamplingParamSpec): string {
 }
 
 /**
- * Parse one flavor `llama_args` string value into a typed sampling value, or
+ * Parse one `llama_args` string value into a typed sampling value, or
  * `undefined` if it doesn't parse — mirrors {@link samplingTextToValue} but
  * reads a raw CLI argument value (already-typed for `llama_args`, not a
  * text-box string) and applies {@link cliListSeparator} for `str_list` kinds.
@@ -799,20 +789,20 @@ export function samplingValueToCliArgValue(
 }
 
 /**
- * `flavor`'s effective sampling parameters, read out of its own `llama_args`
- * rather than a separate stored field (there isn't one — see the module
+ * The sampling parameters `llamaArgs` sets, read out of the resolved launch
+ * args rather than a separate stored field (there isn't one — see the module
  * header above). For each spec with at least one CLI flag (excludes
  * `min_keep`, session-override only), checks every alias in `cli_flags`
- * order and uses whichever is present in `llama_args`.
+ * order and uses whichever is present.
  */
-export function flavorSamplingDefaults(
-  flavor: LlamaFlavorInfo,
+export function launchSamplingValues(
+  llamaArgs: Record<string, string>,
   specs: SamplingParamSpec[],
 ): SamplingValues {
   const defaults: SamplingValues = {};
   for (const spec of specs) {
     for (const flag of spec.cli_flags) {
-      const raw = flavor.llama_args[flag];
+      const raw = llamaArgs[flag];
       if (raw !== undefined) {
         const value = cliArgValueToSamplingValue(spec, raw);
         if (value !== undefined) {

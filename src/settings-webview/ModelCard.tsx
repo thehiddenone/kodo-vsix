@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { DOWNLOADABLE, CUSTOM, FLAVOR_CAPABLE, ramWarning, llamacppVersionWarning, platformWarning } from './localLlmUtils';
+import { DOWNLOADABLE, CUSTOM, PROFILE_CAPABLE, ramWarning, llamacppVersionWarning } from './localLlmUtils';
 import type { LocalRegistryEntry } from './types';
 import { vscode } from './vscode';
 
@@ -11,16 +11,19 @@ interface ModelCardProps {
   detectedVramGb: number | null;
   detectedRamGb: number | null;
   installedLlamaCppVersion: string | null;
-  onManageFlavors: (name: string) => void;
+  /** Opens the Default profile's knobs (ConfigureModal). */
+  onConfigure: (name: string) => void;
+  /** Opens the user-defined profile editor (ProfileModal). */
+  onManageProfiles: (name: string) => void;
 }
 
 export function ModelCard({
-  entry, downloadingNames, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion, onManageFlavors,
+  entry, downloadingNames, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion,
+  onConfigure, onManageProfiles,
 }: ModelCardProps) {
   const tip = isMac ? entry.mac_tip : entry.gpu_tip;
   const warning = ramWarning(entry, detectedVramGb, detectedRamGb);
   const versionWarning = llamacppVersionWarning(entry, installedLlamaCppVersion);
-  const platformW = platformWarning(entry, isMac);
   const updatable = DOWNLOADABLE.has(entry.kind) && entry.installed && updatableNames.includes(entry.name);
   // Immediate feedback only — the next 'update' (kickoff reply, disk-poll
   // tick, or an error event's registry_state) always re-renders this card
@@ -65,19 +68,25 @@ export function ModelCard({
 
       {versionWarning && <div className={`ram-warning ${versionWarning.level}`}>{versionWarning.text}</div>}
 
-      {platformW && <div className={`ram-warning ${platformW.level}`}>{platformW.text}</div>}
-
       {entry.installed && <span className="installed-tag">Installed</span>}
 
       {updatable && <div className="update-available-tag">⚠️ Update available</div>}
 
       <div className="row-buttons">
-        {/* Flavor *selection* lives only in the sidebar now — this button just
-            opens the "Manage flavors" modal (add/edit/remove definitions).
-            Only meaningful once the model is installed — flavors are local files. */}
-        {FLAVOR_CAPABLE.has(entry.kind) && entry.installed && (
-          <button className="secondary-btn" type="button" onClick={() => onManageFlavors(entry.name)}>
-            Manage flavors
+        {/* Which configuration is *active* is chosen in the sidebar; these two
+            buttons edit the definitions. "Configure" is the Default profile's
+            knobs, "Manage profiles" the user-defined arg sets — the same split
+            the sidebar card makes. Only meaningful once the model is
+            installed, since both describe how to launch a local file. */}
+        {PROFILE_CAPABLE.has(entry.kind) && entry.installed && (
+          <button className="secondary-btn" type="button" onClick={() => onConfigure(entry.name)}>
+            Configure
+          </button>
+        )}
+
+        {PROFILE_CAPABLE.has(entry.kind) && entry.installed && (
+          <button className="secondary-btn" type="button" onClick={() => onManageProfiles(entry.name)}>
+            Manage profiles
           </button>
         )}
 

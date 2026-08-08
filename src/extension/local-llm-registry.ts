@@ -2,7 +2,8 @@
  * The "Local Inference" tab's data: merging server-reported registry state
  * with the client-authoritative custom_file installed-state cache, pushing
  * that state into the Kōdo Settings panel, and the handful of actions that
- * change the active local model/flavor or touch a registry entry's files
+ * change the active local model or its launch configuration, or touch a
+ * registry entry's files
  * (doc/LLM_REGISTRY.md §4).
  */
 
@@ -11,11 +12,16 @@ import * as vscode from 'vscode';
 import { makeRequest } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { LocalLaunchWarning, LocalRegistryEntry } from '../llm-registry-types';
-import { hardwareFitWarningForFlavor, isDownloadableLocalEntry, localLaunchWarnings } from '../llm-registry-types';
+import { isDownloadableLocalEntry, localLaunchWarnings } from '../llm-registry-types';
 import { sendControl } from './control-send';
 import { dismissLocalLaunchWarnings, readSettings, readUiSettings, writeSettings } from './settings-io';
 import { state } from './state';
-import { broadcastSamplingContext, parseSamplingSpecs } from './sampling-context';
+import {
+  broadcastSamplingContext,
+  parseKnobDefs,
+  parseLlamaArgCatalog,
+  parseSamplingSpecs,
+} from './sampling-context';
 import { broadcastThinkingContext, parseThinkingFamilies } from './thinking-context';
 
 /** Merge server-reported local_registry entries with the client-authoritative
@@ -52,6 +58,8 @@ export function pushLocalInferenceState(): void {
     isMac: process.platform === 'darwin',
     updatableNames: state.localUpdatableNamesState,
     samplingSpecs: state.samplingSpecsState,
+    knobDefs: state.knobDefsState,
+    llamaArgCatalog: state.llamaArgCatalogState,
   });
 }
 
@@ -61,6 +69,8 @@ export function onLocalLlmRegistryState(payload: Record<string, unknown>): void 
     typeof payload.llama_server_override_path === 'string' ? payload.llama_server_override_path : null;
   state.thinkingFamiliesState = parseThinkingFamilies(payload.thinking_families);
   state.samplingSpecsState = parseSamplingSpecs(payload.sampling_specs);
+  state.knobDefsState = parseKnobDefs(payload.knob_defs);
+  state.llamaArgCatalogState = parseLlamaArgCatalog(payload.llama_arg_catalog);
   state.sidebarProvider?.update({
     localRegistry: state.localRegistryState,
   });
@@ -108,34 +118,32 @@ export function setActiveLocalModel(name: string): void {
 }
 
 /**
- * Selecting a flavor whose `min_ram`/`min_vram` exceed this machine's
- * detected hardware is allowed, but gated behind a native "I understand the
- * risk, proceed" / "Cancel" confirmation — proceeding anyway may crash
- * llama.cpp with an OOM. See `hardwareFitWarningForFlavor` for the
- * detection-vs-threshold comparison (kodo/doc/LLM_REGISTRY.md §4.6a).
- * Cancelling never contacts the server — the sidebar's flavor `<select>`
- * is reset to the real active flavor by re-pushing the unchanged state.
+ * Select which launch configuration `name` runs under — a user-defined
+ * profile id, or `''` for the knob-driven Default profile
+ * (kodo/doc/LLM_REGISTRY.md §4.6).
+ *
+ * No confirmation gate: the per-configuration `min_ram`/`min_vram` hardware
+ * check went away with flavors, and the entry-level memory warning that
+ * replaced it is applied at *launch* time instead
+ * (`confirmLocalLlamaLaunch`), which is where it actually matters. The server
+ * restarts llama-server only if `name` is both the selected local model and
+ * the one currently running.
  */
-export async function setActiveFlavor(name: string, flavorId: string): Promise<void> {
-  const entry = state.localRegistryState.find((e) => e.name === name);
-  const flavor = entry?.flavors.find((f) => f.id === flavorId);
-  const warning = flavor
-    ? hardwareFitWarningForFlavor(
-        flavor,
-        state.detectedVramGbState,
-        state.detectedRamGbState,
-        process.platform === 'darwin',
-      )
-    : null;
-  if (warning) {
-    const proceedLabel = 'I understand the risk, proceed';
-    const choice = await vscode.window.showWarningMessage(warning, { modal: true }, proceedLabel);
-    if (choice !== proceedLabel) {
-      state.sidebarProvider?.update({});
-      return;
-    }
-  }
-  sendControl(makeRequest('local_llm.set_active_flavor', { name, flavor_id: flavorId }));
+export function setActiveProfile(name: string, profileId: string): void {
+  sendControl(makeRequest('local_llm.set_active_profile', { name, profile_id: profileId }));
+}
+
+/**
+ * Apply a whole knob selection to `name`'s Default profile — the Configure
+ * modal's Apply button (kodo/doc/LLM_REGISTRY.md §4.6).
+ *
+ * Sent whole rather than per-knob: `local_llm.set_knobs` replaces the entry's
+ * entire selection, so a knob omitted here resets to its default and a modal
+ * opened before another window changed something cannot resurrect half the
+ * old state.
+ */
+export function setKnobs(name: string, knobs: Record<string, string>): void {
+  sendControl(makeRequest('local_llm.set_knobs', { name, knobs }));
 }
 
 /** The active local model entry plus its outstanding memory/llama.cpp-version
@@ -151,7 +159,6 @@ function activeLocalLaunchWarnings(): { entry: LocalRegistryEntry; warnings: Loc
     state.detectedVramGbState,
     state.detectedRamGbState,
     installedVersion,
-    process.platform === 'darwin',
   );
   return warnings.length > 0 ? { entry, warnings } : null;
 }
@@ -161,18 +168,14 @@ function activeLocalLaunchWarnings(): { entry: LocalRegistryEntry; warnings: Loc
  * Start/Restart button, or a local-mode prompt about to trigger the engine's
  * automatic launch — warn the user about every outstanding memory/llama.cpp-
  * version warning on the active model and let them cancel (the dialog's
- * implicit Cancel/Escape, same convention as `setActiveFlavor` below), start
- * anyway, or — only when a llama.cpp version warning is present — jump to
- * Kōdo Settings to update llama.cpp instead of starting.
+ * implicit Cancel/Escape), start anyway, or — only when a llama.cpp version
+ * warning is present — jump to Kōdo Settings to update llama.cpp instead of
+ * starting.
  *
- * A `'platform'` warning (kodo/doc/LLM_REGISTRY.md §4.6b) is handled first
- * and separately from the two above: unlike memory/version, there is no
- * "proceed anyway" for it — none of the active model's flavors can launch on
- * this host at all — so it shows a plain OK-only error and always cancels,
- * checked *before* `dismissedLocalLaunchWarnings` (a model dismissed for
- * memory/version reasons must not thereby bypass a platform block, and the
- * platform fact doesn't become launchable just because a warning was
- * dismissed once).
+ * There is no platform block any more: a knob option carries no platform
+ * restriction, so no entry can be categorically unlaunchable on this host
+ * (kodo/doc/LLM_REGISTRY.md §4.6). Memory and llama.cpp version are the only
+ * two gates left.
  *
  * `openSettings` is injected rather than imported directly (e.g. from
  * kodo-settings-bridge.ts) to avoid a circular import: kodo-settings-bridge.ts
@@ -188,15 +191,10 @@ function activeLocalLaunchWarnings(): { entry: LocalRegistryEntry; warnings: Loc
  *
  * Returns `true` to proceed with the launch, `false` to cancel — always
  * `true` when the active model has no outstanding warnings, or was
- * previously dismissed (and isn't platform-blocked).
+ * previously dismissed.
  */
 export async function confirmLocalLlamaLaunch(openSettings: () => void): Promise<boolean> {
   const found = activeLocalLaunchWarnings();
-  const platformWarning = found?.warnings.find((w) => w.kind === 'platform');
-  if (platformWarning) {
-    await vscode.window.showErrorMessage(`Kōdo: ${platformWarning.text}`, { modal: true });
-    return false;
-  }
   if (readUiSettings().dismissedLocalLaunchWarnings.includes(state.activeLocalModelState)) {
     return true;
   }

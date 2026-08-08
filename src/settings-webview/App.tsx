@@ -5,8 +5,9 @@ import { AddKeyModal } from './AddKeyModal';
 import { AddServerUrlModal } from './AddServerUrlModal';
 import { AddTokenModal } from './AddTokenModal';
 import { CloudVendorSection } from './CloudVendorSection';
-import { FlavorModal } from './FlavorModal';
+import { ConfigureModal } from './ConfigureModal';
 import { GeneralSection } from './GeneralSection';
+import { ProfileModal } from './ProfileModal';
 import { GlobalRulesSection } from './GlobalRulesSection';
 import { LocalInferenceSection } from './LocalInferenceSection';
 import { Nav } from './Nav';
@@ -27,7 +28,12 @@ export function App() {
   const [fileModalOpen, setFileModalOpen] = useState(false);
   const [filePickedPath, setFilePickedPath] = useState<string | null>(null);
   const [serverModalOpen, setServerModalOpen] = useState(false);
-  const [flavorEntryName, setFlavorEntryName] = useState<string | null>(null);
+  // Which LLM's Configure (Default-profile knobs) modal is open, and which
+  // LLM's Manage-profiles modal is open — separate, since they are two
+  // different editors reachable from the same card (and from the sidebar's
+  // Configure button, which deep-links into the first).
+  const [configureEntryName, setConfigureEntryName] = useState<string | null>(null);
+  const [profileEntryName, setProfileEntryName] = useState<string | null>(null);
 
   useEffect(() => {
     vscode.postMessage({ type: 'ready' });
@@ -42,6 +48,12 @@ export function App() {
       }
       if (data.type === 'select_section') {
         setSelectedKey(data.key);
+        return;
+      }
+      if (data.type === 'configure_local_model') {
+        // Deep link from the sidebar card's Configure button — the panel has
+        // already been forced to the 'local-inference' tab alongside this.
+        setConfigureEntryName(data.name);
         return;
       }
       if (data.type !== 'update') { return; }
@@ -66,11 +78,12 @@ export function App() {
       if (hfModalOpen) { setHfModalOpen(false); }
       if (fileModalOpen) { setFileModalOpen(false); }
       if (serverModalOpen) { setServerModalOpen(false); }
-      if (flavorEntryName) { setFlavorEntryName(null); }
+      if (configureEntryName) { setConfigureEntryName(null); }
+      if (profileEntryName) { setProfileEntryName(null); }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [sessionSettingsFor, addTokenModalOpen, addKeyModalVendor, hfModalOpen, fileModalOpen, serverModalOpen, flavorEntryName]);
+  }, [sessionSettingsFor, addTokenModalOpen, addKeyModalVendor, hfModalOpen, fileModalOpen, serverModalOpen, configureEntryName, profileEntryName]);
 
   function openSessionSettings(sessionId: string) {
     setSessionSettingsFor(sessionId);
@@ -78,7 +91,12 @@ export function App() {
   }
 
   const activeSession = sessionSettingsFor ? state.sessions.find((s) => s.id === sessionSettingsFor) : undefined;
-  const flavorEntry = flavorEntryName ? state.localRegistry.find((e) => e.name === flavorEntryName) : undefined;
+  const configureEntry = configureEntryName
+    ? state.localRegistry.find((e) => e.name === configureEntryName)
+    : undefined;
+  const profileEntry = profileEntryName
+    ? state.localRegistry.find((e) => e.name === profileEntryName)
+    : undefined;
 
   return (
     <div className="layout">
@@ -106,7 +124,8 @@ export function App() {
             onAddHf={() => setHfModalOpen(true)}
             onAddFile={() => { setFilePickedPath(null); setFileModalOpen(true); }}
             onAddServer={() => setServerModalOpen(true)}
-            onManageFlavors={(name) => setFlavorEntryName(name)}
+            onConfigure={(name) => setConfigureEntryName(name)}
+            onManageProfiles={(name) => setProfileEntryName(name)}
           />
         )}
         {CLOUD_VENDOR_KEYS.includes(selectedKey) && (
@@ -138,11 +157,18 @@ export function App() {
         />
       )}
       {serverModalOpen && <AddServerUrlModal localRegistry={state.localRegistry} onClose={() => setServerModalOpen(false)} />}
-      {flavorEntry && (
-        <FlavorModal
-          entry={flavorEntry}
-          samplingSpecs={state.samplingSpecs}
-          onClose={() => setFlavorEntryName(null)}
+      {configureEntry && (
+        <ConfigureModal
+          entry={configureEntry}
+          knobDefs={state.knobDefs}
+          onClose={() => setConfigureEntryName(null)}
+        />
+      )}
+      {profileEntry && (
+        <ProfileModal
+          entry={profileEntry}
+          llamaArgCatalog={state.llamaArgCatalog}
+          onClose={() => setProfileEntryName(null)}
         />
       )}
     </div>

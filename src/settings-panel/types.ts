@@ -9,7 +9,8 @@ import type { HfTokenEntry } from '../hf-tokens';
 import type {
   CloudRegistry,
   EffortLevel,
-  LlamaFlavorPlatform,
+  KnobDefs,
+  LlamaArgSpec,
   LocalDownloadState,
   LocalRegistryEntry,
   SamplingParamSpec,
@@ -137,35 +138,26 @@ export interface AddServerUrlLlmPayload {
   url: string;
 }
 
-export interface AddFlavorPayload {
-  /** The local registry entry this flavor is being added to. */
+export interface AddProfilePayload {
+  /** The local registry entry this profile is being added to. */
   name: string;
-  flavor_name: string;
+  profile_name: string;
   description: string;
-  /** Raw multi-line "--flag value" text box content, parsed server-side. */
+  /** Raw multi-line "--flag value" text box content, parsed server-side.
+   * Carries the argument picker's rows too — the picker and the raw box are
+   * two views of the same text (see `ProfileModal.tsx`). */
   llama_args_text: string;
-  /** GB, 0 = unknown/no requirement — see LlamaFlavorInfo.min_ram/min_vram. */
-  min_ram: number;
-  min_vram: number;
-  /** Defaults server-side to `'both'` if omitted — see LlamaFlavorInfo.platform. */
-  platform: LlamaFlavorPlatform;
 }
 
-export interface UpdateFlavorPayload {
-  /** The local registry entry the edited flavor belongs to. */
+export interface UpdateProfilePayload {
+  /** The local registry entry the edited profile belongs to. */
   name: string;
-  /** The existing flavor's id — kept fixed, never re-derived from flavor_name. */
-  flavor_id: string;
-  flavor_name: string;
+  /** The existing profile's id — kept fixed, never re-derived from profile_name. */
+  profile_id: string;
+  profile_name: string;
   description: string;
   /** Raw multi-line "--flag value" text box content, parsed server-side. */
   llama_args_text: string;
-  /** GB, 0 = unknown/no requirement. Not carried forward if omitted — the
-   * modal always resends its own fields' current contents. */
-  min_ram: number;
-  min_vram: number;
-  /** Not carried forward if omitted (resets to `'both'`), same as min_ram/min_vram. */
-  platform: LlamaFlavorPlatform;
 }
 
 export interface KodoSettingsState {
@@ -205,9 +197,17 @@ export interface KodoSettingsState {
   updatableNames: string[];
   /** The server's request-level sampling parameter table (`sampling_specs`,
    * kodo/doc/SAMPLING.md). Drives both the session sampling modal and the
-   * flavor editor's structured `llama_args` shortcut form; `[]` before the
-   * first registry payload lands, which simply hides that section. */
+   * profile editor's argument rows; `[]` before the first registry payload
+   * lands, which simply hides that section. */
   samplingSpecs: SamplingParamSpec[];
+  /** Every knob definition any entry offers, keyed by id (`knob_defs`,
+   * kodo/doc/LLM_REGISTRY.md §4.6) — shipped once per payload rather than
+   * repeated on all 82 entries. Drives the Configure modal. */
+  knobDefs: KnobDefs;
+  /** The curated llama-server flag table the user-defined profile editor's
+   * "Add argument" picker renders from (`llama_arg_catalog`,
+   * kodo/doc/LLM_REGISTRY.md §4.7). */
+  llamaArgCatalog: LlamaArgSpec[];
 }
 
 export type KodoSettingsMessage =
@@ -244,7 +244,9 @@ export type KodoSettingsMessage =
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
   | { type: 'remove_override' }
-  | ({ type: 'add_flavor' } & AddFlavorPayload)
-  | ({ type: 'update_flavor' } & UpdateFlavorPayload)
-  | { type: 'remove_flavor'; name: string; flavor_id: string }
+  | ({ type: 'add_profile' } & AddProfilePayload)
+  | ({ type: 'update_profile' } & UpdateProfilePayload)
+  | { type: 'remove_profile'; name: string; profile_id: string }
+  | { type: 'set_active_profile'; name: string; profile_id: string }
+  | { type: 'set_knobs'; name: string; knobs: Record<string, string> }
   | { type: 'close' };

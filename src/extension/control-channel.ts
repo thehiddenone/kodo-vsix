@@ -19,7 +19,12 @@ import { applyLlamaState, onLlamaProgress } from './llamacpp';
 import { mergeLocalRegistry, onLocalLlmRegistryState, onLocalLlmUpdatesAvailable, pushLocalInferenceState } from './local-llm-registry';
 import { resumePendingResumeSession } from './session-resume';
 import { state } from './state';
-import { broadcastSamplingContext, parseSamplingSpecs } from './sampling-context';
+import {
+  broadcastSamplingContext,
+  parseKnobDefs,
+  parseLlamaArgCatalog,
+  parseSamplingSpecs,
+} from './sampling-context';
 import { broadcastThinkingContext, parseThinkingFamilies } from './thinking-context';
 import { reconcileOpenSessions } from './window-sessions';
 
@@ -83,6 +88,8 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
       typeof env.payload.detected_ram_gb === 'number' ? env.payload.detected_ram_gb : null;
     state.thinkingFamiliesState = parseThinkingFamilies(env.payload.thinking_families);
     state.samplingSpecsState = parseSamplingSpecs(env.payload.sampling_specs);
+    state.knobDefsState = parseKnobDefs(env.payload.knob_defs);
+    state.llamaArgCatalogState = parseLlamaArgCatalog(env.payload.llama_arg_catalog);
     state.sidebarProvider?.update({
       cloudRegistry: state.cloudRegistryState,
       activeCloudVendor: state.activeCloudVendorState,

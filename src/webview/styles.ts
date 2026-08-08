@@ -1216,7 +1216,7 @@ export const styles = {
     fontSize: '12px',
   },
   // Shown in the input as placeholder-adjacent text: what happens if the field
-  // is left blank. "flavor default" when the active flavor sets one, otherwise
+  // is left blank. "launch default" when the launch args set one, otherwise
   // "server default", which is the value llama_args launched the server with.
   samplingInheritHint: {
     flex: '0 0 auto',

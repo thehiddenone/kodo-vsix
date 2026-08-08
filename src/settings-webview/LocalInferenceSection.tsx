@@ -18,7 +18,8 @@ interface LocalInferenceSectionProps {
   onAddHf: () => void;
   onAddFile: () => void;
   onAddServer: () => void;
-  onManageFlavors: (name: string) => void;
+  onConfigure: (name: string) => void;
+  onManageProfiles: (name: string) => void;
 }
 
 export function LocalInferenceSection(props: LocalInferenceSectionProps) {
@@ -43,7 +44,8 @@ export function LocalInferenceSection(props: LocalInferenceSectionProps) {
         onAddHf={props.onAddHf}
         onAddFile={props.onAddFile}
         onAddServer={props.onAddServer}
-        onManageFlavors={props.onManageFlavors}
+        onConfigure={props.onConfigure}
+        onManageProfiles={props.onManageProfiles}
       />
     </div>
   );

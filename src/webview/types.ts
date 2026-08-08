@@ -519,7 +519,7 @@ export interface State {
    * `samplingModel` is the active local quant these apply to, or `''` on a
    * cloud model — in which case the footer button is not rendered at all.
    * `samplingValues` holds only this session's explicit overrides for that
-   * quant, `samplingDefaults` the active flavor's defaults underneath them.
+   * quant, `samplingDefaults` the active launch config's values underneath them.
    * Both are sparse: a parameter missing from both is not sent to
    * llama-server at all, which is NOT the same as sending llama.cpp's
    * built-in default.

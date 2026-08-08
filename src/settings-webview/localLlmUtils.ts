@@ -1,8 +1,9 @@
-/** Shared helpers for the "Local Inference" tab's add-LLM and manage-flavors
- *  modals — parsing form input into the wire shapes the host expects, and
- *  the local-registry name-clash check every add form validates against. */
+/** Shared helpers for the "Local Inference" tab's add-LLM, Configure (knobs)
+ *  and Manage-profiles modals — parsing form input into the wire shapes the
+ *  host expects, and the local-registry name-clash check every add form
+ *  validates against. */
 
-import type { LlamaFlavorPlatform, LocalFlavor, LocalRegistryEntry, SamplingParamSpec } from './types';
+import type { KnobDef, LlamaArgSpec, LocalRegistryEntry, SamplingParamSpec } from './types';
 
 export const DEFAULT_CONTEXT_WINDOW = 262144;
 export const HF_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -33,28 +34,24 @@ export function llamaArgsToText(llamaArgs: Record<string, string> | undefined): 
     .join('\n');
 }
 
-// --- Flavor sampling shortcuts (kodo/doc/SAMPLING.md §9) --------------------
+// --- Profile argument rows: llama_args text <-> structured rows -------------
 //
-// A flavor carries no request-level sampling state of its own — only
-// `llama_args`. FlavorModal.tsx's structured sampling form is a friendlier
-// view of a subset of those same CLI flags, kept in sync live in both
-// directions: editing a sampling field rewrites the corresponding `--flag`
-// in `llama_args`, and editing `llama_args` re-derives the sampling fields.
-// There is no separate stored sampling value to hold as React state — the
-// helpers below read/write `llama_args` text directly. Duplicated from the
-// chat webview's copies in `../llm-registry-types` on purpose — the settings
-// webview keeps its own mirrors of every shared shape (see the header of
-// ./types.ts).
+// A user-defined profile is a raw `{flag: value}` arg set. `ProfileModal.tsx`
+// offers two views of exactly the same text: an "Add argument" picker over
+// the server's curated catalog (`LlamaArgSpec`, kodo/doc/LLM_REGISTRY.md
+// §4.7), which renders one typed row per flag, and a raw "one flag per line"
+// box for anything the catalog doesn't cover. Neither is separate state —
+// both read and write the one `llama_args_text` string, so they can never
+// disagree. The helpers below do that reading and writing.
 
 /**
- * Parse the flavor editor's line-based llama-args textarea into `{flag: value}`.
+ * Parse the profile editor's line-based llama-args text into `{flag: value}`.
  *
- * Mirrors `parse_llama_args_text` (kodo/llms/_local_registry.py): one flag per
- * line, a bare flag getting an empty value, blank and non-`-`-prefixed lines
- * skipped. Deliberately NOT `parseLlamaArgs` above — that one parses the
+ * Mirrors `parse_llama_args_text` (kodo/llms/local_registry/_io.py): one flag
+ * per line, a bare flag getting an empty value, blank and non-`-`-prefixed
+ * lines skipped. Deliberately NOT `parseLlamaArgs` above — that one parses the
  * *Add-LLM* modals' space-separated single-line box and would mangle a bare
- * flag here. Only the keys matter for the conflict check, but the values come
- * along for free.
+ * flag here.
  */
 export function parseLlamaArgsText(text: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -71,97 +68,63 @@ export function parseLlamaArgsText(text: string): Record<string, string> {
   return result;
 }
 
-/**
- * The CLI-argument list separator for a `str_list` parameter — llama.cpp
- * spells `samplers` semicolon-joined on the command line but everything else
- * comma-joined; the sampling field's own display text is always
- * comma-joined regardless (matches the session modal's convention). See
- * kodo/doc/SAMPLING.md §8b.
- */
-function cliListSeparator(spec: SamplingParamSpec): string {
-  return spec.name === 'samplers' ? ';' : ',';
+/** One `{flag, value}` pair from the profile's args, in text order. A bare
+ *  flag (e.g. `--jinja`) has `value: ''`. */
+export interface ArgRow {
+  flag: string;
+  value: string;
+}
+
+/** The profile's args as ordered rows — insertion order is what the picker
+ *  renders, so a freshly added argument appears at the bottom rather than
+ *  jumping into some sorted position. */
+export function llamaArgRows(text: string): ArgRow[] {
+  return Object.entries(parseLlamaArgsText(text)).map(([flag, value]) => ({ flag, value }));
+}
+
+/** Set (or add) one flag's value, returning the new args text. Adding keeps
+ *  the flag at the end; editing leaves its position alone. */
+export function setLlamaArg(text: string, flag: string, value: string): string {
+  const args = parseLlamaArgsText(text);
+  args[flag] = value;
+  return llamaArgsToText(args);
+}
+
+/** Remove one flag entirely, returning the new args text. */
+export function removeLlamaArg(text: string, flag: string): string {
+  const args = parseLlamaArgsText(text);
+  delete args[flag];
+  return llamaArgsToText(args);
 }
 
 /**
- * Derive the flavor editor's per-field sampling display text straight out of
- * the (possibly half-edited) `llama_args` textarea contents — there is no
- * separate stored sampling value to seed from. For each spec with at least
- * one CLI flag (excludes `min_keep`, session-override only, see
- * kodo/doc/SAMPLING.md §9), checks every alias in `cli_flags` order and uses
- * whichever is present.
+ * The catalog entries **not** already present in `text` — what the "Add
+ * argument" dropdown offers. A flag can only be set once, so offering one
+ * that's already a row would just overwrite it silently.
  */
-export function deriveSamplingTextFromLlamaArgsText(
-  llamaArgsText: string,
-  specs: SamplingParamSpec[],
-): Record<string, string> {
-  const llamaArgs = parseLlamaArgsText(llamaArgsText);
-  const out: Record<string, string> = {};
-  for (const spec of specs) {
-    let text = '';
-    for (const flag of spec.cli_flags) {
-      const raw = llamaArgs[flag];
-      if (raw !== undefined) {
-        text = spec.kind === 'str_list'
-          ? raw.split(cliListSeparator(spec)).map((s) => s.trim()).filter(Boolean).join(', ')
-          : raw;
-        break;
-      }
-    }
-    out[spec.name] = text;
-  }
-  return out;
-}
-
-/**
- * Apply one sampling field's edited text back into the `llama_args` textarea
- * contents — the inverse of {@link deriveSamplingTextFromLlamaArgsText} for a
- * single field. Removes every one of `spec`'s CLI-flag aliases first (so
- * re-editing a field never leaves a stale `--temperature` behind a freshly
- * written `--temp`), then, if `fieldText` isn't blank, writes it back under
- * `cli_flags[0]` — the canonical spelling this editor always writes, even if
- * the flavor originally used an alias.
- */
-export function applySamplingFieldToLlamaArgsText(
-  llamaArgsText: string,
-  spec: SamplingParamSpec,
-  fieldText: string,
-): string {
-  const llamaArgs = parseLlamaArgsText(llamaArgsText);
-  for (const flag of spec.cli_flags) {
-    delete llamaArgs[flag];
-  }
-  const trimmed = fieldText.trim();
-  if (trimmed && spec.cli_flags.length > 0) {
-    llamaArgs[spec.cli_flags[0]] = spec.kind === 'str_list'
-      ? trimmed.split(',').map((s) => s.trim()).filter(Boolean).join(cliListSeparator(spec))
-      : trimmed;
-  }
-  return llamaArgsToText(llamaArgs);
+export function availableArgSpecs(catalog: LlamaArgSpec[], text: string): LlamaArgSpec[] {
+  const present = new Set(Object.keys(parseLlamaArgsText(text)));
+  return catalog.filter((spec) => !present.has(spec.flag));
 }
 
 /**
  * `spec`'s **recommended** band as display text ("0 to 2", "0.5 or above"), or
- * `null` when the spec ships no guidance at all (`seed`, `mirostat`, the
- * `str_list` parameters).
+ * `null` when it ships no guidance — every non-sampling flag, plus the
+ * sampling ones with no meaningful band (`seed`, `mirostat`) and the
+ * `str_list` ones.
  *
  * Spelt with the word "to" rather than a hyphen because several bands start
- * negative (`repeat_last_n` is -1 to 2048, the penalties are -1 to 1), where a
- * hyphen would read as a minus sign. Feeds both the field label
- * ({@link samplingLabelText}) and the ⚠ tooltip
- * ({@link samplingRangeWarning}), so the two always quote the same numbers.
+ * negative (the penalties are -1 to 1), where a hyphen would read as a minus
+ * sign. Mirrors `sensibleRangeText` in ../llm-registry-types (the chat
+ * webview's copy) — the settings webview keeps its own mirror of every shared
+ * shape, see the header of ./types.ts.
  */
-export function sensibleRangeText(spec: SamplingParamSpec): string | null {
-  // `?? null` rather than a plain read: an older kodo server's `sampling_specs`
-  // omits these fields entirely, and `undefined` must degrade to "no guidance"
-  // instead of being formatted into the label as literal "undefined".
+export function argRangeText(spec: LlamaArgSpec): string | null {
   const low = spec.sensible_minimum ?? null;
   const high = spec.sensible_maximum ?? null;
   if (spec.kind === 'str_list' || (low === null && high === null)) {
     return null;
   }
-  // A float bound that happens to be whole keeps its ".0" — JSON gave us `2`
-  // for `2.0`, and "0 to 2" on a field whose values are decimals reads as if
-  // only integers belong there. Ints stay bare.
   const show = (value: number): string =>
     spec.kind === 'float' && Number.isInteger(value) ? value.toFixed(1) : String(value);
   if (low !== null && high !== null) {
@@ -171,148 +134,134 @@ export function sensibleRangeText(spec: SamplingParamSpec): string | null {
 }
 
 /**
- * One sampling field's label: the parameter name plus the guidance a user needs
- * *before* typing — the recommended band and, when the parameter has one, the
- * value that turns it off ("Temperature (0.0 to 2.0, 1.0 disables)"). A parameter
- * with neither (`seed`) is just its label.
+ * The **hard**-error message for one argument row's value, or `null` if it
+ * would be accepted.
  *
- * Both are advisory: the band clamps nothing (the server's hard
- * `minimum`/`maximum` do that), and "disables" names the sampler's neutral
- * value — a real value to write into `llama_args`, unlike leaving the field
- * blank, which writes no flag at all. Duplicated from the chat webview's copy
- * (../llm-registry-types) so both modals label their fields identically.
+ * Two shapes of "the server would silently drop this":
+ *  - a `str_list` flag with `valid_values` (only `--samplers`) containing a
+ *    name outside that set — one bad stage name makes llama-server reject the
+ *    whole request (kodo/doc/SAMPLING.md §8e);
+ *  - a numeric field whose text contains a digit but still fails to parse
+ *    (`"1.2.3"`, `"12x"`). Checked with `Number(...)` rather than
+ *    `parseInt`/`parseFloat`, which would wave "1.2.3" through as `1.2`. A
+ *    bare sign/decimal-point prefix (`"-"`, `"."`) is a legitimate mid-typing
+ *    state, not an error.
+ *
+ * A blank value is never an error: for a `bool` flag it is the only correct
+ * value (a bare flag), and for anything else the raw text box is free to hold
+ * a half-typed line.
  */
-export function samplingLabelText(spec: SamplingParamSpec): string {
-  const parts: string[] = [];
-  const range = sensibleRangeText(spec);
-  if (range !== null) {
-    parts.push(range);
-  }
-  if (spec.neutral !== '') {
-    parts.push(`${spec.neutral} disables`);
-  }
-  return parts.length === 0 ? spec.label : `${spec.label} (${parts.join(', ')})`;
-}
-
-/**
- * The tooltip for `spec`'s yellow ⚠ next to a flavor-editor sampling field, or
- * `null` when `fieldText` needs no warning.
- *
- * Advisory guidance against the spec's *recommended* band
- * (`sensible_minimum`/`sensible_maximum`, kodo/doc/SAMPLING.md §8d) — never
- * validation: the flagged value is still written into `llama_args` verbatim,
- * and the server's own hard `minimum`/`maximum` are what actually clamp.
- *
- * A blank field, a `str_list` parameter, a spec with no band, a half-typed
- * number and a value exactly equal to the spec's `neutral` (disable) value all
- * warn-free — see the chat webview's copy in ../llm-registry-types for why
- * each of those exemptions exists. Duplicated from that copy on purpose, same
- * as every other shared shape in this module (see its header).
- */
-export function samplingRangeWarning(spec: SamplingParamSpec, fieldText: string): string | null {
-  // Same source as the label's band, so the two can't quote different numbers;
-  // `null` means the spec ships no guidance and nothing can be out of band.
-  const range = sensibleRangeText(spec);
-  if (range === null) {
-    return null;
-  }
-  const low = spec.sensible_minimum ?? null;
-  const high = spec.sensible_maximum ?? null;
-  const trimmed = fieldText.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const value = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
-  if (!Number.isFinite(value)) {
-    return null;
-  }
-  if (spec.neutral !== '' && value === parseFloat(spec.neutral)) {
-    return null;
-  }
-  if ((low === null || value >= low) && (high === null || value <= high)) {
-    return null;
-  }
-
-  const off = spec.neutral === '' ? '' : ` Set it to ${spec.neutral} to turn ${spec.label} off.`;
-  return `${trimmed} is outside the recommended range for ${spec.label} (${range}). ` +
-    `Values outside that range are accepted but usually degrade output quality.${off}`;
-}
-
-/**
- * The **hard**-error message for a flavor-editor sampling field, or `null` if
- * `fieldText` would write cleanly into `llama_args` (including blank, which
- * just writes no flag).
- *
- * Unlike {@link samplingRangeWarning}, this flags a value llama-server would
- * reject outright rather than merely one Kōdo discourages: an unknown
- * `samplers` stage name (checked against that spec's `valid_values`, only set
- * for `samplers`), or numeric text that doesn't parse. Purely a visual mark
- * here — the flavor editor has no per-field Apply to gate the way the session
- * sampling modal does, so an unfixed error still gets written into
- * `llama_args` and fails at the next llama-server launch instead of a request
- * silently dropping it. See kodo/doc/SAMPLING.md §8e. Duplicated from the
- * chat webview's copy (../llm-registry-types) on purpose, same as every other
- * shared shape in this module (see its header).
- */
-export function samplingFieldError(spec: SamplingParamSpec, fieldText: string): string | null {
-  const trimmed = fieldText.trim();
-  if (!trimmed) {
-    return null;
-  }
+export function argFieldError(spec: LlamaArgSpec, value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) { return null; }
   if (spec.kind === 'str_list') {
-    if (!spec.valid_values) {
-      return null;
-    }
-    const items = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+    if (!spec.valid_values) { return null; }
+    const items = trimmed.split(/[;,]/).map((s) => s.trim()).filter(Boolean);
     const unknown = items.filter((item) => !spec.valid_values!.includes(item));
-    if (unknown.length === 0) {
-      return null;
-    }
+    if (unknown.length === 0) { return null; }
     return `Unknown ${spec.label.toLowerCase()} name(s): ${unknown.join(', ')}. ` +
       `Valid names: ${spec.valid_values.join(', ')}.`;
   }
-  // `Number(...)`, not `parseInt`/`parseFloat`: those parse a leading numeric
-  // *prefix* and would wave "1.2.3" through as `1.2`.
-  if (Number.isFinite(Number(trimmed)) || !/\d/.test(trimmed)) {
-    return null;
-  }
+  if (spec.kind !== 'int' && spec.kind !== 'float') { return null; }
+  if (Number.isFinite(Number(trimmed)) || !/\d/.test(trimmed)) { return null; }
   return `"${trimmed}" is not a valid number.`;
 }
 
 /**
- * Whether a flavor-editor sampling field has *any* problem worth flagging —
- * a hard error ({@link samplingFieldError}) or an advisory out-of-band value
- * ({@link samplingRangeWarning}), whichever applies, hard error first. Both
- * render as the same yellow ⚠ (`.sampling-warn`) — the tooltip text is what
- * explains which one it is. Duplicated from the chat webview's copy
- * (../llm-registry-types) on purpose, same as every other shared shape in
- * this module (see its header).
+ * The advisory out-of-band message for one argument row's value, or `null`.
+ *
+ * Guidance against the flag's *recommended* band, which only the sampling
+ * flags carry (kodo/doc/SAMPLING.md §8d) — the server never clamps or rejects
+ * against it. A half-typed number never warns, since the check reruns on every
+ * keystroke and would otherwise flicker while a perfectly good value is being
+ * typed.
  */
-export function samplingFieldIssue(spec: SamplingParamSpec, fieldText: string): string | null {
-  return samplingFieldError(spec, fieldText) ?? samplingRangeWarning(spec, fieldText);
+export function argRangeWarning(spec: LlamaArgSpec, value: string): string | null {
+  const range = argRangeText(spec);
+  if (range === null) { return null; }
+  const trimmed = value.trim();
+  if (!trimmed) { return null; }
+  const parsed = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
+  if (!Number.isFinite(parsed)) { return null; }
+  const low = spec.sensible_minimum ?? null;
+  const high = spec.sensible_maximum ?? null;
+  if ((low === null || parsed >= low) && (high === null || parsed <= high)) { return null; }
+  return `${trimmed} is outside the recommended range for ${spec.label} (${range}). ` +
+    'Values outside that range are accepted but usually degrade output quality.';
 }
 
-// The "Manage flavors" modal's platform radio group — order matters (render
-// order). `both` (no restriction) is the default for a brand-new flavor,
-// mirroring the server's LlamaFlavorPlatform.BOTH default.
-export const FLAVOR_PLATFORM_OPTIONS: { value: LlamaFlavorPlatform; label: string }[] = [
-  { value: 'mac', label: 'Apple Silicon only' },
-  { value: 'gpu', label: 'NVIDIA GPU only' },
-  { value: 'both', label: 'Apple Silicon and NVIDIA GPU' },
-];
+/**
+ * Whether one argument row has *any* problem worth flagging — a hard error
+ * (a value the server would drop) or an out-of-band value (one it accepts but
+ * that is probably a bad idea) — whichever applies, hard error first.
+ *
+ * The single function ProfileModal calls both to render the yellow ⚠ and to
+ * gate Save: asking a user to tell "this would vanish" from "this is unwise"
+ * apart by icon colour isn't a distinction worth making at a glance, so both
+ * render identically and the tooltip explains which it is.
+ */
+export function argIssue(spec: LlamaArgSpec, value: string): string | null {
+  return argFieldError(spec, value) ?? argRangeWarning(spec, value);
+}
 
-// Short badge text for a flavor's platform restriction in the "Manage
-// flavors" list — omitted (empty string) for 'both' since that's "no
-// restriction," not something worth calling out next to every row.
-export function flavorPlatformBadge(platform: LlamaFlavorPlatform | undefined): string {
-  if (platform === 'mac') { return 'Apple Silicon only'; }
-  if (platform === 'gpu') { return 'NVIDIA GPU only'; }
-  return '';
+/**
+ * Which sampling spec (if any) a catalog flag mirrors — used only to keep the
+ * profile editor's ⚠ text in step with the session sampling modal's when the
+ * server ships an older catalog with no band on a sampling flag. Returns the
+ * spec whose `cli_flags` include `flag`.
+ */
+export function samplingSpecForFlag(
+  specs: SamplingParamSpec[],
+  flag: string,
+): SamplingParamSpec | undefined {
+  return specs.find((spec) => spec.cli_flags.includes(flag));
+}
+
+// --- Knobs (the Default profile) --------------------------------------------
+
+/**
+ * The resolved current selection for `knob`, falling back to the knob's own
+ * default when `selections` has nothing usable for it.
+ *
+ * The server already sends `knob_selections` fully resolved, so this normally
+ * just reads it back — it exists for the modal's *local* (unsaved) state,
+ * where a knob the user hasn't touched yet has no entry.
+ */
+export function knobSelection(knob: KnobDef, selections: Record<string, string>): string {
+  const stored = selections[knob.id];
+  if (stored !== undefined) { return stored; }
+  return knob.default ?? knob.options?.[0]?.id ?? '';
+}
+
+/**
+ * The llama-server flags `knob` contributes at `selection` — what the
+ * Configure modal shows under each control so the effect of a choice is
+ * visible without launching anything. Mirrors `LlamaKnob.llama_args_for`
+ * (kodo/llms/local_registry/_knobs.py).
+ */
+export function knobLlamaArgs(knob: KnobDef, selection: string): Record<string, string> {
+  if (knob.kind === 'number') {
+    const value = selection.trim();
+    return value && knob.flag ? { [knob.flag]: value } : {};
+  }
+  const chosen = (knob.options || []).find((o) => o.id === selection);
+  return chosen?.llama_args ?? {};
+}
+
+/** `"--min-p 0.08, --top-k 0"`, or `''` when the state contributes no flags —
+ *  the one-line "what this does" summary under a knob's control. */
+export function formatLlamaArgs(args: Record<string, string>): string {
+  return Object.entries(args)
+    .map(([flag, value]) => (value ? `${flag} ${value}` : flag))
+    .join(', ');
 }
 
 export const DOWNLOADABLE = new Set(['hardcoded_hf', 'custom_hf']);
 export const CUSTOM = new Set(['custom_hf', 'custom_file', 'custom_server_url']);
-export const FLAVOR_CAPABLE = new Set(['hardcoded_hf', 'custom_hf', 'custom_file']);
+/** Entry kinds that have a launch configuration at all — everything except
+ *  `custom_server_url`, whose process kodo does not start. Gates both the
+ *  Configure and Manage-profiles buttons. */
+export const PROFILE_CAPABLE = new Set(['hardcoded_hf', 'custom_hf', 'custom_file']);
 
 export function formatBytes(n: number | null | undefined): string {
   if (n === null || n === undefined) { return ''; }
@@ -395,35 +344,5 @@ export function llamacppVersionWarning(
   return {
     level: 'red',
     text: `⛔ The installed llama.cpp (b${installed}) does not support this LLM — it requires at least b${required}. Update llama.cpp to run it.`,
-  };
-}
-
-export interface PlatformWarning {
-  level: 'red';
-  text: string;
-}
-
-// Mirrors flavorCompatibleWithHost (src/llm-registry-types.ts) and
-// _flavor_compatible_with_host/current_host_platform (kodo/llms/
-// _local_registry.py) — duplicated here since this module is webview-only
-// (see this file's header comment). Keep in sync by hand.
-function flavorCompatibleWithHost(flavor: LocalFlavor, isMac: boolean): boolean {
-  if (!flavor.platform || flavor.platform === 'both') { return true; }
-  return isMac ? flavor.platform === 'mac' : flavor.platform === 'gpu';
-}
-
-// entry has zero flavors compatible with this host (kodo/doc/
-// LLM_REGISTRY.md §4.6b) — a static fact about entry.flavors, not a
-// hardware-detection question like ramWarning/llamacppVersionWarning above,
-// so there's no "unknown — don't warn" case: an entry with no flavors at
-// all is never platform-restricted (nothing to be incompatible about).
-export function platformWarning(entry: LocalRegistryEntry, isMac: boolean): PlatformWarning | null {
-  const flavors = entry.flavors || [];
-  if (flavors.length === 0 || flavors.some((f) => flavorCompatibleWithHost(f, isMac))) {
-    return null;
-  }
-  return {
-    level: 'red',
-    text: `⛔ This LLM is not compatible with this platform (${isMac ? 'Apple Silicon' : 'Windows/Linux GPU'}) — none of its flavors support running here.`,
   };
 }

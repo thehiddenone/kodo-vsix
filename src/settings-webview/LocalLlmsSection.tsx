@@ -14,19 +14,20 @@ interface LocalLlmsSectionProps {
   onAddHf: () => void;
   onAddFile: () => void;
   onAddServer: () => void;
-  onManageFlavors: (name: string) => void;
+  onConfigure: (name: string) => void;
+  onManageProfiles: (name: string) => void;
 }
 
 export function LocalLlmsSection({
   localRegistry, downloads, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion,
-  onAddHf, onAddFile, onAddServer, onManageFlavors,
+  onAddHf, onAddFile, onAddServer, onConfigure, onManageProfiles,
 }: LocalLlmsSectionProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [installedExpanded, setInstalledExpanded] = useState(false);
 
   const downloadingNames = new Set(downloads.map((d) => d.name));
   const cardProps = {
-    downloadingNames, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion, onManageFlavors,
+    downloadingNames, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion, onConfigure, onManageProfiles,
   };
 
   const installed = localRegistry.filter((e) => e.installed);

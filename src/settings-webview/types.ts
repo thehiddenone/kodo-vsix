@@ -104,17 +104,61 @@ export interface CloudVendorRegistryInfo {
 
 export type CloudRegistry = Record<string, CloudVendorRegistryInfo>;
 
-export type LlamaFlavorPlatform = 'mac' | 'gpu' | 'both';
+/** Webview-local mirrors of the knob/profile shapes in ../llm-registry-types
+ *  (see that file for the full field docs), per this file's
+ *  webview-local-copy convention. */
+export type KnobKind = 'checkbox' | 'dropdown' | 'number';
 
-export interface LocalFlavor {
+export interface KnobOptionInfo {
   id: string;
   name: string;
   description?: string;
   llama_args?: Record<string, string>;
-  min_ram?: number;
-  min_vram?: number;
-  predefined?: boolean;
-  platform?: LlamaFlavorPlatform;
+}
+
+export interface KnobDef {
+  id: string;
+  name: string;
+  description?: string;
+  kind: KnobKind;
+  advanced?: boolean;
+  default?: string;
+  options?: KnobOptionInfo[];
+  flag?: string;
+  minimum?: number | null;
+  maximum?: number | null;
+  step?: number | null;
+  unset_label?: string;
+}
+
+export type KnobDefs = Record<string, KnobDef>;
+
+/** A user-defined llama-server launch config. There is no predefined variant
+ *  — what used to be a predefined flavor is a knob on the Default profile. */
+export interface LocalProfile {
+  id: string;
+  name: string;
+  description?: string;
+  llama_args?: Record<string, string>;
+}
+
+/** One flag offered in the profile editor's "Add argument" picker. */
+export interface LlamaArgSpec {
+  flag: string;
+  label: string;
+  kind: 'str' | 'int' | 'float' | 'bool' | 'enum' | 'str_list';
+  category: string;
+  help: string;
+  advanced?: boolean;
+  minimum?: number | null;
+  maximum?: number | null;
+  step?: number | null;
+  choices?: string[];
+  placeholder?: string;
+  default?: string;
+  sensible_minimum?: number | null;
+  sensible_maximum?: number | null;
+  valid_values?: string[] | null;
 }
 
 export interface LocalRegistryEntry {
@@ -136,8 +180,17 @@ export interface LocalRegistryEntry {
   llamacpp_version?: number;
   installed: boolean;
   installed_path?: string;
-  flavors: LocalFlavor[];
-  active_flavor?: string;
+  context_window?: number;
+  /** Knob ids this entry's Default profile offers — look each up in
+   *  `KodoSettingsState.knobDefs`. */
+  knobs: string[];
+  /** Resolved (never sparse) current selection for every knob in `knobs`. */
+  knob_selections: Record<string, string>;
+  /** What `knob_selections` resolves to right now: base args + knob args. */
+  default_profile_args: Record<string, string>;
+  profiles: LocalProfile[];
+  /** Active profile id, or `''`/absent for the Default profile. */
+  active_profile?: string;
 }
 
 export interface LocalDownloadState {
@@ -169,10 +222,17 @@ export interface KodoSettingsState {
   isMac: boolean;
   updatableNames: string[];
   /** The server's request-level sampling parameter table (`sampling_specs`,
-   * kodo/doc/SAMPLING.md). Drives the flavor editor's structured `llama_args`
-   * shortcut form; `[]` before the first registry payload lands, which simply
-   * hides that section. */
+   * kodo/doc/SAMPLING.md). Supplies the recommended bands the profile
+   * editor's argument rows warn against; `[]` before the first registry
+   * payload lands. */
   samplingSpecs: SamplingParamSpec[];
+  /** Every knob definition any entry offers, keyed by id — shipped once per
+   * payload rather than repeated on every entry. Drives ConfigureModal. */
+  knobDefs: KnobDefs;
+  /** The curated llama-server flag table ProfileModal's "Add argument" picker
+   * renders from. `[]` before the first registry payload lands, which falls
+   * back to the raw text box alone. */
+  llamaArgCatalog: LlamaArgSpec[];
 }
 
 export const EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'max'];
@@ -269,12 +329,18 @@ export type OutboundMessage =
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
   | { type: 'remove_override' }
-  | { type: 'add_flavor'; name: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
-  | { type: 'update_flavor'; name: string; flavor_id: string; flavor_name: string; description: string; llama_args_text: string; min_ram: number; min_vram: number; platform: LlamaFlavorPlatform }
-  | { type: 'remove_flavor'; name: string; flavor_id: string };
+  | { type: 'add_profile'; name: string; profile_name: string; description: string; llama_args_text: string }
+  | { type: 'update_profile'; name: string; profile_id: string; profile_name: string; description: string; llama_args_text: string }
+  | { type: 'remove_profile'; name: string; profile_id: string }
+  | { type: 'set_active_profile'; name: string; profile_id: string }
+  | { type: 'set_knobs'; name: string; knobs: Record<string, string> };
 
 /** Messages the host can post into this webview. */
 export type InboundMessage =
   | ({ type: 'update' } & Partial<KodoSettingsState>)
   | { type: 'select_section'; key: string }
+  /** The sidebar card's Configure button deep-linking into this panel — open
+   *  the Default-profile knobs modal for `name`. One-shot, never part of
+   *  `KodoSettingsState` (see `KodoSettingsPanel.configureLocalModel`). */
+  | { type: 'configure_local_model'; name: string }
   | { type: 'gguf_file_picked'; path: string | null };

@@ -732,7 +732,133 @@
       margin-bottom: 6px;
     }
 
-    /* --- Manage flavors modal: twice the width, split into two panes --- */
+    /* --- Configure modal: the Default profile's knobs ---
+       One block per knob, generously separated: a knob is a whole idea (a
+       control, what it means, and the exact launch flags it produces), so the
+       blocks need to read as blocks and not as a dense form. Hence the
+       per-row padding + bottom border rather than the tight two-column grid
+       the old sampling shortcuts used. */
+    .modal-dialog.configure-modal-dialog {
+      width: 640px;
+      max-width: calc(100vw - 40px);
+    }
+    .configure-body {
+      max-height: 60vh;
+      overflow-y: auto;
+      margin-top: 4px;
+    }
+    .knob-row {
+      padding: 14px 2px;
+      border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .knob-row:last-child { border-bottom: none; }
+    .knob-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    .knob-name {
+      font-weight: 600;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .knob-head .settings-select,
+    .knob-head .knob-number {
+      flex: 0 0 260px;
+      max-width: 260px;
+    }
+    .knob-head .knob-number { width: 260px; box-sizing: border-box; }
+    .knob-checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.9em;
+    }
+    .knob-desc {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+      line-height: 1.45;
+      margin-bottom: 4px;
+    }
+    /* The selected option's own explanation, indented so it reads as a
+       consequence of the current choice rather than as more of the knob's
+       general description above it. */
+    .knob-option-desc {
+      border-left: 2px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+      padding-left: 8px;
+    }
+    .knob-args {
+      font-size: 0.85em;
+      margin-top: 6px;
+    }
+    .knob-args code {
+      font-family: var(--vscode-editor-font-family, monospace);
+      background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+      padding: 1px 5px;
+      border-radius: 2px;
+      word-break: break-all;
+    }
+    .knob-args-none {
+      color: var(--vscode-descriptionForeground);
+      font-style: italic;
+    }
+
+    /* --- Manage profiles modal: the argument picker's rows --- */
+    .arg-list { margin-bottom: 8px; }
+    .arg-row {
+      padding: 8px 2px;
+      border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .arg-row:last-child { border-bottom: none; }
+    .arg-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .arg-label {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 0.92em;
+    }
+    .arg-head input,
+    .arg-head .settings-select {
+      flex: 0 0 150px;
+      max-width: 150px;
+      box-sizing: border-box;
+    }
+    .arg-bare {
+      flex: 0 0 150px;
+      font-size: 0.85em;
+      font-style: italic;
+      color: var(--vscode-descriptionForeground);
+    }
+    .arg-head button.arg-remove {
+      flex: 0 0 auto;
+      width: auto;
+      padding: 2px 8px;
+      margin: 0;
+    }
+    .arg-help {
+      font-size: 0.82em;
+      color: var(--vscode-descriptionForeground);
+      line-height: 1.4;
+      margin-top: 3px;
+    }
+    .arg-help code {
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .arg-add-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .arg-add-row .settings-select { flex: 0 0 300px; max-width: 300px; }
+
+    /* --- Manage profiles modal: twice the width, split into two panes.
+       Class names still say "flavor" — the layout is unchanged and renaming
+       them would churn the stylesheet for no behavioural gain. --- */
     .modal-dialog.flavor-modal-dialog {
       width: 840px;
       max-width: calc(100vw - 40px);

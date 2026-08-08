@@ -41,7 +41,7 @@ import { sendControl, sendControlHello } from './extension/control-send';
 import { createProject } from './extension/create-project';
 import { openCloudAiSettings, openKodoSettings, openLocalInferenceSettings } from './extension/kodo-settings-bridge';
 import { installLlamaCpp, startLlamaCpp } from './extension/llamacpp';
-import { pushLocalInferenceState, setActiveFlavor, setActiveLocalModel } from './extension/local-llm-registry';
+import { pushLocalInferenceState, setActiveLocalModel, setActiveProfile } from './extension/local-llm-registry';
 import { beginServerStartupProgress, endServerStartupProgress, handleServerStartFailure, launchKodoServer, showTransientNotification } from './extension/server-lifecycle';
 import {
   readActiveCloudVendor,
@@ -175,8 +175,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         setMode(msg.mode);
       } else if (msg.type === 'set_active_model') {
         setActiveLocalModel(msg.name);
-      } else if (msg.type === 'set_active_flavor') {
-        void setActiveFlavor(msg.name, msg.flavor_id);
+      } else if (msg.type === 'set_active_profile') {
+        setActiveProfile(msg.name, msg.profile_id);
+      } else if (msg.type === 'configure_local_model') {
+        // The knobs modal lives in the Kōdo Settings panel (editor-width,
+        // preact) rather than in this narrow plain-JS sidebar — the button
+        // here just deep-links into it (LLM_REGISTRY.md §4.6).
+        void openKodoSettings('local-inference', msg.name);
       } else if (msg.type === 'set_cloud_vendor') {
         setActiveCloudVendor(msg.vendor);
       } else if (msg.type === 'toggle_pin_local_model') {

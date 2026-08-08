@@ -48,17 +48,26 @@ export class KodoSettingsPanel {
    * requested. Only meaningful for a brand-new panel; `createOrShow` handles
    * the reveal-existing-panel case by calling `selectSection` directly. */
   private _pendingSelectSection: string | null = null;
+  /** A local registry entry name whose Configure (knobs) modal should open
+   * once the `ready` handshake lands — the sidebar card's Configure button
+   * deep-links here (see `configureLocalModel`). Same one-shot treatment as
+   * `_pendingSelectSection`. */
+  private _pendingConfigureEntry: string | null = null;
 
   static createOrShow(
     extensionUri: vscode.Uri,
     initialState: KodoSettingsState,
     onMessage: (msg: KodoSettingsMessage) => void,
     selectSection?: string,
+    configureEntry?: string,
   ): KodoSettingsPanel {
     if (KodoSettingsPanel.current) {
       KodoSettingsPanel.current.panel.reveal();
       if (selectSection) {
         KodoSettingsPanel.current.selectSection(selectSection);
+      }
+      if (configureEntry) {
+        KodoSettingsPanel.current.configureLocalModel(configureEntry);
       }
       return KodoSettingsPanel.current;
     }
@@ -75,6 +84,9 @@ export class KodoSettingsPanel {
     const instance = new KodoSettingsPanel(extensionUri, panel, initialState, onMessage);
     if (selectSection) {
       instance._pendingSelectSection = selectSection;
+    }
+    if (configureEntry) {
+      instance._pendingConfigureEntry = configureEntry;
     }
     KodoSettingsPanel.current = instance;
     panel.onDidDispose(() => {
@@ -110,6 +122,10 @@ export class KodoSettingsPanel {
           this.selectSection(this._pendingSelectSection);
           this._pendingSelectSection = null;
         }
+        if (this._pendingConfigureEntry) {
+          this.configureLocalModel(this._pendingConfigureEntry);
+          this._pendingConfigureEntry = null;
+        }
         return;
       }
       if (msg.type === 'close') {
@@ -134,6 +150,14 @@ export class KodoSettingsPanel {
    * download-progress tick), fighting any subsequent tab the user clicks. */
   selectSection(key: string): void {
     void this.panel.webview.postMessage({ type: 'select_section', key });
+  }
+
+  /** Open the Configure (Default-profile knobs) modal for one local registry
+   * entry. One-shot, kept out of `KodoSettingsState` for exactly the reason
+   * `selectSection` is: folding it into persisted state would re-open the
+   * modal on every unrelated `update()` push. */
+  configureLocalModel(name: string): void {
+    void this.panel.webview.postMessage({ type: 'configure_local_model', name });
   }
 
   /** Reply to a `pick_gguf_file` message with the path chosen in the native dialog (or `null` if cancelled). */

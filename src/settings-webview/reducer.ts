@@ -22,6 +22,8 @@ export const initial: KodoSettingsState = {
   isMac: false,
   updatableNames: [],
   samplingSpecs: [],
+  knobDefs: {},
+  llamaArgCatalog: [],
 };
 
 export type Action = { type: 'patch'; data: Partial<KodoSettingsState> };

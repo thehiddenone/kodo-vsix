@@ -5,15 +5,15 @@
  *
  * Every field is optional and starts blank. **Blank means the parameter is not
  * sent to llama-server at all**, which is not the same as sending llama.cpp's
- * built-in default: an omitted field inherits whatever the flavor's CLI
+ * built-in default: an omitted field inherits whatever the launch
  * `llama_args` launched the server with (SAMPLING.md §1). That is why clearing
  * a field is a real operation with its own button, and why a field's
  * placeholder names what it would inherit rather than showing a number the
  * user never chose.
  *
  * Two things are visible here:
- *  - what the active flavor's `llama_args` actually launched llama-server
- *    with (`defaults`, parsed out of those launch args — a flavor has no
+ *  - what the active launch configuration actually started llama-server
+ *    with (`defaults`, parsed out of those launch args — sampling has no
  *    separate sampling state of its own, SAMPLING.md §9), shown as the
  *    inherited value in each field's placeholder, and
  *  - this session's own *overrides* (`values`), which are what the inputs edit
@@ -42,8 +42,8 @@
  * whole modal — this is the fix for edits that used to vanish with no
  * feedback (SAMPLING.md §1a covers the reverse case, an unknown *field*,
  * which is harmlessly ignored, not dropped). The same mark, from the same
- * spec fields, appears on the flavor editor's launch-arg shortcuts
- * (settings-webview/FlavorModal.tsx) — there it is purely informational,
+ * spec fields, appears on the profile editor's argument rows
+ * (settings-webview/ProfileModal.tsx) — there it also gates Save,
  * since that form has no per-field Apply to gate.
  *
  * The ⚠'s `<span>` is **always rendered**, one per field, and toggles
@@ -83,7 +83,7 @@ function inheritedText(spec: SamplingParamSpec, defaults: SamplingValues): strin
   const fallback = defaults[spec.name];
   return fallback === undefined
     ? 'server default'
-    : `flavor default: ${samplingValueToText(fallback)}`;
+    : `launch default: ${samplingValueToText(fallback)}`;
 }
 
 export function SamplingModal({ model, specs, defaults, values, onApply, onClose }: SamplingModalProps) {
@@ -94,9 +94,9 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
 
   // Re-seed only when the target quant or the server's stored set changes —
   // NOT on every prop identity change. `sampling_state` is re-pushed on each
-  // webview rehydrate and on any registry/flavor edit, so keying this on the
+  // webview rehydrate and on any registry/profile/knob edit, so keying this on the
   // object identity would wipe an in-progress edit on unrelated background
-  // activity (the same hazard FlavorModal's effect documents).
+  // activity (the same hazard ProfileModal's effect documents).
   const valuesKey = JSON.stringify(values);
   useEffect(() => {
     const seeded: Record<string, string> = {};
@@ -120,7 +120,7 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
   }
 
   /** Clear every field — the session stops overriding anything and falls back
-   *  to the flavor's defaults (and, for what those don't set, the launch args). */
+   *  to the launch args' own values (and, for what those don't set, llama.cpp's). */
   function clearAll() {
     setText(Object.fromEntries(specs.map((s) => [s.name, ''])));
   }
@@ -176,7 +176,7 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
             style={styles.samplingClearBtn}
             type="button"
             disabled={current === ''}
-            title="Clear this parameter — it stops being sent, falling back to the flavor/server value"
+            title="Clear this parameter — it stops being sent, falling back to the launch/server value"
             onClick={() => setText((prev) => ({ ...prev, [spec.name]: '' }))}
           >
             ✕
@@ -202,7 +202,7 @@ export function SamplingModal({ model, specs, defaults, values, onApply, onClose
         <div style={styles.modalInstructions}>
           Applies to every request this session sends to {model}, and is remembered per quant —
           switching models and back restores what you set here. Leave a field blank to not send it
-          at all, letting the flavor&apos;s launch arguments decide. {overriddenCount === 0
+          at all, letting the active profile&apos;s launch arguments decide. {overriddenCount === 0
             ? 'Nothing is overridden right now.'
             : `${overriddenCount} parameter${overriddenCount === 1 ? '' : 's'} overridden.`}
           {invalidCount > 0 &&

@@ -26,6 +26,8 @@ import {
   pushLocalInferenceState,
   revealLocalLlmFiles,
   sendCheckLocalLlmUpdates,
+  setActiveProfile,
+  setKnobs,
   setLlamaServerOverride,
 } from './local-llm-registry';
 import { currentWorkspaceShapeForList, parseRememberedWorkspace, resumeSessionIntoWorkspace } from './session-resume';
@@ -94,7 +96,10 @@ async function fetchSessionsForPanel(): Promise<SessionListEntry[]> {
  * an `update`). Fetching first makes the initial data ride the reliable
  * `ready`→`update` handshake instead — `selectSection` rides that same
  * handshake (see `KodoSettingsPanel.createOrShow`/`selectSection`). */
-export async function openKodoSettings(selectSection?: string): Promise<void> {
+export async function openKodoSettings(
+  selectSection?: string,
+  configureEntry?: string,
+): Promise<void> {
   const [rules, stuckDetection, llamaCpp, sessions] = await Promise.all([
     fetchGlobalRules(),
     fetchStuckDetection(),
@@ -116,6 +121,8 @@ export async function openKodoSettings(selectSection?: string): Promise<void> {
     isMac: process.platform === 'darwin',
     updatableNames: state.localUpdatableNamesState,
     samplingSpecs: state.samplingSpecsState,
+    knobDefs: state.knobDefsState,
+    llamaArgCatalog: state.llamaArgCatalogState,
   };
   const cloudAi = cloudAiStateForPanel();
   const panel = KodoSettingsPanel.createOrShow(
@@ -126,6 +133,7 @@ export async function openKodoSettings(selectSection?: string): Promise<void> {
     },
     (msg) => void onKodoSettingsMessage(msg),
     selectSection,
+    configureEntry,
   );
   // For an already-open panel, createOrShow only revealed it (initialState is
   // ignored) — push the freshly-fetched state in explicitly so re-opening the
@@ -422,32 +430,30 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
     await setLlamaServerOverride();
   } else if (msg.type === 'remove_override') {
     sendControl(makeRequest('llama_server_override.remove'));
-  } else if (msg.type === 'add_flavor') {
+  } else if (msg.type === 'add_profile') {
     sendControl(
-      makeRequest('local_llm.add_flavor', {
+      makeRequest('local_llm.add_profile', {
         name: msg.name,
-        flavor_name: msg.flavor_name,
+        profile_name: msg.profile_name,
         description: msg.description,
         llama_args_text: msg.llama_args_text,
-        min_ram: msg.min_ram,
-        min_vram: msg.min_vram,
-        platform: msg.platform,
       }),
     );
-  } else if (msg.type === 'update_flavor') {
+  } else if (msg.type === 'update_profile') {
     sendControl(
-      makeRequest('local_llm.update_flavor', {
+      makeRequest('local_llm.update_profile', {
         name: msg.name,
-        flavor_id: msg.flavor_id,
-        flavor_name: msg.flavor_name,
+        profile_id: msg.profile_id,
+        profile_name: msg.profile_name,
         description: msg.description,
         llama_args_text: msg.llama_args_text,
-        min_ram: msg.min_ram,
-        min_vram: msg.min_vram,
-        platform: msg.platform,
       }),
     );
-  } else if (msg.type === 'remove_flavor') {
-    sendControl(makeRequest('local_llm.remove_flavor', { name: msg.name, flavor_id: msg.flavor_id }));
+  } else if (msg.type === 'remove_profile') {
+    sendControl(makeRequest('local_llm.remove_profile', { name: msg.name, profile_id: msg.profile_id }));
+  } else if (msg.type === 'set_active_profile') {
+    setActiveProfile(msg.name, msg.profile_id);
+  } else if (msg.type === 'set_knobs') {
+    setKnobs(msg.name, msg.knobs);
   }
 }

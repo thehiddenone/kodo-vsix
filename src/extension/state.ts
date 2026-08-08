@@ -7,7 +7,7 @@
  */
 
 import type * as vscode from 'vscode';
-import type { CloudRegistry, LocalDownloadState, LocalRegistryEntry, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
+import type { CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
 import type { ServerLauncher } from '../server-launcher';
 import type { SessionController } from '../session/controller';
 import type { SidebarProvider } from '../sidebar-provider';
@@ -92,6 +92,15 @@ interface WindowState {
   // to every open session tab; the per-quant override VALUES are per-session
   // server state instead, arriving on `state.sampling`.
   samplingSpecsState: SamplingParamSpec[];
+  // Every knob definition any registry entry offers, keyed by id, from the
+  // `knob_defs` field of the same payload (kodo/doc/LLM_REGISTRY.md §4.6).
+  // Deduplicated server-side rather than repeated on every entry, since all
+  // 82 built-ins share the same six knobs. Drives the Configure modal.
+  knobDefsState: KnobDefs;
+  // The curated llama-server flag table the user-defined profile editor's
+  // "Add argument" picker renders from, from the same payload's
+  // `llama_arg_catalog` field (kodo/doc/LLM_REGISTRY.md §4.7). Static.
+  llamaArgCatalogState: LlamaArgSpec[];
   // Live download progress, read off manager-state.json on disk rather than
   // pushed over the WS wire (see local-model-downloads.ts and
   // doc/LOCAL_MODEL_MANAGER.md §11) — keyed by registry entry name.
@@ -167,6 +176,8 @@ export const state: WindowState = {
   detectedRamGbState: null,
   thinkingFamiliesState: {},
   samplingSpecsState: [],
+  knobDefsState: {},
+  llamaArgCatalogState: [],
   localDownloadsState: [],
   localUpdatableNamesState: [],
 

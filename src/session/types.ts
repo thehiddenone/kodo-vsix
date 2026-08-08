@@ -206,7 +206,7 @@ export interface SessionDeps {
    * via {@link SessionController.updateThinkingContext}).
    */
   getThinkingContext: () => ThinkingContext;
-  /** Window-global sampling context (active quant + its flavor defaults +
+  /** Window-global sampling context (active quant + its launch-arg values +
    *  the server's parameter table) for the footer sampling button. The
    *  session's own override VALUES are not here — those arrive per-session
    *  on `state.sampling`. See kodo/doc/SAMPLING.md §9. */
