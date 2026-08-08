@@ -73,5 +73,7 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   next.isMac = Boolean(data.isMac);
   next.updatableNames = data.updatableNames !== undefined ? data.updatableNames : state.updatableNames;
   next.samplingSpecs = data.samplingSpecs !== undefined ? data.samplingSpecs : state.samplingSpecs;
+  next.knobDefs = data.knobDefs !== undefined ? data.knobDefs : state.knobDefs;
+  next.llamaArgCatalog = data.llamaArgCatalog !== undefined ? data.llamaArgCatalog : state.llamaArgCatalog;
   return next;
 }
