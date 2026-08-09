@@ -224,6 +224,16 @@ function buildHtml(): string {
     }
     .card.active {
       border-color: var(--vscode-focusBorder, var(--vscode-button-background));
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    .card.active .card-meta-line {
+      color: var(--vscode-button-foreground);
+      opacity: 0.85;
+    }
+    .card.active .pin-btn:not(.pinned) {
+      color: var(--vscode-button-foreground);
+      opacity: 0.7;
     }
     .card-header {
       display: flex;
