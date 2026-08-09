@@ -372,20 +372,22 @@ export function ProfileModal({ entry, llamaArgCatalog, onClose }: ProfileModalPr
                     file, and the per-session thinking budget) is ignored here.
                   </div>
                 </div>
-                <hr className="section-divider" />
-                <div className="modal-actions">
-                  <button
-                    id="profile-save-btn"
-                    disabled={!canSave}
-                    title={anyIssue ? 'Fix the argument(s) marked ⚠ before saving' : undefined}
-                    onClick={save}
-                  >
-                    Save
-                  </button>
-                  <button className="secondary-btn" onClick={onClose}>Close</button>
-                </div>
               </>
             )}
+            {selected && <hr className="section-divider" />}
+            <div className="modal-actions">
+              {selected && (
+                <button
+                  id="profile-save-btn"
+                  disabled={!canSave}
+                  title={anyIssue ? 'Fix the argument(s) marked ⚠ before saving' : undefined}
+                  onClick={save}
+                >
+                  Save
+                </button>
+              )}
+              <button className="secondary-btn" onClick={onClose}>Close</button>
+            </div>
           </div>
         </div>
       </div>

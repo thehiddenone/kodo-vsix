@@ -866,7 +866,11 @@
     .flavor-modal-body {
       display: flex;
       gap: 18px;
-      align-items: flex-start;
+      /* Stretch (the flex default) rather than flex-start: the list pane
+         must match the form pane's actual content height, whatever that is,
+         instead of carrying its own fixed height that falls out of sync
+         whenever the form grows or shrinks (e.g. selecting a profile with a
+         long argument list). */
       margin-top: 10px;
     }
     .flavor-list-pane {
@@ -876,7 +880,8 @@
       flex-direction: column;
     }
     .flavor-list {
-      height: 480px;
+      flex: 1 1 auto;
+      min-height: 200px;
       overflow-y: auto;
       border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
       border-radius: 2px;
@@ -910,8 +915,17 @@
     .flavor-form-pane {
       flex: 1 1 62%;
       min-width: 0;
+      display: flex;
+      flex-direction: column;
       border-left: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
       padding-left: 18px;
+    }
+    /* Pins Save/Close to the pane's bottom edge instead of trailing right
+       after the "no profile selected" hint — relevant when that hint is the
+       only content and leaves the rest of the (list-pane-matched) height
+       empty above the actions row. */
+    .flavor-form-pane .modal-actions {
+      margin-top: auto;
     }
 
     /* --- Cloud AI vendor tabs (former standalone Cloud AI Settings panel) --- */
