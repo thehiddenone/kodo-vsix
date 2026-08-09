@@ -35,6 +35,7 @@ import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import type { SamplingContext, SamplingValues, ThinkingContext } from '../llm-registry-types';
 import { parseSamplingValues } from '../llm-registry-types';
+import { resolveLogicalPath } from '../logical-path';
 import { WsClient } from '../ws-client';
 import { handleStatelessEnvelope } from './agent-event-translation';
 import { ActivityCache } from './activity-cache';
@@ -342,14 +343,23 @@ export class SessionController {
       }
       case 'open_file': {
         const filePath = String(msg.path ?? '');
-        const projectRoot = this.deps.getProjectRoot();
-        if (filePath && (path.isAbsolute(filePath) || projectRoot)) {
-          const resolved = path.isAbsolute(filePath) ? filePath : path.join(projectRoot, filePath);
-          void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(resolved)).then(
-            () => undefined,
-            (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`),
-          );
+        // Tool-call paths are logical (folder-name-prefixed, WS_PROTOCOL.md
+        // `workspace.folders`) rather than relative to a single project
+        // root — resolving against `getProjectRoot()` double-counts that
+        // root's own folder name in a single-root workspace, and picks the
+        // wrong root entirely once more than one is open. Mirrors the
+        // server's `resolve_logical` against the same folder map it uses.
+        const resolved = resolveLogicalPath(this.deps.buildFolderMap(), filePath);
+        if (resolved === null) {
+          if (filePath) {
+            void vscode.window.showErrorMessage(`Kōdo: Cannot open file — unknown workspace folder in "${filePath}".`);
+          }
+          break;
         }
+        void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(resolved)).then(
+          () => undefined,
+          (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`),
+        );
         break;
       }
       case 'open_file_preview': {

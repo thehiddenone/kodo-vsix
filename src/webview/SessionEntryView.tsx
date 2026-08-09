@@ -184,11 +184,15 @@ function RollbackBox({ checkpoint }: { checkpoint: CheckpointData }) {
 /**
  * "open this file" link shown to the left of "undo this change" on a
  * file-mutating tool call's header row. Only rendered for calls that leave
- * behind an openable file: `edit_file`, and `filesystem`'s `create_file` /
+ * behind an openable file: `create_file`, `edit_file`, and `filesystem`'s
  * `copy_file` / `move_file` operations (never its directory ops, which have
  * nothing an editor tab can open, and never `delete_file`/`delete_dir`, whose
- * target no longer exists). Posts 'open_file' so the extension host opens it
- * via `vscode.open`, resolving relative paths against the project root.
+ * target no longer exists) — and only when the call actually succeeded
+ * (`entry.success === true`): a rejected Edit Control review still echoes
+ * back the would-be `path` in its output row, but nothing was written there.
+ * Posts 'open_file' so the extension host opens it via `vscode.open`,
+ * resolving the agent's logical path (folder-name-prefixed) against the
+ * workspace folder map — see `resolveLogicalPath` in `../logical-path.ts`.
  */
 function OpenFileLink({ path }: { path: string }) {
   const open = () => vscode.postMessage({ type: 'open_file', path });
@@ -206,8 +210,11 @@ function OpenFileLink({ path }: { path: string }) {
  * every other customer-visible rendering in this file.
  */
 function openablePath(entry: Extract<SessionEntry, { type: 'tool_call' }>): string | null {
+  if (entry.success !== true) {
+    return null;
+  }
   const outputRow = (name: string) => entry.rows.find((r) => r.source === 'output' && r.name === name)?.value ?? null;
-  if (entry.toolName === 'edit_file') {
+  if (entry.toolName === 'create_file' || entry.toolName === 'edit_file') {
     return outputRow('path');
   }
   if (entry.toolName === 'filesystem') {
