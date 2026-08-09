@@ -9,7 +9,7 @@
     .layout {
       display: flex;
       align-items: stretch;
-      min-height: 100vh;
+      height: 100vh;
     }
     .nav {
       width: 190px;
@@ -17,6 +17,7 @@
       padding: 16px 8px;
       border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
       box-sizing: border-box;
+      overflow-y: auto;
     }
     .nav-item {
       padding: 7px 10px;
@@ -42,6 +43,7 @@
       min-width: 0;
       padding: 16px 24px;
       box-sizing: border-box;
+      overflow-y: auto;
     }
     .intro-text {
       color: var(--vscode-descriptionForeground);
