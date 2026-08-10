@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { SelectRow } from './SelectRow';
-import type { StuckDetectionSettings, UiSettings } from './types';
+import type { HousekeeperLlmSettings, StuckDetectionSettings, UiSettings } from './types';
 import { vscode } from './vscode';
 
 // 'system' resolves to the runtime's local IANA zone (host-side format.ts's
@@ -107,6 +107,53 @@ function ShowTimestampsSection({ uiSettings }: { uiSettings: UiSettings }) {
   );
 }
 
+function HousekeeperLlmSection({ housekeeperLlm }: { housekeeperLlm: HousekeeperLlmSettings }) {
+  // Same optimistic-local-state + WS-round-trip shape as StuckDetectionSection
+  // below (`housekeeper_llm.set` is a real awaited round trip to the kodo
+  // server, kodo-settings-bridge.ts's `onKodoSettingsMessage`) — the
+  // selection sticks immediately in the UI while the actual model swap
+  // (download if needed, stop the old server, start the new one) happens
+  // silently in the background.
+  const [selected, setSelected] = useState(housekeeperLlm.selected);
+  useEffect(() => setSelected(housekeeperLlm.selected), [housekeeperLlm.selected]);
+  const selectedOption = housekeeperLlm.options.find((option) => option.id === selected);
+  return (
+    <div>
+      <div className="section-subheading">Housekeeper LLM</div>
+      <p className="intro-text">
+        Kōdo runs a small local model in the background to write session titles and opening
+        greetings. Choose which one to use.
+      </p>
+      {selectedOption && (
+        <p className="intro-text">
+          Selected housekeeper LLM: {selectedOption.name}
+          <br />
+          Description: {selectedOption.description}
+        </p>
+      )}
+      <div className="radio-group">
+        {housekeeperLlm.options.map((option) => (
+          <label className="radio-row" key={option.id}>
+            <input
+              type="radio"
+              name="housekeeper-llm"
+              checked={selected === option.id}
+              onChange={(e) => {
+                if (!(e.target as HTMLInputElement).checked) {
+                  return;
+                }
+                setSelected(option.id);
+                vscode.postMessage({ type: 'set_housekeeper_llm', id: option.id });
+              }}
+            />
+            {option.name}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StuckDetectionSection({ stuckDetection }: { stuckDetection: StuckDetectionSettings }) {
   // Unlike ShowTimestamps/uiSettings (a local file write, echoed back
   // synchronously) or the cloud-model <select> (pushed back synchronously
@@ -175,9 +222,10 @@ function StuckDetectionSection({ stuckDetection }: { stuckDetection: StuckDetect
 interface GeneralSectionProps {
   uiSettings: UiSettings;
   stuckDetection: StuckDetectionSettings;
+  housekeeperLlm: HousekeeperLlmSettings;
 }
 
-export function GeneralSection({ uiSettings, stuckDetection }: GeneralSectionProps) {
+export function GeneralSection({ uiSettings, stuckDetection, housekeeperLlm }: GeneralSectionProps) {
   return (
     <div>
       <h2>General</h2>
@@ -185,6 +233,8 @@ export function GeneralSection({ uiSettings, stuckDetection }: GeneralSectionPro
       <PromptSubmitSection uiSettings={uiSettings} />
       <hr className="section-divider" />
       <ShowTimestampsSection uiSettings={uiSettings} />
+      <hr className="section-divider" />
+      <HousekeeperLlmSection housekeeperLlm={housekeeperLlm} />
       <hr className="section-divider" />
       <StuckDetectionSection stuckDetection={stuckDetection} />
     </div>

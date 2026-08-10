@@ -35,6 +35,7 @@ import { fetchGlobalRules, parseRuleEntries } from './security-rules';
 import { broadcastUiSettings, readUiSettings, writeUiSettings } from './settings-io';
 import { state } from './state';
 import { fetchStuckDetection, parseStuckDetection } from './stuck-detection';
+import { fetchHousekeeperLlm } from './housekeeper-llm';
 import { findBySessionId, openExistingSession } from './window-sessions';
 
 /** The sidebar's "Local inference settings" button — opens (or reveals) the
@@ -100,9 +101,10 @@ export async function openKodoSettings(
   selectSection?: string,
   configureEntry?: string,
 ): Promise<void> {
-  const [rules, stuckDetection, llamaCpp, sessions] = await Promise.all([
+  const [rules, stuckDetection, housekeeperLlm, llamaCpp, sessions] = await Promise.all([
     fetchGlobalRules(),
     fetchStuckDetection(),
+    fetchHousekeeperLlm(),
     fetchLlamaCppVersionInfo(),
     fetchSessionsForPanel(),
   ]);
@@ -128,7 +130,7 @@ export async function openKodoSettings(
   const panel = KodoSettingsPanel.createOrShow(
     state.extensionContext!.extensionUri,
     {
-      rules, stuckDetection, llamaCpp, sessions, sessionRules: null, uiSettings,
+      rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, sessionRules: null, uiSettings,
       hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
     },
     (msg) => void onKodoSettingsMessage(msg),
@@ -142,8 +144,8 @@ export async function openKodoSettings(
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
   panel.update({
-    rules, stuckDetection, llamaCpp, sessions, uiSettings, hfTokens: hfTokens.listTokens(),
-    ...localInference, ...cloudAi,
+    rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, uiSettings,
+    hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
   });
 }
 
@@ -236,6 +238,23 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
       KodoSettingsPanel.instance?.update({ stuckDetection: parseStuckDetection(resp) });
     } catch {
       vscode.window.showErrorMessage('Kōdo: could not reach the server to update stuck-detection settings.');
+    }
+    return;
+  }
+  if (msg.type === 'set_housekeeper_llm') {
+    try {
+      const resp = await sendControlAwait('housekeeper_llm.set', { id: msg.id });
+      if (resp.ok === false) {
+        const message = typeof resp.error === 'string' ? resp.error : 'Unknown error.';
+        vscode.window.showErrorMessage(`Kōdo: could not select this housekeeper LLM — ${message}`);
+        return;
+      }
+      // `.set.ack` only carries `{ok, selected}` (the catalog itself never
+      // changes at runtime) — re-fetching the full `.get` shape is simpler
+      // than threading the unchanged `options` array through here.
+      KodoSettingsPanel.instance?.update({ housekeeperLlm: await fetchHousekeeperLlm() });
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to update the housekeeper LLM.');
     }
     return;
   }

@@ -103,7 +103,11 @@ export function App() {
       <Nav selectedKey={selectedKey} onSelect={setSelectedKey} />
       <div className="content">
         {selectedKey === 'general' && (
-          <GeneralSection uiSettings={state.uiSettings} stuckDetection={state.stuckDetection} />
+          <GeneralSection
+            uiSettings={state.uiSettings}
+            stuckDetection={state.stuckDetection}
+            housekeeperLlm={state.housekeeperLlm}
+          />
         )}
         {selectedKey === 'sessions' && (
           <SessionsSection sessions={state.sessions} onOpenSettings={openSessionSettings} />

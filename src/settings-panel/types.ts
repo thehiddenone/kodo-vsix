@@ -57,6 +57,28 @@ export interface StuckDetectionSettings {
   auto_unstuck_interactive: boolean;
 }
 
+/** One entry in the "housekeeper LLM" catalog (kodo.titling.
+ * HOUSEKEEPER_LLM_OPTIONS, kodo/doc/SETTINGS.md §2.7) — the small local model
+ * that writes session titles/greetings. `id` is a `HousekeeperLlmOption.
+ * model_id`, also the wire value persisted as `housekeeper_llm` in
+ * settings.json. */
+export interface HousekeeperLlmOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** The `housekeeper_llm` settings block (kodo/doc/SETTINGS.md §2.7,
+ * kodo/doc/WS_PROTOCOL.md §7.6f) — backs the Kōdo Settings panel's "General"
+ * section's "Housekeeper LLM" subsection. `options` mirrors the server's
+ * `HOUSEKEEPER_LLM_OPTIONS` catalog verbatim, in catalog order — the panel
+ * renders one radio button per entry with no id hardcoded client-side, so a
+ * new catalog entry server-side needs no kodo-vsix change to appear here. */
+export interface HousekeeperLlmSettings {
+  selected: string;
+  options: HousekeeperLlmOption[];
+}
+
 /** llama.cpp install state backing the "Llama.cpp" section (kodo/doc/
  * WS_PROTOCOL.md §7.6, `llamacpp.version_info`). `installedVersion`/
  * `latestVersion` are `"bN"` strings or `null` ("not installed"/"unknown" —
@@ -163,6 +185,7 @@ export interface UpdateProfilePayload {
 export interface KodoSettingsState {
   rules: GlobalRuleEntry[];
   stuckDetection: StuckDetectionSettings;
+  housekeeperLlm: HousekeeperLlmSettings;
   llamaCpp: LlamaCppInfo;
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
@@ -214,6 +237,7 @@ export type KodoSettingsMessage =
   | { type: 'ready' }
   | { type: 'delete_rules'; rules: GlobalRuleEntry[] }
   | ({ type: 'set_stuck_detection' } & StuckDetectionSettings)
+  | { type: 'set_housekeeper_llm'; id: string }
   | ({ type: 'set_ui_settings' } & UiSettings)
   | { type: 'install_llamacpp' }
   | { type: 'uninstall_llamacpp' }

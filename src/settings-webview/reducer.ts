@@ -6,6 +6,7 @@ import type { KodoSettingsState } from './types';
 export const initial: KodoSettingsState = {
   rules: [],
   stuckDetection: { active: 'local_only', scope: 'top_level', auto_unstuck_interactive: false },
+  housekeeperLlm: { selected: '', options: [] },
   llamaCpp: { installedVersion: null, latestVersion: null, busy: false },
   sessions: [],
   sessionRules: null,
@@ -39,6 +40,9 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (data.stuckDetection && typeof data.stuckDetection === 'object') {
     next.stuckDetection = data.stuckDetection;
+  }
+  if (data.housekeeperLlm && typeof data.housekeeperLlm === 'object') {
+    next.housekeeperLlm = data.housekeeperLlm;
   }
   if (data.llamaCpp && typeof data.llamaCpp === 'object') {
     next.llamaCpp = data.llamaCpp;

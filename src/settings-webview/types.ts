@@ -63,6 +63,25 @@ export interface StuckDetectionSettings {
   auto_unstuck_interactive: boolean;
 }
 
+/** One entry in the "housekeeper LLM" catalog (kodo.titling.
+ * HOUSEKEEPER_LLM_OPTIONS) — the small local model that writes session
+ * titles/greetings. `id` is also the wire value persisted as
+ * `housekeeper_llm` in settings.json. */
+export interface HousekeeperLlmOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** The `housekeeper_llm` settings block backing the "General" section's
+ * "Housekeeper LLM" subsection. `options` mirrors the server's catalog
+ * verbatim, in catalog order — one radio button per entry, no id hardcoded
+ * client-side. */
+export interface HousekeeperLlmSettings {
+  selected: string;
+  options: HousekeeperLlmOption[];
+}
+
 export interface LlamaCppInfo {
   installedVersion: string | null;
   latestVersion: string | null;
@@ -206,6 +225,7 @@ export interface LocalDownloadState {
 export interface KodoSettingsState {
   rules: GlobalRuleEntry[];
   stuckDetection: StuckDetectionSettings;
+  housekeeperLlm: HousekeeperLlmSettings;
   llamaCpp: LlamaCppInfo;
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
@@ -299,6 +319,7 @@ export type OutboundMessage =
   | { type: 'close' }
   | { type: 'delete_rules'; rules: GlobalRuleEntry[] }
   | ({ type: 'set_stuck_detection' } & StuckDetectionSettings)
+  | { type: 'set_housekeeper_llm'; id: string }
   | ({ type: 'set_ui_settings' } & UiSettings)
   | { type: 'install_llamacpp' }
   | { type: 'uninstall_llamacpp' }
