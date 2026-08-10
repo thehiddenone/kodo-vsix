@@ -1,7 +1,9 @@
 import { useState } from 'preact/hooks';
 import { DownloadsSection, UpdatesBanner } from './DownloadsSection';
+import { ramWarning } from './localLlmUtils';
 import { ModelCard } from './ModelCard';
-import type { LocalDownloadState, LocalRegistryEntry } from './types';
+import type { LocalDownloadState, LocalRegistryEntry, UiSettings } from './types';
+import { vscode } from './vscode';
 
 interface LocalLlmsSectionProps {
   localRegistry: LocalRegistryEntry[];
@@ -11,6 +13,7 @@ interface LocalLlmsSectionProps {
   detectedVramGb: number | null;
   detectedRamGb: number | null;
   installedLlamaCppVersion: string | null;
+  uiSettings: UiSettings;
   onAddHf: () => void;
   onAddFile: () => void;
   onAddServer: () => void;
@@ -19,7 +22,7 @@ interface LocalLlmsSectionProps {
 }
 
 export function LocalLlmsSection({
-  localRegistry, downloads, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion,
+  localRegistry, downloads, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion, uiSettings,
   onAddHf, onAddFile, onAddServer, onConfigure, onManageProfiles,
 }: LocalLlmsSectionProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -32,8 +35,16 @@ export function LocalLlmsSection({
 
   const installed = localRegistry.filter((e) => e.installed);
 
+  // "Show all LLM quants…" unchecked hides entries the detected VRAM+RAM
+  // can't run (ramWarning's red/yellow cases) from the cards below —
+  // installed entries are exempt regardless, since uninstalling something
+  // already on disk isn't this checkbox's job.
+  const cardEntries = uiSettings.showAllLocalLlmQuants
+    ? localRegistry
+    : localRegistry.filter((e) => e.installed || !ramWarning(e, detectedVramGb, detectedRamGb));
+
   const groups = new Map<string, LocalRegistryEntry[]>();
-  for (const entry of localRegistry) {
+  for (const entry of cardEntries) {
     const key = entry.base_llm || entry.name;
     const list = groups.get(key) ?? [];
     list.push(entry);
@@ -95,9 +106,27 @@ export function LocalLlmsSection({
         shows up above under Installed and is ready to use.
       </p>
 
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={uiSettings.showAllLocalLlmQuants}
+          onChange={(e) => vscode.postMessage({
+            type: 'set_ui_settings',
+            ...uiSettings,
+            showAllLocalLlmQuants: (e.target as HTMLInputElement).checked,
+          })}
+        />
+        Show all LLM quants including those that will not run on this system due to insufficient RAM/VRAM
+      </label>
+
       <div id="cards">
         {localRegistry.length === 0 ? (
           <div id="empty-msg">No local LLMs yet — add one above.</div>
+        ) : groups.size === 0 ? (
+          <div id="empty-msg">
+            Every quant is hidden because this system&apos;s detected RAM/VRAM is below what it needs — check
+            &quot;Show all LLM quants&quot; above to see them anyway.
+          </div>
         ) : (
           [...groups.entries()].map(([key, entries]) => {
             const expanded = expandedGroups.has(key);

@@ -133,6 +133,14 @@ export interface UiSettings {
    *  the workspace root, then the user's home directory, when empty or when
    *  the saved directory no longer exists. See `attachment-manager.ts`. */
   lastAttachDir: string;
+  /** Whether the "Local Inference" tab's "Available local LLM quants" list
+   *  shows every registry entry (`true`) or hides ones the detected
+   *  VRAM+RAM can't run (`false`, the default — `ramWarning`'s red/yellow
+   *  cases in `settings-webview/localLlmUtils.ts`). Never hides an already
+   *  *installed* entry, regardless of its value. Backs the "Local Inference"
+   *  section's "Show all LLM quants including those that will not run on
+   *  this system due to insufficient RAM/VRAM" checkbox. */
+  showAllLocalLlmQuants: boolean;
 }
 
 /** Payloads shared with the (former, now-merged-in) Local Inference Settings

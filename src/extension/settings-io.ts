@@ -49,6 +49,7 @@ const DEFAULT_UI_SETTINGS: UiSettings = {
   pinnedCloudVendors: [],
   dismissedLocalLaunchWarnings: [],
   lastAttachDir: '',
+  showAllLocalLlmQuants: false,
 };
 
 /**
@@ -87,6 +88,9 @@ export function readUiSettings(): UiSettings {
       ? raw.dismissedLocalLaunchWarnings.filter((n): n is string => typeof n === 'string')
       : DEFAULT_UI_SETTINGS.dismissedLocalLaunchWarnings,
     lastAttachDir: typeof raw.lastAttachDir === 'string' ? raw.lastAttachDir : DEFAULT_UI_SETTINGS.lastAttachDir,
+    showAllLocalLlmQuants: typeof raw.showAllLocalLlmQuants === 'boolean'
+      ? raw.showAllLocalLlmQuants
+      : DEFAULT_UI_SETTINGS.showAllLocalLlmQuants,
   };
 }
 

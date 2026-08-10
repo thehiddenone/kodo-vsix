@@ -124,6 +124,7 @@ export function App() {
             isMac={state.isMac}
             detectedVramGb={state.detectedVramGb}
             detectedRamGb={state.detectedRamGb}
+            uiSettings={state.uiSettings}
             onAddToken={() => setAddTokenModalOpen(true)}
             onAddHf={() => setHfModalOpen(true)}
             onAddFile={() => { setFilePickedPath(null); setFileModalOpen(true); }}

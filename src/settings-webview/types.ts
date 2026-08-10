@@ -96,6 +96,11 @@ export interface UiSettings {
    *  (`true`, the default), or the reverse (`false`). Backs the "General"
    *  section's "How to submit a prompt" radio choice. */
   enterSubmits: boolean;
+  /** Whether the "Local Inference" tab's "Available local LLM quants" list
+   *  shows every entry (`true`) or hides ones the detected VRAM+RAM can't
+   *  run (`false`, the default). Never hides an already-installed entry.
+   *  Backs `LocalLlmsSection.tsx`'s checkbox. */
+  showAllLocalLlmQuants: boolean;
 }
 
 export interface HfTokenEntry {

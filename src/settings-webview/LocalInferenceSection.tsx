@@ -2,7 +2,7 @@ import { HuggingFaceSection } from './HuggingFaceSection';
 import { LlamaCppSection } from './LlamaCppSection';
 import { LlamaOverrideSection } from './LlamaOverrideSection';
 import { LocalLlmsSection } from './LocalLlmsSection';
-import type { HfTokenEntry, LlamaCppInfo, LocalDownloadState, LocalRegistryEntry } from './types';
+import type { HfTokenEntry, LlamaCppInfo, LocalDownloadState, LocalRegistryEntry, UiSettings } from './types';
 
 interface LocalInferenceSectionProps {
   llamaCpp: LlamaCppInfo;
@@ -14,6 +14,7 @@ interface LocalInferenceSectionProps {
   isMac: boolean;
   detectedVramGb: number | null;
   detectedRamGb: number | null;
+  uiSettings: UiSettings;
   onAddToken: () => void;
   onAddHf: () => void;
   onAddFile: () => void;
@@ -41,6 +42,7 @@ export function LocalInferenceSection(props: LocalInferenceSectionProps) {
         detectedVramGb={props.detectedVramGb}
         detectedRamGb={props.detectedRamGb}
         installedLlamaCppVersion={props.llamaCpp.installedVersion}
+        uiSettings={props.uiSettings}
         onAddHf={props.onAddHf}
         onAddFile={props.onAddFile}
         onAddServer={props.onAddServer}

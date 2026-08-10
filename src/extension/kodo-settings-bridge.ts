@@ -273,6 +273,7 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
       timezone: msg.timezone,
       clockFormat: msg.clockFormat,
       enterSubmits: msg.enterSubmits,
+      showAllLocalLlmQuants: msg.showAllLocalLlmQuants,
     });
     KodoSettingsPanel.instance?.update({ uiSettings });
     broadcastUiSettings(uiSettings);
