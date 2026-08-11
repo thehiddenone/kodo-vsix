@@ -41,6 +41,73 @@ import { state } from './extension/state';
 const IS_WINDOWS = process.platform === 'win32';
 
 // ---------------------------------------------------------------------------
+// Dedicated "Kodo" diagnostic output channel
+// ---------------------------------------------------------------------------
+//
+// Every step and fork/branch this file takes when installing uv, creating the
+// venv, and installing/upgrading `py-kodo` is logged here — a single place to
+// review the whole decision trace independent of the "Kodo Server" channel
+// (server-launcher.ts), which is dominated by the server subprocess's own
+// stdout/stderr tail and would otherwise bury this. Every call also still
+// logs to the `out` channel callers pass in (in practice "Kodo Server"), so
+// existing behavior/visibility there is unchanged — this is purely additive.
+
+let diagChannel: vscode.OutputChannel | undefined;
+
+function diagOut(): vscode.OutputChannel {
+  diagChannel ??= vscode.window.createOutputChannel('Kodo');
+  return diagChannel;
+}
+
+/** Appends a line to both `out` and the dedicated "Kodo" channel. */
+function log(out: vscode.OutputChannel, line: string): void {
+  out.appendLine(line);
+  diagOut().appendLine(line);
+}
+
+/** Appends raw (non-newline-terminated) text to both `out` and "Kodo". */
+function append(out: vscode.OutputChannel, text: string): void {
+  out.append(text);
+  diagOut().append(text);
+}
+
+/**
+ * Best-effort description of the singleton kodo-server's tracked state, read
+ * directly from its discovery file. Diagnostic-only — never affects control
+ * flow, only what gets logged before/after a `py-kodo` upgrade attempt, so
+ * "was the server still running against this venv" is answerable from the
+ * log alone (a running server can hold OS-level locks on loaded
+ * native-extension files on Windows, which can make an in-place upgrade fail
+ * — see the call site in `maybeUpgradeKodo`).
+ *
+ * Duplicates `server-launcher.ts`'s `readServerDiscovery`/`pidAlive` instead
+ * of importing them, to avoid a circular module dependency (server-launcher.ts
+ * already imports this file).
+ */
+function describeRunningServer(): string {
+  const discPath = path.join(kodoDir(), 'kodo-server');
+  let data: { pid?: unknown; port?: unknown };
+  try {
+    data = JSON.parse(fs.readFileSync(discPath, 'utf-8')) as { pid?: unknown; port?: unknown };
+  } catch {
+    return 'no discovery file found — no kodo-server appears to be tracked';
+  }
+  if (typeof data.pid !== 'number') {
+    return 'discovery file present but unparseable';
+  }
+  const port = String(data.port ?? '?');
+  try {
+    process.kill(data.pid, 0); // signal 0 = existence check
+    return `pid=${data.pid} port=${port} — ALIVE (still running against ~/.kodo/venv)`;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EPERM') {
+      return `pid=${data.pid} port=${port} — ALIVE (no signal permission, but process exists)`;
+    }
+    return `pid=${data.pid} port=${port} — not running (stale discovery file)`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Util specs (pinned)
 // ---------------------------------------------------------------------------
 
@@ -123,11 +190,12 @@ export function kodoVenvDir(): string {
  */
 export function rebuildKodoVenv(out: vscode.OutputChannel): void {
   const venv = kodoVenvDir();
-  out.appendLine(`[uv] Rebuilding venv: removing ${venv}`);
+  log(out, `[uv] Rebuilding venv: removing ${venv}`);
   try {
     fs.rmSync(venv, { recursive: true, force: true });
   } catch (e) {
-    out.appendLine(
+    log(
+      out,
       `[uv] Warning: failed to remove venv directory — ${e instanceof Error ? e.message : String(e)}`,
     );
   }
@@ -200,21 +268,23 @@ function downloadToFile(url: string, dest: string, out: vscode.OutputChannel): P
   return new Promise((resolve, reject) => {
     const follow = (u: string, hops = 0): void => {
       if (hops > 10) { reject(new Error('Too many HTTP redirects')); return; }
-      out.appendLine(`[utils] Downloading ${u}`);
+      log(out, `[utils] Downloading ${u}`);
       https.get(u, (res) => {
         const loc = res.headers.location;
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && loc) {
+          log(out, `[utils] HTTP ${res.statusCode} redirect -> ${loc}`);
           res.resume();
           follow(loc, hops + 1);
           return;
         }
         if (res.statusCode !== 200) {
+          log(out, `[utils] Download failed: HTTP ${res.statusCode ?? '?'} from ${u}`);
           reject(new Error(`HTTP ${res.statusCode ?? '?'} from ${u}`));
           return;
         }
         const file = fs.createWriteStream(dest);
         res.pipe(file);
-        file.on('finish', () => file.close(() => resolve()));
+        file.on('finish', () => file.close(() => { log(out, `[utils] Downloaded to ${dest}`); resolve(); }));
         file.on('error', (e) => { try { fs.unlinkSync(dest); } catch { /* ignore */ } reject(e); });
         res.on('error', reject);
       }).on('error', reject);
@@ -257,15 +327,17 @@ function extractArchive(
   fs.mkdirSync(path.dirname(destBinPath), { recursive: true });
 
   return new Promise((resolve, reject) => {
-    out.appendLine(`[utils] Extracting ${path.basename(archivePath)}`);
+    log(out, `[utils] Extracting ${path.basename(archivePath)} (${ext}) -> ${tmpDir}`);
 
     const onExtracted = (): void => {
       const src = findFileInDir(tmpDir, execName);
       if (!src) {
+        log(out, `[utils] ERROR: ${execName} not found anywhere under ${tmpDir}`);
         reject(new Error(`${execName} not found in downloaded archive`));
         return;
       }
       try {
+        log(out, `[utils] Found ${execName} at ${src} — copying to ${destBinPath}`);
         fs.copyFileSync(src, destBinPath);
         fs.rmSync(tmpDir, { recursive: true, force: true });
         resolve();
@@ -276,10 +348,12 @@ function extractArchive(
 
     let proc: childProcess.ChildProcess;
     if (ext === 'tar.gz') {
+      log(out, `[utils] Running: tar -xzf ${archivePath} -C ${tmpDir}`);
       proc = childProcess.spawn('tar', ['-xzf', archivePath, '-C', tmpDir], {
         stdio: 'ignore',
       });
     } else {
+      log(out, `[utils] Running: powershell.exe Expand-Archive -Path '${archivePath}' -DestinationPath '${tmpDir}'`);
       proc = childProcess.spawn(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-Command',
@@ -289,16 +363,28 @@ function extractArchive(
     }
 
     proc.on('exit', (code) => {
+      log(out, `[utils] Archive extraction exited with code ${String(code)}`);
       if (code === 0) { onExtracted(); }
       else { reject(new Error(`Archive extraction failed (exit ${String(code)})`)); }
     });
-    proc.on('error', reject);
+    proc.on('error', (e) => {
+      log(out, `[utils] Archive extraction process failed to start: ${e.message}`);
+      reject(e);
+    });
   });
 }
 
 // ---------------------------------------------------------------------------
 // Subprocess runner
 // ---------------------------------------------------------------------------
+
+/** Substrings in a failed process's stderr that suggest a file held open by
+ *  another process — e.g. a still-running kodo-server holding one of the
+ *  venv's native-extension (.pyd) files loaded, which Windows locks against
+ *  overwrite/deletion (POSIX allows unlinking an open file, so this class of
+ *  failure is effectively Windows-only). Purely a logging heuristic — never
+ *  changes control flow. */
+const LOCK_ERROR_PATTERN = /access is denied|being used by another process|winerror (5|32)|permissionerror|errno 13/i;
 
 function runProcess(
   cmd: string,
@@ -307,17 +393,36 @@ function runProcess(
   out: vscode.OutputChannel,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    log(out, `[proc] Running: ${cmd} ${args.join(' ')}${Object.keys(extraEnv).length ? ` (env: ${Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`).join(', ')})` : ''}`);
     const proc = childProcess.spawn(cmd, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...extraEnv },
     });
-    proc.stdout?.on('data', (d: Buffer) => out.append(d.toString()));
-    proc.stderr?.on('data', (d: Buffer) => out.append(d.toString()));
-    proc.on('exit', (code) => {
-      if (code === 0) { resolve(); }
-      else { reject(new Error(`${path.basename(cmd)} ${args.join(' ')} exited with code ${String(code)}`)); }
+    let stderrBuf = '';
+    proc.stdout?.on('data', (d: Buffer) => append(out, d.toString()));
+    proc.stderr?.on('data', (d: Buffer) => {
+      const s = d.toString();
+      stderrBuf += s;
+      append(out, s);
     });
-    proc.on('error', reject);
+    proc.on('exit', (code) => {
+      log(out, `[proc] ${path.basename(cmd)} exited with code ${String(code)}`);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      if (IS_WINDOWS && LOCK_ERROR_PATTERN.test(stderrBuf)) {
+        log(
+          out,
+          `[proc] NOTE: this failure looks like a Windows file-lock error — some process still has a file this command needed to overwrite open. If kodo-server is running against this same venv, that is the most likely holder (see the kodo-server status logged above). Stopping it (or reloading the window, which lets it self-reap) before retrying may resolve it.`,
+        );
+      }
+      reject(new Error(`${path.basename(cmd)} ${args.join(' ')} exited with code ${String(code)}`));
+    });
+    proc.on('error', (e) => {
+      log(out, `[proc] ${path.basename(cmd)} failed to start: ${e.message}`);
+      reject(e);
+    });
   });
 }
 
@@ -333,16 +438,23 @@ function runProcess(
 async function ensureUtil(spec: UtilSpec, out: vscode.OutputChannel): Promise<string> {
   const meta = readUtilJson(spec.name);
   const binPath = utilBinPath(spec);
+  log(
+    out,
+    `[utils] ${spec.name}: manifest version=${meta?.version ?? '(none)'}, pinned=${spec.version}, ` +
+    `manifest binary exists=${meta ? fs.existsSync(meta.path) : false}`,
+  );
 
   if (meta?.version === spec.version && fs.existsSync(meta.path)) {
-    out.appendLine(`[utils] ${spec.name} ${spec.version} already present`);
+    log(out, `[utils] ${spec.name} ${spec.version} already present — skipping install`);
     return meta.path;
   }
+  log(out, `[utils] ${spec.name} missing or outdated — installing ${spec.version}`);
 
   const { target, ext } = resolveTarget(spec);
   const archiveName = spec.archiveName(spec.version, target, ext);
   const downloadUrl = spec.downloadUrl(spec.version, archiveName);
   const tmpArchive = path.join(binRootDir(), archiveName);
+  log(out, `[utils] ${spec.name}: platform target=${target}, archive=${archiveName}`);
 
   fs.mkdirSync(utilDir(spec.name), { recursive: true });
 
@@ -363,7 +475,7 @@ async function ensureUtil(spec: UtilSpec, out: vscode.OutputChannel): Promise<st
     path: binPath,
     download_url: downloadUrl,
   });
-  out.appendLine(`[utils] ${spec.name} ${spec.version} installed at ${binPath}`);
+  log(out, `[utils] ${spec.name} ${spec.version} installed at ${binPath}`);
   return binPath;
 }
 
@@ -373,25 +485,35 @@ async function ensureUtil(spec: UtilSpec, out: vscode.OutputChannel): Promise<st
 
 async function ensureVenv(uvExec: string, out: vscode.OutputChannel): Promise<string> {
   const venv = kodoVenvDir();
-  if (fs.existsSync(path.join(venv, 'pyvenv.cfg'))) {
-    out.appendLine(`[uv] Venv already present at ${venv}`);
+  const cfgPath = path.join(venv, 'pyvenv.cfg');
+  const exists = fs.existsSync(cfgPath);
+  log(out, `[uv] Venv check: ${cfgPath} exists=${exists}`);
+  if (exists) {
+    log(out, `[uv] Venv already present at ${venv}`);
     return venv;
   }
-  out.appendLine(`[uv] Creating Python 3.12 venv at ${venv}`);
+  log(out, `[uv] Creating Python 3.12 venv at ${venv}`);
   await runProcess(uvExec, ['venv', '-p', 'python@3.12', venv], {}, out);
   return venv;
 }
 
 /** Returns the installed `py-kodo` version, or `null` if it isn't installed. */
-function getInstalledKodoVersion(uvExec: string, venv: string): string | null {
+function getInstalledKodoVersion(uvExec: string, venv: string, out: vscode.OutputChannel): string | null {
+  log(out, `[uv] Checking installed py-kodo version (${uvExec} pip show py-kodo, VIRTUAL_ENV=${venv})`);
   const r = childProcess.spawnSync(uvExec, ['pip', 'show', 'py-kodo'], {
     env: { ...process.env, VIRTUAL_ENV: venv },
     encoding: 'utf-8',
   });
   if (r.status !== 0) {
+    log(
+      out,
+      `[uv] py-kodo not installed (uv pip show exited ${String(r.status)}` +
+      `${r.stderr ? `: ${r.stderr.trim()}` : ''})`,
+    );
     return null;
   }
   const match = /^Version:\s*(\S+)/m.exec(r.stdout);
+  log(out, `[uv] Installed py-kodo version: ${match ? match[1] : '(unparseable "uv pip show" output)'}`);
   return match ? match[1] : null;
 }
 
@@ -442,20 +564,23 @@ function getExtensionVersion(): string {
 async function installKodo(uvExec: string, venv: string, out: vscode.OutputChannel): Promise<void> {
   const kodoSrc = process.env['KODO_DEV_PATH'];
   if (kodoSrc) {
-    out.appendLine(`[uv] Installing kodo from ${kodoSrc} (dev mode)`);
+    log(out, `[uv] KODO_DEV_PATH=${kodoSrc} — installing kodo editable from that checkout (dev mode)`);
     await runProcess(uvExec, ['pip', 'install', '-e', kodoSrc], { VIRTUAL_ENV: venv }, out);
     return;
   }
 
   const version = getExtensionVersion();
-  out.appendLine(`[uv] Installing py-kodo==${version} from PyPI`);
+  log(out, `[uv] KODO_DEV_PATH not set — installing py-kodo==${version} from PyPI`);
   try {
     await runProcess(uvExec, ['pip', 'install', `py-kodo==${version}`], { VIRTUAL_ENV: venv }, out);
+    log(out, `[uv] Installed py-kodo==${version}`);
   } catch (e) {
-    out.appendLine(
+    log(
+      out,
       `[uv] WARNING: py-kodo==${version} install failed (${e instanceof Error ? e.message : String(e)}) — falling back to unpinned py-kodo`,
     );
     await runProcess(uvExec, ['pip', 'install', 'py-kodo'], { VIRTUAL_ENV: venv }, out);
+    log(out, `[uv] Installed latest unpinned py-kodo (pin ${version} unavailable)`);
   }
 }
 
@@ -483,24 +608,41 @@ async function maybeUpgradeKodo(
   out: vscode.OutputChannel,
 ): Promise<void> {
   const extVersion = getExtensionVersion();
+  log(out, `[uv] Version check: extension=${extVersion}, installed py-kodo=${installedVersion}`);
   if (compareVersions(extVersion, installedVersion) <= 0) {
+    log(out, `[uv] py-kodo ${installedVersion} is already >= extension ${extVersion} — no upgrade needed`);
     return;
   }
-  out.appendLine(
+  log(
+    out,
     `[uv] py-kodo ${installedVersion} is older than extension ${extVersion} — attempting upgrade`,
   );
+  log(out, `[uv] kodo-server status: ${describeRunningServer()}`);
+  if (IS_WINDOWS) {
+    log(
+      out,
+      '[uv] NOTE (Windows): if kodo-server above is still ALIVE, it is a python.exe process running out ' +
+      'of this same venv, and can hold OS-level locks on native-extension (.pyd) files belonging to ' +
+      "py-kodo's dependencies. Unlike POSIX, Windows will not let uv overwrite those while the process " +
+      "holding them is alive, which can make the upgrade below fail (or partially apply) without an " +
+      "obvious cause. If that happens, stop kodo-server (or reload/close every window so it self-reaps " +
+      "on idle) and retry.",
+    );
+  }
   try {
     await runProcess(uvExec, ['pip', 'install', `py-kodo==${extVersion}`], { VIRTUAL_ENV: venv }, out);
-    out.appendLine(`[uv] Upgraded py-kodo ${installedVersion} -> ${extVersion}`);
+    log(out, `[uv] Upgraded py-kodo ${installedVersion} -> ${extVersion}`);
   } catch (e) {
-    out.appendLine(
+    log(
+      out,
       `[uv] WARNING: py-kodo==${extVersion} upgrade failed (${e instanceof Error ? e.message : String(e)}) — falling back to unpinned py-kodo`,
     );
     try {
       await runProcess(uvExec, ['pip', 'install', 'py-kodo'], { VIRTUAL_ENV: venv }, out);
-      out.appendLine(`[uv] Installed latest unpinned py-kodo (pin ${extVersion} unavailable)`);
+      log(out, `[uv] Installed latest unpinned py-kodo (pin ${extVersion} unavailable)`);
     } catch (e2) {
-      out.appendLine(
+      log(
+        out,
         `[uv] WARNING: unpinned py-kodo upgrade also failed (${e2 instanceof Error ? e2.message : String(e2)}) — continuing with py-kodo ${installedVersion}`,
       );
     }
@@ -541,11 +683,14 @@ async function maybeUpgradeKodo(
  * `maybeUpgradeKodo`).
  */
 export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<string> {
+  log(out, '[uv] ensureKodoEnvironment: starting (see the "Kodo" output channel for the full step/branch trace)');
+
   let uvExec: string;
   try {
     uvExec = await ensureUtil(UV_SPEC, out);
   } catch (e) {
-    out.appendLine(
+    log(
+      out,
       `[uv] ERROR: failed to install uv ${UV_SPEC.version} — ${e instanceof Error ? e.message : String(e)}`,
     );
     throw e;
@@ -555,25 +700,37 @@ export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<
   try {
     venv = await ensureVenv(uvExec, out);
   } catch (e) {
-    out.appendLine(
+    log(
+      out,
       `[uv] ERROR: failed to create Python virtual environment — ${e instanceof Error ? e.message : String(e)}`,
     );
     throw e;
   }
 
   try {
-    const installedVersion = getInstalledKodoVersion(uvExec, venv);
+    const installedVersion = getInstalledKodoVersion(uvExec, venv, out);
+    const devPath = process.env['KODO_DEV_PATH'];
     if (installedVersion === null) {
+      log(out, '[uv] Branch: no py-kodo installation found in venv -> first-time install');
       await installKodo(uvExec, venv, out);
-    } else if (!process.env['KODO_DEV_PATH']) {
+    } else if (!devPath) {
+      log(out, `[uv] Branch: py-kodo ${installedVersion} already installed, KODO_DEV_PATH unset -> version check`);
       await maybeUpgradeKodo(uvExec, venv, installedVersion, out);
+    } else {
+      log(
+        out,
+        `[uv] Branch: py-kodo ${installedVersion} already installed, KODO_DEV_PATH=${devPath} set -> ` +
+        'skipping version check (dev editable install is not PyPI-versioned)',
+      );
     }
   } catch (e) {
-    out.appendLine(
+    log(
+      out,
       `[uv] ERROR: failed to install kodo server — ${e instanceof Error ? e.message : String(e)}`,
     );
     throw e;
   }
 
+  log(out, '[uv] ensureKodoEnvironment: done');
   return venv;
 }
