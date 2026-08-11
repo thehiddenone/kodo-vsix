@@ -1,8 +1,11 @@
 /**
  * Ensures the third-party utils Kōdo bundles, the kōdo venv, and the kōdo
- * package are all present before the server subprocess is launched.  Runs on
- * every extension activation; each step is a no-op when its artifact already
- * exists.
+ * package are all present *and up to date* before the server subprocess is
+ * launched.  Runs on every extension activation; most steps are a no-op when
+ * their artifact already exists, except the `py-kodo` version check, which
+ * always runs (cheap) so that an extension auto-update also upgrades the
+ * `py-kodo` left installed from a previous activation — see
+ * `ensureKodoEnvironment` and `maybeUpgradeKodo`.
  *
  * Third-party utils live under ``~/.kodo/bin/``.  Each util gets its own
  * directory with the binary placed directly inside it, plus a sibling JSON
@@ -379,12 +382,34 @@ async function ensureVenv(uvExec: string, out: vscode.OutputChannel): Promise<st
   return venv;
 }
 
-function isKodoInstalled(uvExec: string, venv: string): boolean {
+/** Returns the installed `py-kodo` version, or `null` if it isn't installed. */
+function getInstalledKodoVersion(uvExec: string, venv: string): string | null {
   const r = childProcess.spawnSync(uvExec, ['pip', 'show', 'py-kodo'], {
     env: { ...process.env, VIRTUAL_ENV: venv },
     encoding: 'utf-8',
   });
-  return r.status === 0;
+  if (r.status !== 0) {
+    return null;
+  }
+  const match = /^Version:\s*(\S+)/m.exec(r.stdout);
+  return match ? match[1] : null;
+}
+
+/**
+ * Compares two `major.minor.build`-style version strings component-by-component
+ * as numbers. Returns >0 if `a` > `b`, <0 if `a` < `b`, 0 if equal.
+ */
+export function compareVersions(a: string, b: string): number {
+  const partsA = a.split('.').map(Number);
+  const partsB = b.split('.').map(Number);
+  const len = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (partsA[i] ?? 0) - (partsB[i] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
 }
 
 /**
@@ -404,11 +429,15 @@ function getExtensionVersion(): string {
 }
 
 /**
+ * Installs `py-kodo` for the first time in a venv that doesn't have it yet.
  * In local dev (``KODO_DEV_PATH`` set), installs kodo editable from that
  * checkout. Otherwise installs the published ``py-kodo`` PyPI package,
  * pinned to this extension's own version so the client/server protocol
  * never drifts out of sync. If the pinned version isn't resolvable (e.g. it
  * hasn't reached PyPI's index yet), falls back to the latest ``py-kodo``.
+ *
+ * For upgrading an *already-installed* `py-kodo` after the extension itself
+ * has updated, see {@link maybeUpgradeKodo}.
  */
 async function installKodo(uvExec: string, venv: string, out: vscode.OutputChannel): Promise<void> {
   const kodoSrc = process.env['KODO_DEV_PATH'];
@@ -430,14 +459,62 @@ async function installKodo(uvExec: string, venv: string, out: vscode.OutputChann
   }
 }
 
+/**
+ * Upgrades an already-installed `py-kodo` to match this extension's version,
+ * when the extension has auto-updated to a newer version than the `py-kodo`
+ * left over from a previous activation (the venv/install step is otherwise a
+ * no-op once `py-kodo` is present at all — see `ensureKodoEnvironment`).
+ *
+ * No-ops if `installedVersion` is already >= the extension's own version —
+ * this only ever upgrades forward, never downgrades. Never throws: this is
+ * best-effort. If the pinned upgrade fails, falls back to the latest
+ * unpinned `py-kodo` (mirrors `installKodo`'s fresh-install fallback); if
+ * that also fails, logs a warning and leaves the previously-installed
+ * version in place so the caller can still launch the server on it.
+ *
+ * Not called when ``KODO_DEV_PATH`` is set (see `ensureKodoEnvironment`) —
+ * dev mode's editable install isn't a PyPI-versioned artifact to compare
+ * against or overwrite.
+ */
+async function maybeUpgradeKodo(
+  uvExec: string,
+  venv: string,
+  installedVersion: string,
+  out: vscode.OutputChannel,
+): Promise<void> {
+  const extVersion = getExtensionVersion();
+  if (compareVersions(extVersion, installedVersion) <= 0) {
+    return;
+  }
+  out.appendLine(
+    `[uv] py-kodo ${installedVersion} is older than extension ${extVersion} — attempting upgrade`,
+  );
+  try {
+    await runProcess(uvExec, ['pip', 'install', `py-kodo==${extVersion}`], { VIRTUAL_ENV: venv }, out);
+    out.appendLine(`[uv] Upgraded py-kodo ${installedVersion} -> ${extVersion}`);
+  } catch (e) {
+    out.appendLine(
+      `[uv] WARNING: py-kodo==${extVersion} upgrade failed (${e instanceof Error ? e.message : String(e)}) — falling back to unpinned py-kodo`,
+    );
+    try {
+      await runProcess(uvExec, ['pip', 'install', 'py-kodo'], { VIRTUAL_ENV: venv }, out);
+      out.appendLine(`[uv] Installed latest unpinned py-kodo (pin ${extVersion} unavailable)`);
+    } catch (e2) {
+      out.appendLine(
+        `[uv] WARNING: unpinned py-kodo upgrade also failed (${e2 instanceof Error ? e2.message : String(e2)}) — continuing with py-kodo ${installedVersion}`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
 /**
  * Ensures uv is installed, the kōdo venv exists, and the kōdo package is
- * present in that venv.  Returns the venv directory path; the caller derives
- * the Python executable from it.
+ * present *and up to date* in that venv.  Returns the venv directory path;
+ * the caller derives the Python executable from it.
  *
  * Only uv is installed here — the Python backend installs ripgrep and fd on its
  * own startup (see ``kodo/bin/_tools.py``), sharing the ``~/.kodo/bin``
@@ -445,10 +522,23 @@ async function installKodo(uvExec: string, venv: string, out: vscode.OutputChann
  * extension.
  *
  * Each step is idempotent — repeated calls are fast no-ops when everything is
- * already in place.  On any failure, logs to `out` and rethrows; this function
- * never shows a user-facing notification itself — the caller (`server-launcher.ts`)
+ * already in place. The one exception is the `py-kodo` version check: it runs
+ * on every call (cheap — a single `uv pip show`) so that when the extension
+ * auto-updates to a newer version than whatever `py-kodo` was left installed
+ * from a previous activation, it upgrades `py-kodo` to match before launching
+ * the server — see `maybeUpgradeKodo`. That check only applies when `py-kodo`
+ * is already installed (i.e. the venv was set up by a previous activation); a
+ * brand-new venv always goes through the plain `installKodo` first-install
+ * path instead, pinned to the current extension version.
+ *
+ * On any failure, logs to `out` and rethrows; this function never shows a
+ * user-facing notification itself — the caller (`server-launcher.ts`)
  * owns that, and only after its own rebuild-venv-and-retry remediation has also
  * failed, so the user isn't shown an error for a problem that fixed itself.
+ * The `py-kodo` upgrade step is an exception to the rethrow rule: it never
+ * throws, since a failed upgrade should still launch the server on the
+ * already-installed version rather than block startup (see
+ * `maybeUpgradeKodo`).
  */
 export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<string> {
   let uvExec: string;
@@ -472,8 +562,11 @@ export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<
   }
 
   try {
-    if (!isKodoInstalled(uvExec, venv)) {
+    const installedVersion = getInstalledKodoVersion(uvExec, venv);
+    if (installedVersion === null) {
       await installKodo(uvExec, venv, out);
+    } else if (!process.env['KODO_DEV_PATH']) {
+      await maybeUpgradeKodo(uvExec, venv, installedVersion, out);
     }
   } catch (e) {
     out.appendLine(

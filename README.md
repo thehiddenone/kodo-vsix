@@ -4,6 +4,8 @@
     <img src="images/kodo256px.png" width="256px" height="256px" alt="Kodo"/>
 </p>
 
+[![VS Code Marketplace](https://vsmarketplacebadges.dev/version/StanislavMorozov.vs-kodo.svg)](https://marketplace.visualstudio.com/items?itemName=StanislavMorozov.vs-kodo)
+
 **Kōdo** (コード) turns natural language into working code through a multi-agent LLM workflow — and it's built from the ground up to run that workflow on your own hardware, model included. No subscription, no API key, no round trip to someone else's datacenter.
 
 That's the pitch. How much of it holds up today is spelled out in [Honest status](#honest-status), and you should read that section before you decide this is going to solve your afternoon.
@@ -22,7 +24,7 @@ Scope, stated plainly rather than discovered later: Kōdo currently targets **ba
 
 ## Install and first run
 
-Install from the Marketplace, open a folder, click the **Kōdo** icon in the activity bar. That's the whole prerequisite list — you do **not** need Python, Node, or a clone of anything.
+Install [Kōdo from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=StanislavMorozov.vs-kodo), open a folder, click the **Kōdo** icon in the activity bar. That's the whole prerequisite list — you do **not** need Python, Node, or a clone of anything.
 
 On first activation Kōdo provisions itself, with a progress notification tracking it:
 
@@ -32,6 +34,8 @@ On first activation Kōdo provisions itself, with a progress notification tracki
 - starts the server and connects.
 
 This part is quick — a couple of minutes on a normal connection. It is not the slow part. The slow part comes next, and it's measured in tens of gigabytes.
+
+On every later activation — including after the extension auto-updates itself — Kōdo re-checks the installed `py-kodo` version against its own and upgrades it to match if the extension is now ahead. This keeps the venv from silently drifting behind after an update; if the upgrade fails for any reason, Kōdo just launches on whatever version is already installed rather than blocking startup.
 
 Then pick how you want to drive it.
 
@@ -46,13 +50,20 @@ Then pick how you want to drive it.
 
 | Model | Verdict |
 | --- | --- |
-| **Qwen 3.6 27B** (dense) | Works. A reasonable first download. |
-| **Qwen 3.6 35B-A3B** (MoE) | Works. |
+| **Qwen 3.6 27B** (dense) | Works, and a reasonable first download — but noticeably slower than the MoE below, since a dense model runs every weight on every token instead of only the sliver an MoE wakes up. |
+| **Qwen 3.6 35B-A3B** (MoE) | Works, and out-paces the 27B dense above despite being the bigger download. |
 | **Ornith 1.0 35B-A3B** | Works, and is very good. |
-| **Gemma 4 26B-A4B** | Works, but noticeably less stable than the three above. |
+| **Laguna XS 2.1** | Works, and holds its own as a third option alongside Qwen and Ornith above. |
+| **Gemma 4 26B-A4B** | Works, but noticeably less stable than the four above. |
+| **Ornith 1.0 9B** | Punches well above its size class — reach for this one when the 35B-ish builds don't fit your VRAM. |
+| **Nanbeige 4.2 3B** | About a third the size of Ornith 1.0 9B and trails it by a lot less than the size gap suggests — worth trying first if your hardware is tight. |
+| **Laguna S 2.1** | Works, and rocks — the stronger of these two big quants, being the more sophisticated model with more parameters. Needs the serious hardware below. |
+| **Qwen3 Coder 80B** | Works, and rocks, though Laguna above edges it out. Needs the serious hardware below. |
 | Everything else in the catalogue | Sized and curated. Not yet driven hard enough to make a claim. |
 
 **The hardware answer you actually want.** Roughly: **16GB of VRAM** on a PC, **48GB of unified memory** on a Mac. Some models run in less; the panel checks *your* machine per build and is more trustworthy than any number in a README. One asymmetry worth knowing: the per-model Mac guidance is grounded and reliable, the discrete-GPU guidance is hand-wavier. And most of these models would run better with hand-tuned llama.cpp arguments than with the defaults Kōdo ships — that tuning pass hasn't been done yet.
+
+**If your hardware clears that by a wide margin.** Large quants of **Laguna S 2.1** and **Qwen3 Coder 80B** — both confirmed, both worth it — are sized for Macs with 64–96–128GB of unified memory, or RTX Pro cards with 48–72–96GB of VRAM.
 
 ### Path B — a cloud model
 
@@ -113,7 +124,7 @@ There is exactly **one Kōdo server per machine** — a detached background proc
 **When something breaks**, the first place to look is the **"Kodo Server"** output channel (View → Output). It live-tails the shared server log: startup errors, tracebacks, the exact command line used to launch the server. Two failures account for most of them:
 
 - **The server never comes up.** Almost always a corrupt venv. Kōdo already retries once with a freshly rebuilt one; if it's still stuck, delete `~/.kodo/venv/` and reload the window. It's rebuilt automatically and safe to delete.
-- **The `py-kodo` install fails.** The extension pins `py-kodo` to its own version and falls back to the latest release if that exact version isn't on PyPI's index yet. The `uv pip install` error will be in the output channel.
+- **The `py-kodo` install (or upgrade) fails.** The extension pins `py-kodo` to its own version — on first install and again on every later activation where the extension has updated ahead of the installed `py-kodo` — and falls back to the latest release if that exact version isn't on PyPI's index yet. A failed upgrade never blocks startup: Kōdo just launches on whatever `py-kodo` version is already installed. The `uv pip install` error will be in the output channel either way.
 
 A leftover `~/.kodo/kodo-server` file after a crash or reboot is harmless — Kōdo notices the PID is dead, removes it, and starts fresh.
 
@@ -147,7 +158,7 @@ It's a stubborn bet. It isn't proven. It's being worked on anyway, slowly, on or
 ## Links and development
 
 - **Kōdo server** (Python, the engine): [github.com/thehiddenone/kodo](https://github.com/thehiddenone/kodo) — start with its [README](https://github.com/thehiddenone/kodo/blob/main/README.md) and the design docs in [`doc/`](https://github.com/thehiddenone/kodo/tree/main/doc), covering the workflow, agents, wire protocol, security model, checkpointing, and local inference in far more depth than this page.
-- **This extension**: [github.com/thehiddenone/kodo-vsix](https://github.com/thehiddenone/kodo-vsix)
+- **This extension**: [github.com/thehiddenone/kodo-vsix](https://github.com/thehiddenone/kodo-vsix), published on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=StanislavMorozov.vs-kodo).
 - **Licence**: Apache 2.0.
 
 Building from source needs Node.js 24 and VS Code ≥ 1.90; `npm install`, then **F5** launches an Extension Development Host. Set `KODO_DEV_PATH` to a local `kodo` checkout to install the server editable from source instead of from PyPI. The extension is TypeScript throughout, bundled with esbuild, with a Preact UI in the webviews.
