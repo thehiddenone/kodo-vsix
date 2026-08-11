@@ -7,6 +7,15 @@
  * `py-kodo` left installed from a previous activation — see
  * `ensureKodoEnvironment` and `maybeUpgradeKodo`.
  *
+ * The version check has one hard prerequisite the caller owns: **no
+ * kodo-server may be running against `~/.kodo/venv` while `py-kodo` is being
+ * replaced.** `ServerLauncher.launch` calls `planKodoUpgrade` before it
+ * decides to reuse a live server and shuts that server down first when an
+ * upgrade is due; everything in here assumes it succeeded. Concurrent windows
+ * are serialised by `withKodoEnvLock`, since an extension update reloads every
+ * window at once and N simultaneous `uv pip install`s on one venv is worse
+ * than the stale install being fixed.
+ *
  * Third-party utils live under ``~/.kodo/bin/``.  Each util gets its own
  * directory with the binary placed directly inside it, plus a sibling JSON
  * manifest recording the pinned version, the absolute binary path, and the URL
@@ -36,40 +45,10 @@ import * as https from 'https';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { appendDiag as append, logDiag as log } from './diagnostics';
 import { state } from './extension/state';
 
 const IS_WINDOWS = process.platform === 'win32';
-
-// ---------------------------------------------------------------------------
-// Dedicated "Kodo" diagnostic output channel
-// ---------------------------------------------------------------------------
-//
-// Every step and fork/branch this file takes when installing uv, creating the
-// venv, and installing/upgrading `py-kodo` is logged here — a single place to
-// review the whole decision trace independent of the "Kodo Server" channel
-// (server-launcher.ts), which is dominated by the server subprocess's own
-// stdout/stderr tail and would otherwise bury this. Every call also still
-// logs to the `out` channel callers pass in (in practice "Kodo Server"), so
-// existing behavior/visibility there is unchanged — this is purely additive.
-
-let diagChannel: vscode.OutputChannel | undefined;
-
-function diagOut(): vscode.OutputChannel {
-  diagChannel ??= vscode.window.createOutputChannel('Kodo');
-  return diagChannel;
-}
-
-/** Appends a line to both `out` and the dedicated "Kodo" channel. */
-function log(out: vscode.OutputChannel, line: string): void {
-  out.appendLine(line);
-  diagOut().appendLine(line);
-}
-
-/** Appends raw (non-newline-terminated) text to both `out` and "Kodo". */
-function append(out: vscode.OutputChannel, text: string): void {
-  out.append(text);
-  diagOut().append(text);
-}
 
 /**
  * Best-effort description of the singleton kodo-server's tracked state, read
@@ -426,6 +405,162 @@ function runProcess(
   });
 }
 
+/**
+ * Wait-before-retry ladder for a failed `uv pip install`.
+ *
+ * `[0, 1000, 3000]` = three attempts: immediate, then after 1s, then after 3s.
+ * uv failures on this path are dominated by *transient* causes — a file still
+ * held open by a process that is on its way out (Windows), a half-released
+ * lock on `~/.kodo/venv`, an antivirus scanner mid-file, a flaky index request
+ * — all of which a second attempt a moment later clears. A cause that is not
+ * transient costs 4 extra seconds before the existing fallback path takes
+ * over, which is a fair price on a path that only runs when an upgrade is
+ * actually due.
+ */
+export const UV_RETRY_DELAYS_MS: readonly number[] = [0, 1_000, 3_000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Runs `attempt` once per entry in `delays`, waiting that entry's delay first,
+ * until one resolves. Rethrows the last error if every attempt fails.
+ *
+ * `onAttempt` is called before each try with the 1-based attempt number and
+ * the delay just waited, and `onFailure` after each failed one — the caller
+ * owns all logging, so this stays a pure retry primitive (and testable
+ * without a VS Code window; see `src/test/uv-setup.test.ts`).
+ */
+export async function retryAsync<T>(
+  attempt: () => Promise<T>,
+  delays: readonly number[],
+  hooks: {
+    onAttempt?: (attemptNo: number, waitedMs: number) => void;
+    onFailure?: (attemptNo: number, error: unknown, willRetry: boolean) => void;
+    sleepFn?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<T> {
+  const sleepFn = hooks.sleepFn ?? sleep;
+  let lastError: unknown;
+  for (let i = 0; i < delays.length; i++) {
+    const waitMs = delays[i];
+    if (waitMs > 0) {
+      await sleepFn(waitMs);
+    }
+    hooks.onAttempt?.(i + 1, waitMs);
+    try {
+      return await attempt();
+    } catch (e) {
+      lastError = e;
+      hooks.onFailure?.(i + 1, e, i < delays.length - 1);
+    }
+  }
+  throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-window environment lock
+// ---------------------------------------------------------------------------
+
+/**
+ * Path of the advisory lock serialising `~/.kodo/venv` mutation across VS Code
+ * windows (`~/.kodo/env.lock`).
+ */
+function envLockPath(): string {
+  return path.join(kodoDir(), 'env.lock');
+}
+
+/** A lock older than this is assumed abandoned (crashed window) and broken. */
+const ENV_LOCK_STALE_MS = 10 * 60 * 1_000;
+/** How long to wait for another window's lock before giving up and proceeding. */
+const ENV_LOCK_WAIT_MS = 3 * 60 * 1_000;
+const ENV_LOCK_POLL_MS = 500;
+
+/** Re-entrancy depth — `launch()` takes the lock, then calls `ensureKodoEnvironment`. */
+let envLockDepth = 0;
+
+/**
+ * Runs `fn` holding an advisory cross-window lock on the shared environment.
+ *
+ * Every VS Code window runs this bootstrap independently, and an extension
+ * auto-update reloads *all* of them at once — so without this, N windows can
+ * run `uv pip install` against the same `~/.kodo/venv` concurrently, which is
+ * a far worse outcome (a half-written venv) than the stale `py-kodo` this
+ * change exists to fix. Waiters do not skip their turn: they re-run the checks
+ * once they get the lock, which is then a cheap no-op because the window that
+ * held it already did the work.
+ *
+ * Advisory and deliberately forgiving — a lock that cannot be taken never
+ * blocks startup outright:
+ *   * a lock file older than {@link ENV_LOCK_STALE_MS} is broken and retaken
+ *     (its window died mid-bootstrap);
+ *   * after {@link ENV_LOCK_WAIT_MS} of waiting we proceed anyway, logging
+ *     loudly — a stuck peer must not leave this window without a server.
+ * Re-entrant within a process, so nested calls (`launch` → `ensureKodoEnvironment`)
+ * share the one acquisition rather than deadlocking.
+ */
+export async function withKodoEnvLock<T>(out: vscode.OutputChannel, fn: () => Promise<T>): Promise<T> {
+  if (envLockDepth > 0) {
+    envLockDepth++;
+    try {
+      return await fn();
+    } finally {
+      envLockDepth--;
+    }
+  }
+
+  const lockFile = envLockPath();
+  fs.mkdirSync(kodoDir(), { recursive: true });
+  const deadline = Date.now() + ENV_LOCK_WAIT_MS;
+  let held = false;
+
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockFile, 'wx');
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+      fs.closeSync(fd);
+      held = true;
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {
+        log(out, `[lock] Could not create ${lockFile} (${e instanceof Error ? e.message : String(e)}) — proceeding without the lock`);
+        break;
+      }
+    }
+    let ageMs: number;
+    try {
+      ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
+    } catch {
+      continue; // released between the failed create and the stat — retry immediately
+    }
+    if (ageMs > ENV_LOCK_STALE_MS) {
+      log(out, `[lock] Breaking stale environment lock (${Math.round(ageMs / 1000)}s old) at ${lockFile}`);
+      try { fs.unlinkSync(lockFile); } catch { /* someone else won the race */ }
+      continue;
+    }
+    if (Date.now() > deadline) {
+      log(out, `[lock] Another window has held ${lockFile} for ${Math.round(ENV_LOCK_WAIT_MS / 1000)}s — proceeding anyway`);
+      break;
+    }
+    await sleep(ENV_LOCK_POLL_MS);
+  }
+
+  if (held) {
+    log(out, `[lock] Holding environment lock ${lockFile}`);
+  }
+  envLockDepth++;
+  try {
+    return await fn();
+  } finally {
+    envLockDepth--;
+    if (held) {
+      try { fs.unlinkSync(lockFile); } catch { /* already gone */ }
+      log(out, '[lock] Released environment lock');
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool installation
 // ---------------------------------------------------------------------------
@@ -498,7 +633,7 @@ async function ensureVenv(uvExec: string, out: vscode.OutputChannel): Promise<st
 }
 
 /** Returns the installed `py-kodo` version, or `null` if it isn't installed. */
-function getInstalledKodoVersion(uvExec: string, venv: string, out: vscode.OutputChannel): string | null {
+export function getInstalledKodoVersion(uvExec: string, venv: string, out: vscode.OutputChannel): string | null {
   log(out, `[uv] Checking installed py-kodo version (${uvExec} pip show py-kodo, VIRTUAL_ENV=${venv})`);
   const r = childProcess.spawnSync(uvExec, ['pip', 'show', 'py-kodo'], {
     env: { ...process.env, VIRTUAL_ENV: venv },
@@ -565,23 +700,55 @@ async function installKodo(uvExec: string, venv: string, out: vscode.OutputChann
   const kodoSrc = process.env['KODO_DEV_PATH'];
   if (kodoSrc) {
     log(out, `[uv] KODO_DEV_PATH=${kodoSrc} — installing kodo editable from that checkout (dev mode)`);
-    await runProcess(uvExec, ['pip', 'install', '-e', kodoSrc], { VIRTUAL_ENV: venv }, out);
+    await pipInstallWithRetries(uvExec, ['-e', kodoSrc], venv, out);
     return;
   }
 
   const version = getExtensionVersion();
   log(out, `[uv] KODO_DEV_PATH not set — installing py-kodo==${version} from PyPI`);
   try {
-    await runProcess(uvExec, ['pip', 'install', `py-kodo==${version}`], { VIRTUAL_ENV: venv }, out);
+    await pipInstallWithRetries(uvExec, [`py-kodo==${version}`], venv, out);
     log(out, `[uv] Installed py-kodo==${version}`);
   } catch (e) {
     log(
       out,
       `[uv] WARNING: py-kodo==${version} install failed (${e instanceof Error ? e.message : String(e)}) — falling back to unpinned py-kodo`,
     );
-    await runProcess(uvExec, ['pip', 'install', 'py-kodo'], { VIRTUAL_ENV: venv }, out);
+    await pipInstallWithRetries(uvExec, ['py-kodo'], venv, out);
     log(out, `[uv] Installed latest unpinned py-kodo (pin ${version} unavailable)`);
   }
+}
+
+/**
+ * Runs `uv pip install <args>` against `venv`, retrying per
+ * {@link UV_RETRY_DELAYS_MS}. Rejects with the last attempt's error if every
+ * attempt fails, so callers keep their existing catch/fallback behaviour.
+ */
+async function pipInstallWithRetries(
+  uvExec: string,
+  args: string[],
+  venv: string,
+  out: vscode.OutputChannel,
+): Promise<void> {
+  const label = args.join(' ');
+  await retryAsync(
+    () => runProcess(uvExec, ['pip', 'install', ...args], { VIRTUAL_ENV: venv }, out),
+    UV_RETRY_DELAYS_MS,
+    {
+      onAttempt: (n, waited) =>
+        log(
+          out,
+          `[uv] uv pip install ${label}: attempt ${n}/${UV_RETRY_DELAYS_MS.length}` +
+          (waited > 0 ? ` (after waiting ${waited}ms)` : ''),
+        ),
+      onFailure: (n, e, willRetry) =>
+        log(
+          out,
+          `[uv] uv pip install ${label}: attempt ${n} FAILED (${e instanceof Error ? e.message : String(e)})` +
+          (willRetry ? ' — retrying' : ' — no attempts left'),
+        ),
+    },
+  );
 }
 
 /**
@@ -597,9 +764,22 @@ async function installKodo(uvExec: string, venv: string, out: vscode.OutputChann
  * that also fails, logs a warning and leaves the previously-installed
  * version in place so the caller can still launch the server on it.
  *
+ * Two things make this more than "run uv and hope":
+ *   * every `uv pip install` gets {@link UV_RETRY_DELAYS_MS}' three attempts;
+ *   * **success is confirmed by re-reading the installed version**, not by
+ *     trusting uv's exit code. The failure that motivated all of this was
+ *     silent — extension 0.1.11 alongside a `py-kodo` still on 0.1.9 — so a
+ *     0 exit that leaves the old version in place is treated as a failed
+ *     attempt and retried like any other.
+ *
  * Not called when ``KODO_DEV_PATH`` is set (see `ensureKodoEnvironment`) —
  * dev mode's editable install isn't a PyPI-versioned artifact to compare
  * against or overwrite.
+ *
+ * Callers must have stopped the running kodo-server first (see
+ * `ServerLauncher.launch`): a live server runs Python out of this very venv
+ * and, on Windows, holds unbreakable OS-level locks on the loaded
+ * native-extension files uv needs to replace.
  */
 async function maybeUpgradeKodo(
   uvExec: string,
@@ -624,13 +804,13 @@ async function maybeUpgradeKodo(
       '[uv] NOTE (Windows): if kodo-server above is still ALIVE, it is a python.exe process running out ' +
       'of this same venv, and can hold OS-level locks on native-extension (.pyd) files belonging to ' +
       "py-kodo's dependencies. Unlike POSIX, Windows will not let uv overwrite those while the process " +
-      "holding them is alive, which can make the upgrade below fail (or partially apply) without an " +
-      "obvious cause. If that happens, stop kodo-server (or reload/close every window so it self-reaps " +
-      "on idle) and retry.",
+      'holding them is alive, which can make the upgrade below fail (or partially apply) without an ' +
+      'obvious cause. The launcher shuts the server down before getting here, so seeing ALIVE at this ' +
+      'point means that shutdown did not take — read the [shutdown] lines above.',
     );
   }
   try {
-    await runProcess(uvExec, ['pip', 'install', `py-kodo==${extVersion}`], { VIRTUAL_ENV: venv }, out);
+    await upgradeAttemptWithRetries(uvExec, venv, `py-kodo==${extVersion}`, extVersion, out);
     log(out, `[uv] Upgraded py-kodo ${installedVersion} -> ${extVersion}`);
   } catch (e) {
     log(
@@ -638,7 +818,7 @@ async function maybeUpgradeKodo(
       `[uv] WARNING: py-kodo==${extVersion} upgrade failed (${e instanceof Error ? e.message : String(e)}) — falling back to unpinned py-kodo`,
     );
     try {
-      await runProcess(uvExec, ['pip', 'install', 'py-kodo'], { VIRTUAL_ENV: venv }, out);
+      await upgradeAttemptWithRetries(uvExec, venv, 'py-kodo', installedVersion, out);
       log(out, `[uv] Installed latest unpinned py-kodo (pin ${extVersion} unavailable)`);
     } catch (e2) {
       log(
@@ -647,6 +827,58 @@ async function maybeUpgradeKodo(
       );
     }
   }
+}
+
+/**
+ * One `uv pip install <requirement>` upgrade attempt, retried per
+ * {@link UV_RETRY_DELAYS_MS} — where "attempt succeeded" means uv exited 0
+ * **and** `uv pip show` now reports a version at least `expectAtLeast`.
+ *
+ * `expectAtLeast` is the pinned target for a pinned requirement, and the
+ * currently-installed version for the unpinned fallback (which only has to
+ * move the version forward — whatever latest happens to be).
+ */
+async function upgradeAttemptWithRetries(
+  uvExec: string,
+  venv: string,
+  requirement: string,
+  expectAtLeast: string,
+  out: vscode.OutputChannel,
+): Promise<void> {
+  await retryAsync(
+    async () => {
+      await runProcess(uvExec, ['pip', 'install', requirement], { VIRTUAL_ENV: venv }, out);
+      const now = getInstalledKodoVersion(uvExec, venv, out);
+      if (now === null) {
+        throw new Error('uv exited 0 but py-kodo is no longer installed');
+      }
+      if (compareVersions(now, expectAtLeast) < 0) {
+        throw new Error(
+          `uv exited 0 but py-kodo is still ${now} (expected >= ${expectAtLeast}) — the install did not take effect`,
+        );
+      }
+      log(out, `[uv] Verified: uv pip show now reports py-kodo ${now}`);
+    },
+    UV_RETRY_DELAYS_MS,
+    {
+      onAttempt: (n, waited) =>
+        log(
+          out,
+          `[uv] Upgrade to ${requirement}: attempt ${n}/${UV_RETRY_DELAYS_MS.length}` +
+          (waited > 0 ? ` (after waiting ${waited}ms)` : ''),
+        ),
+      onFailure: (n, e, willRetry) => {
+        log(
+          out,
+          `[uv] Upgrade to ${requirement}: attempt ${n} FAILED (${e instanceof Error ? e.message : String(e)})` +
+          (willRetry ? ' — retrying' : ' — no attempts left'),
+        );
+        if (willRetry) {
+          log(out, `[uv] kodo-server status before retry: ${describeRunningServer()}`);
+        }
+      },
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -683,6 +915,10 @@ async function maybeUpgradeKodo(
  * `maybeUpgradeKodo`).
  */
 export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<string> {
+  return withKodoEnvLock(out, () => ensureKodoEnvironmentLocked(out));
+}
+
+async function ensureKodoEnvironmentLocked(out: vscode.OutputChannel): Promise<string> {
   log(out, '[uv] ensureKodoEnvironment: starting (see the "Kodo" output channel for the full step/branch trace)');
 
   let uvExec: string;
@@ -733,4 +969,94 @@ export async function ensureKodoEnvironment(out: vscode.OutputChannel): Promise<
 
   log(out, '[uv] ensureKodoEnvironment: done');
   return venv;
+}
+
+/** The outcome of {@link planKodoUpgrade}. */
+export interface KodoUpgradePlan {
+  /** Is the installed `py-kodo` older than this extension? */
+  needsUpgrade: boolean;
+  /** Installed `py-kodo` version, or `null` if absent/undeterminable. */
+  installedVersion: string | null;
+  /** This extension's own version. */
+  extensionVersion: string;
+  /** Human-readable one-liner explaining the verdict — logged by the caller. */
+  reason: string;
+}
+
+/**
+ * Decides — **without changing anything** — whether the `py-kodo` in
+ * `~/.kodo/venv` is older than this extension and therefore has to be
+ * upgraded before the server is used.
+ *
+ * This is the check `ServerLauncher.launch` runs *before* it decides to reuse
+ * an already-running singleton server, and it is the crux of the whole
+ * upgrade-on-extension-update feature. Previously the version check lived
+ * only inside `ensureKodoEnvironment`, which `launch()` never reaches when it
+ * finds a live server — so on the single most common post-update state
+ * (extension auto-updated, window reloaded, the singleton server survived the
+ * reload by design) the upgrade was never even attempted, and the backend
+ * stayed pinned to the old `py-kodo` until the user happened to close every
+ * window long enough for the server to self-reap.
+ *
+ * Cheap enough for the startup path: one `uv pip show` (~100ms), and it does
+ * not install uv — if uv isn't on disk yet there is no venv to judge either,
+ * and the caller is about to run the full bootstrap regardless.
+ *
+ * Never throws; any uncertainty resolves to `needsUpgrade: false`, i.e. leave
+ * the running server alone. Restarting the server is disruptive to every
+ * other window, so it must only happen on positive evidence.
+ */
+export function planKodoUpgrade(out: vscode.OutputChannel): KodoUpgradePlan {
+  const extensionVersion = (() => {
+    try {
+      return getExtensionVersion();
+    } catch {
+      return '';
+    }
+  })();
+  const no = (reason: string): KodoUpgradePlan => ({
+    needsUpgrade: false,
+    installedVersion: null,
+    extensionVersion,
+    reason,
+  });
+
+  if (!extensionVersion) {
+    return no('could not read this extension\'s own version');
+  }
+  const devPath = process.env['KODO_DEV_PATH'];
+  if (devPath) {
+    return no(`KODO_DEV_PATH=${devPath} is set — dev editable installs are not PyPI-versioned`);
+  }
+  const uvMeta = readUtilJson(UV_SPEC.name);
+  if (uvMeta === null || !fs.existsSync(uvMeta.path)) {
+    return no('uv is not installed yet — nothing has been bootstrapped to upgrade');
+  }
+  if (!fs.existsSync(path.join(kodoVenvDir(), 'pyvenv.cfg'))) {
+    return no('no venv yet — nothing has been bootstrapped to upgrade');
+  }
+
+  let installedVersion: string | null;
+  try {
+    installedVersion = getInstalledKodoVersion(uvMeta.path, kodoVenvDir(), out);
+  } catch (e) {
+    return no(`could not read the installed py-kodo version (${e instanceof Error ? e.message : String(e)})`);
+  }
+  if (installedVersion === null) {
+    return no('py-kodo is not installed in the venv — this is a first install, not an upgrade');
+  }
+  if (compareVersions(extensionVersion, installedVersion) <= 0) {
+    return {
+      needsUpgrade: false,
+      installedVersion,
+      extensionVersion,
+      reason: `py-kodo ${installedVersion} is already >= extension ${extensionVersion}`,
+    };
+  }
+  return {
+    needsUpgrade: true,
+    installedVersion,
+    extensionVersion,
+    reason: `py-kodo ${installedVersion} is older than extension ${extensionVersion}`,
+  };
 }

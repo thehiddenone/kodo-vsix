@@ -27,6 +27,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { initKodoDiagnostics, showKodoDiagnostics } from './diagnostics';
 import { makeRequest } from './envelope';
 import type { Envelope } from './envelope';
 import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-provider';
@@ -59,6 +60,11 @@ import { stableWindowId } from './extension/window-id';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   state.extensionContext = context;
+  // First thing, before anything that might log: the "Kodo" diagnostic channel
+  // has to exist unconditionally to be listed in the Output view — see
+  // `diagnostics.ts` on why creating it lazily made it invisible on exactly
+  // the machines that needed it.
+  initKodoDiagnostics(context);
   state.projectRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
   state.physicalRoot = state.projectRoot ? path.dirname(state.projectRoot) : '';
   state.hasWorkspace = state.projectRoot.length > 0;
@@ -232,6 +238,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('kodo.useCloudLLMs', () => setMode('cloud')),
     vscode.commands.registerCommand('kodo.useLocalLLM', () => setMode('local')),
     vscode.commands.registerCommand('kodo.pickSession', () => pickSession()),
+    vscode.commands.registerCommand('kodo.showDiagnostics', () => showKodoDiagnostics()),
   );
 
   // Edit Control review gate (WS_PROTOCOL.md §6.5b) — the read-only content

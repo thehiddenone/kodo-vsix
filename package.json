@@ -79,6 +79,10 @@
       {
         "command": "kodo.addFeedback",
         "title": "Kōdo: Add Feedback"
+      },
+      {
+        "command": "kodo.showDiagnostics",
+        "title": "Kōdo: Show Diagnostics Log"
       }
     ],
     "menus": {
