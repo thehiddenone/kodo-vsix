@@ -222,6 +222,14 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
     high: 'claude-opus-5',
     max: 'claude-fable-5',
   },
+  // Only 3 GPT-5.6 SKUs exist for 4 effort tiers -- Terra covers both
+  // "medium" and "high", Sol is reserved for "max" only.
+  openai: {
+    low: 'gpt-5.6-luna',
+    medium: 'gpt-5.6-terra',
+    high: 'gpt-5.6-terra',
+    max: 'gpt-5.6-sol',
+  },
 };
 
 /** vendor -> effort -> model_id, mirrors settings.json's `models.cloud`, filled in with defaults. */

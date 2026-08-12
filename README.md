@@ -67,9 +67,9 @@ Then pick how you want to drive it.
 
 ### Path B — a cloud model
 
-**Kōdo: Settings** → **Anthropic** → add an API key, assign models to the four effort tiers, done. Keys live in VS Code's encrypted secret storage, never in a file or an environment variable, and are handed to the local server over the loopback socket at runtime.
+**Kōdo: Settings** → **Anthropic** or **OpenAI** → add an API key, assign models to the four effort tiers, done. Keys live in VS Code's encrypted secret storage, never in a file or an environment variable, and are handed to the local server over the loopback socket at runtime.
 
-Anthropic is the only cloud vendor wired up today. The other tabs — OpenAI, Google, Meta, Alibaba, DeepSeek, Kimi, OpenRouter — exist in the settings panel as honest "coming soon" placeholders rather than as working integrations pretending otherwise.
+Anthropic and OpenAI are the two cloud vendors wired up today. The other tabs — Google, Meta, Alibaba, DeepSeek, Kimi, OpenRouter — exist in the settings panel as honest "coming soon" placeholders rather than as working integrations pretending otherwise.
 
 <!-- SCREENSHOT SLOT 2 — Kōdo Settings, Local Inference tab: the model catalogue with hardware-fit badges and a download in progress. Shows off the thing that took the longest to build.
 <img src="https://raw.githubusercontent.com/thehiddenone/kodo-vsix/main/images/screenshot-local-inference.png" alt="Local Inference settings with the model catalogue" width="900">
