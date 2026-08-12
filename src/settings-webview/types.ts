@@ -201,6 +201,8 @@ export interface LocalRegistryEntry {
   min_memory?: number;
   memory?: number;
   llm_author?: string;
+  license_name?: string;
+  license_url?: string;
   llamacpp_version?: number;
   installed: boolean;
   installed_path?: string;

@@ -20,7 +20,7 @@ export function beginServerStartupProgress(): void {
   }
   vscode.window
     .withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Starting the local Kōdo server…', cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: 'Starting local Kōdo server…', cancellable: false },
       (progress) =>
         new Promise<void>((resolve) => {
           state.serverStartProgressReporter = progress;

@@ -242,6 +242,10 @@ export interface LocalRegistryEntry {
   memory: number;
   /** Org/company that produced the original (unquantized) model, e.g. "Alibaba Cloud". `hardcoded_hf` only — "" otherwise. */
   llm_author: string;
+  /** Human-readable name of the original model's license, e.g. "Apache License 2.0" or "OpenMDW-1.1". `hardcoded_hf` only — "" otherwise. */
+  license_name: string;
+  /** Link to the license text named by `license_name`. `hardcoded_hf` only — "" otherwise. */
+  license_url: string;
   /** Minimum llama.cpp build number (matching the `b<N>` scheme reported by the installed build) this LLM needs; 0 = any version works. */
   llamacpp_version: number;
   /**

@@ -62,6 +62,13 @@ export function ModelCard({
         <div className="model-meta-line"><span className="meta-label">Size: </span>{entry.size_hint}</div>
       )}
 
+      {entry.license_name && entry.license_url && (
+        <div className="model-meta-line">
+          <span className="meta-label">License: </span>
+          <a href={entry.license_url}>{entry.license_name}</a>
+        </div>
+      )}
+
       {tip && <div className="hw-tip">{tip}</div>}
 
       {warning && <div className={`ram-warning ${warning.level}`}>{warning.text}</div>}
