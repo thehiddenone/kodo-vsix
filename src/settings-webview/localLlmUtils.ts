@@ -328,6 +328,44 @@ export interface LlamaCppVersionWarning {
   text: string;
 }
 
+/**
+ * Parse a `"bN"` llama.cpp version string into its bare build number, or
+ * `null` if it isn't one.
+ *
+ * Exists so build numbers are never compared as *strings*: `"b9876" > "b10000"`
+ * is `true` lexicographically and wrong, which would silently misjudge every
+ * comparison once llama.cpp crossed a digit boundary.
+ */
+export function llamaCppBuildNumber(version: string | null): number | null {
+  if (!version) { return null; }
+  const parsed = parseInt(version.replace(/^b/i, ''), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * True when the installed llama.cpp build is at least the latest one GitHub
+ * reports — i.e. `llamacpp.update` would decline to do anything.
+ *
+ * Mirrors the server's own short-circuit condition (`installed.build >=
+ * version` in `_handle_llamacpp_update`, kodo doc/WS_PROTOCOL.md §7.6), `>=`
+ * included: a build *ahead* of the published latest (a manually pinned
+ * newer/nightly one) is equally "nothing to update to".
+ *
+ * Returns `false` whenever either side is unknown — not installed at all, or
+ * no `latestVersion` yet because the panel hasn't fetched one or GitHub was
+ * unreachable. "Can't tell" must never present as "up to date", since that
+ * would disable the button precisely when the user most needs it.
+ */
+export function llamaCppIsUpToDate(
+  installedVersion: string | null,
+  latestVersion: string | null,
+): boolean {
+  const installed = llamaCppBuildNumber(installedVersion);
+  const latest = llamaCppBuildNumber(latestVersion);
+  if (installed === null || latest === null) { return false; }
+  return installed >= latest;
+}
+
 // entry.llamacpp_version is a bare build number (0 = "any version works —
 // don't warn"); the installed version is the "b<N>" string llama-server
 // itself reports (see doc/WS_PROTOCOL.md §4.1, doc/LLM_REGISTRY.md §4.4).
@@ -339,8 +377,8 @@ export function llamacppVersionWarning(
 ): LlamaCppVersionWarning | null {
   const required = entry.llamacpp_version || 0;
   if (required <= 0 || !installedVersion) { return null; }
-  const installed = parseInt(installedVersion.replace(/^b/i, ''), 10);
-  if (!Number.isFinite(installed) || installed >= required) { return null; }
+  const installed = llamaCppBuildNumber(installedVersion);
+  if (installed === null || installed >= required) { return null; }
   return {
     level: 'red',
     text: `⛔ The installed llama.cpp (b${installed}) does not support this LLM — it requires at least b${required}. Update llama.cpp to run it.`,

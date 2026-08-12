@@ -156,7 +156,7 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
 
   if (env.kind === 'event' && evtType === 'error') {
     const message = typeof env.payload.message === 'string' ? env.payload.message : 'Unknown error';
-    if (env.payload.code === 'local_llm_error') {
+    if (env.payload.code === 'local_llm_error' || env.payload.code === 'llamacpp_uninstall_failed') {
       vscode.window.showErrorMessage(`Kōdo: ${message}`);
     }
     return;

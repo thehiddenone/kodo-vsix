@@ -41,7 +41,7 @@ import { handleControlEnvelope } from './extension/control-channel';
 import { sendControl, sendControlHello } from './extension/control-send';
 import { createProject } from './extension/create-project';
 import { openCloudAiSettings, openKodoSettings, openLocalInferenceSettings } from './extension/kodo-settings-bridge';
-import { installLlamaCpp, startLlamaCpp } from './extension/llamacpp';
+import { abortLlamaCppInstallOp, installLlamaCpp, startLlamaCpp } from './extension/llamacpp';
 import { pushLocalInferenceState, setActiveLocalModel, setActiveProfile } from './extension/local-llm-registry';
 import { beginServerStartupProgress, endServerStartupProgress, handleServerStartFailure, launchKodoServer, showTransientNotification } from './extension/server-lifecycle';
 import {
@@ -118,6 +118,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             endServerStartupProgress();
             showTransientNotification('Kōdo: server is connected.');
           }
+        } else {
+          // An install/update op streams its progress over this connection and
+          // is only ever finished by a terminal frame on it, so a drop strands
+          // the notification (and the busy flag that gates every retry) with no
+          // other way out. See `abortLlamaCppInstallOp`.
+          abortLlamaCppInstallOp('lost the connection to the Kōdo server');
         }
       },
       () => handleServerStartFailure(port, 'the server did not respond'),

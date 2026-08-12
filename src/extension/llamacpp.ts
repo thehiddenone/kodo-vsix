@@ -130,6 +130,30 @@ function runLlamaCppInstallOp(request: Envelope, title: string): void {
     .then(undefined, () => undefined);
 }
 
+/**
+ * Tear down an in-flight install/update op's progress notification and busy
+ * state — the client-side backstop for "the terminal progress frame never
+ * arrives". The server now guarantees it sends one (`_stream_llamacpp_progress`
+ * in kodo `server/_app.py` synthesizes a `percent: -1` frame when the work
+ * raises before reporting anything itself), but a dropped control connection
+ * mid-install can still swallow it, and there is no other way out:
+ * `onLlamaProgress` dismisses the notification only on `100`/`< 0`, and
+ * `runLlamaCppInstallOp`'s own re-entrancy guard turns every retry into a
+ * silent no-op while `llamaInstallingState` stays `true`. Without this, one
+ * lost frame wedges llama.cpp management until the window is reloaded.
+ */
+export function abortLlamaCppInstallOp(reason: string): void {
+  if (!state.llamaInstallingState) { return; }
+  state.llamaInstallingState = false;
+  state.sidebarProvider?.update({ llamaInstalling: false });
+  KodoSettingsPanel.instance?.update({ llamaCpp: llamaCppInfoForPanel() });
+  vscode.window.showErrorMessage(`Kōdo: llama.cpp installation interrupted — ${reason}`);
+  state.llamaProgressReject?.(new Error(reason));
+  state.llamaProgressReporter = null;
+  state.llamaProgressResolve = null;
+  state.llamaProgressReject = null;
+}
+
 export function installLlamaCpp(): void {
   runLlamaCppInstallOp(makeRequest('llamacpp.install'), 'Installing llama.cpp');
 }
@@ -173,9 +197,18 @@ export async function uninstallLlamaCpp(): Promise<void> {
   state.sidebarProvider?.update({ llamaInstalling: true });
   KodoSettingsPanel.instance?.update({ llamaCpp: llamaCppInfoForPanel() });
   try {
-    await sendControlAwait('llamacpp.uninstall');
-    state.llamaInstalledState = false;
-    state.llamaVersionState = '';
+    // 30s, not the 5s default: the server stops both llama-server processes
+    // and then retries the directory delete with backoff (Windows releases a
+    // stopped process's image handles asynchronously), so the ack can take
+    // several seconds to arrive on a slow machine.
+    const resp = await sendControlAwait('llamacpp.uninstall', {}, 30_000);
+    // Trust the ack over the request: it reports what is actually on disk,
+    // which is not necessarily "gone" — the delete can fail (a matching
+    // `llamacpp_uninstall_failed` error event raises the toast), and claiming
+    // success here would leave the panel out of step with reality.
+    state.llamaInstalledState = resp.llama_installed === true;
+    state.llamaVersionState =
+      typeof resp.llama_version === 'string' ? resp.llama_version : '';
   } catch {
     vscode.window.showErrorMessage('Kōdo: could not reach the server to uninstall llama.cpp.');
   } finally {
