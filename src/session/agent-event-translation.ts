@@ -67,20 +67,12 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     const waiting = Boolean(env.payload.waiting);
     const reason = String(env.payload.reason ?? 'queued');
     const retryIn = typeof env.payload.retry_in_seconds === 'number' ? env.payload.retry_in_seconds : null;
+    // Throttle notice surfaces as a dismissible in-webview toast (ThrottleToast,
+    // driven by this same 'llm_waiting' message) rather than a native VS Code
+    // notification — the previous `withProgress` toast had no close affordance
+    // (cancellable: false) and auto-dismissed after a hardcoded 60s regardless
+    // of the actual retry delay.
     post({ type: 'llm_waiting', waiting, reason, retryIn });
-    if (waiting && reason === 'throttled' && retryIn) {
-      const mins = Math.max(1, Math.round(retryIn / 60));
-      void vscode.window
-        .withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: `Kōdo: rate-limited by the LLM provider — retrying in ~${mins} min`,
-            cancellable: false,
-          },
-          () => new Promise<void>((resolve) => setTimeout(resolve, 60_000)),
-        )
-        .then(undefined, () => undefined);
-    }
     return true;
   }
 

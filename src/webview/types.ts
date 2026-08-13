@@ -552,6 +552,8 @@ export interface State {
   awaitingLlm: boolean;
   /** Gateway queue/throttle wait state, or null when not waiting. Transient. */
   llmWaiting: { reason: string; retryIn: number | null } | null;
+  /** Dismissible toast shown while `llmWaiting.reason === 'throttled'`; user-closeable independent of the underlying wait. Transient. */
+  throttleToast: { retryIn: number | null } | null;
   /** Live tool-call argument text accumulating from the current call. Transient. */
   streamingToolgen: string;
   /** True while ToolCallArgDelta fragments are arriving (shows ToolgenBlock). */
@@ -688,6 +690,7 @@ export type Action =
   | { type: 'sampling_modal_open'; open: boolean }
   | { type: 'resume_offer'; sessionId: string }
   | { type: 'resume_dismissed' }
+  | { type: 'throttle_toast_dismissed' }
   | { type: 'session_name'; name: string }
   | { type: 'session_naming'; active: boolean }
   | { type: 'session_cleared' }

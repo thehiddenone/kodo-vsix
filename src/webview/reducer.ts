@@ -291,6 +291,7 @@ export function reducer(state: State, action: Action): State {
         streaming: false,
         awaitingLlm: false,
         llmWaiting: null,
+        throttleToast: null,
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -340,12 +341,19 @@ export function reducer(state: State, action: Action): State {
     case 'llm_turn_start':
       // A new turn begins; clear any leftover toolgen indicator (e.g. from a
       // cancelled prior turn that never produced a tool_call entry).
-      return { ...state, llmWaiting: null, awaitingLlm: true, thinkingStartedAt: null, streamingToolgen: '', toolgenActive: false, toolgenToolName: '', toolgenStartedAt: null };
-    case 'llm_waiting':
+      return { ...state, llmWaiting: null, throttleToast: null, awaitingLlm: true, thinkingStartedAt: null, streamingToolgen: '', toolgenActive: false, toolgenToolName: '', toolgenStartedAt: null };
+    case 'llm_waiting': {
+      const throttled = action.waiting && action.reason === 'throttled';
       return {
         ...state,
         llmWaiting: action.waiting ? { reason: action.reason, retryIn: action.retryIn } : null,
+        // Re-shown on every fresh throttle signal even if a prior one was dismissed;
+        // cleared once the wait resolves (success or otherwise stops being 'throttled').
+        throttleToast: throttled ? { retryIn: action.retryIn } : action.waiting ? state.throttleToast : null,
       };
+    }
+    case 'throttle_toast_dismissed':
+      return { ...state, throttleToast: null };
     case 'tool_call': {
       // A buffered live 'tool_call' frame can be replayed after session_history
       // already seeded a (possibly more complete) entry for the same call — a
@@ -418,7 +426,7 @@ export function reducer(state: State, action: Action): State {
     case 'thinking_token':
       return { ...state, streamingThinking: state.streamingThinking + action.text, thinkingActive: true, thinkingStartedAt: state.thinkingStartedAt ?? Date.now(), awaitingLlm: false };
     case 'token':
-      return { ...state, streamingTokens: state.streamingTokens + action.text, streaming: true, thinkingActive: false, awaitingLlm: false, llmWaiting: null };
+      return { ...state, streamingTokens: state.streamingTokens + action.text, streaming: true, thinkingActive: false, awaitingLlm: false, llmWaiting: null, throttleToast: null };
     case 'toolgen_token': {
       // On the first fragment, commit the visible thinking/text streamed so far
       // (the sentence is complete) so the "Generating…" block sits below it.
@@ -449,6 +457,7 @@ export function reducer(state: State, action: Action): State {
         thinkingStartedAt: null,
         streaming: false,
         llmWaiting: null,
+        throttleToast: null,
         // Clear the "Awaiting response" spinner too. It's normally cleared by the
         // first token/thinking delta, but a turn that ends with zero output (e.g.
         // an immediate LLM error) reaches stream_end with it still set — leaving
@@ -925,6 +934,7 @@ export function reducer(state: State, action: Action): State {
         streaming: false,
         awaitingLlm: false,
         llmWaiting: null,
+        throttleToast: null,
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -954,6 +964,7 @@ export function reducer(state: State, action: Action): State {
         streaming: false,
         awaitingLlm: false,
         llmWaiting: null,
+        throttleToast: null,
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -981,6 +992,7 @@ export function reducer(state: State, action: Action): State {
         streaming: false,
         awaitingLlm: false,
         llmWaiting: null,
+        throttleToast: null,
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -1105,6 +1117,7 @@ export function reducer(state: State, action: Action): State {
         streaming: false,
         awaitingLlm: false,
         llmWaiting: null,
+        throttleToast: null,
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -1134,6 +1147,7 @@ export function reducer(state: State, action: Action): State {
         streaming: false,
         awaitingLlm: false,
         llmWaiting: null,
+        throttleToast: null,
         streamingToolgen: '',
         toolgenActive: false,
         toolgenToolName: '',
@@ -1229,6 +1243,7 @@ export const initial: State = {
   resumeSessionId: null,
   awaitingLlm: false,
   llmWaiting: null,
+  throttleToast: null,
   streamingToolgen: '',
   toolgenActive: false,
   toolgenToolName: '',

@@ -7,6 +7,7 @@ import type { SamplingParamSpec } from '../llm-registry-types';
 import { parseSamplingValues } from '../llm-registry-types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
+import { ThrottleToast } from './ThrottleToast';
 import { UsagePanel } from './UsagePanel';
 import { SessionEntryView } from './SessionEntryView';
 import { SubsessionGroupView } from './SubsessionGroupView';
@@ -544,6 +545,14 @@ export function App() {
 
   return (
     <div style={styles.root}>
+      {/* Rate-limit toast (position: fixed — placement in the tree doesn't matter) */}
+      {state.throttleToast !== null && (
+        <ThrottleToast
+          retryIn={state.throttleToast.retryIn}
+          onClose={() => dispatch({ type: 'throttle_toast_dismissed' })}
+        />
+      )}
+
       {/* Resume banner */}
       {state.resumeSessionId !== null && (
         <ResumeBanner onResume={handleResume} onDismiss={() => dispatch({ type: 'resume_dismissed' })} />
