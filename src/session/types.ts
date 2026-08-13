@@ -73,7 +73,15 @@ export interface LastCallTokens {
 }
 
 export interface UsageSummary {
-  cumulativeUsd: number;
+  /** Every input token processed so far this session (main + all
+   *  subsessions), cached or not. */
+  cumulativeInputTokens: number;
+  /** The subset of {@link cumulativeInputTokens} that were NOT served from
+   *  cache. Equal to it for a session that has never made a caching cloud
+   *  call — shown separately only when it diverges (kodo/doc/WS_PROTOCOL.md §5.7). */
+  cumulativeInputTokensUncached: number;
+  /** Every output token generated so far this session (main + all subsessions). */
+  cumulativeOutputTokens: number;
   lastCallTokens: LastCallTokens | null;
 }
 

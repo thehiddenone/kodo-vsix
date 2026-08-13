@@ -143,8 +143,8 @@ export const styles = {
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
   usageName: { marginBottom: '2px', color: 'var(--vscode-foreground)' },
-  usageCostLine: { display: 'flex', alignItems: 'center', flexWrap: 'wrap' as const, gap: '2px' },
-  usageTotal: { fontVariantNumeric: 'tabular-nums' },
+  usageStatsLine: { display: 'flex', alignItems: 'center', flexWrap: 'wrap' as const, gap: '2px' },
+  usageTotals: { fontVariantNumeric: 'tabular-nums' },
   usageDetail: { opacity: 0.8 },
   compactBtn: {
     marginLeft: '8px',

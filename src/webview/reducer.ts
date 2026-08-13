@@ -530,7 +530,13 @@ export function reducer(state: State, action: Action): State {
     case 'usage': {
       const t = action.lastCallTokens;
       if (t === null) {
-        return { ...state, cumulativeUsd: action.cumulativeUsd, lastCallTokens: null };
+        return {
+          ...state,
+          cumulativeInputTokens: action.cumulativeInputTokens,
+          cumulativeInputTokensUncached: action.cumulativeInputTokensUncached,
+          cumulativeOutputTokens: action.cumulativeOutputTokens,
+          lastCallTokens: null,
+        };
       }
       const baseSession = commitStreaming(state);
       const statusEntry: SessionEntry = {
@@ -543,7 +549,9 @@ export function reducer(state: State, action: Action): State {
       };
       return {
         ...state,
-        cumulativeUsd: action.cumulativeUsd,
+        cumulativeInputTokens: action.cumulativeInputTokens,
+        cumulativeInputTokensUncached: action.cumulativeInputTokensUncached,
+        cumulativeOutputTokens: action.cumulativeOutputTokens,
         lastCallTokens: action.lastCallTokens,
         awaitingLlm: false,
         streamingTokens: '',
@@ -1188,7 +1196,9 @@ export const initial: State = {
   thinkingStartedAt: null,
   streaming: false,
   lastPong: null,
-  cumulativeUsd: 0,
+  cumulativeInputTokens: 0,
+  cumulativeInputTokensUncached: 0,
+  cumulativeOutputTokens: 0,
   lastCallTokens: null,
   fileEvents: [],
   pendingGate: null,

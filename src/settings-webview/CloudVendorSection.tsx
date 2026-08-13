@@ -73,12 +73,52 @@ function EffortSection({ vendor, info, effort, modelId }: {
   );
 }
 
-function CloudVendorPanel({ vendor, info, keys, modelsByVendor, onAddKey }: {
+/** Meta-only: the account-wide "contributor" pricing tier toggle
+ * (kodo/doc/SETTINGS.md §2.2a) -- trades a heavy discount for permission to
+ * train future Meta models on the account's prompts/completions. Off by
+ * default; turning it on shows a persistent warning (reusing the same
+ * `.ram-warning.yellow` treatment the Local Inference tab uses for its own
+ * "heads up" banners) since real-world eligibility is country-restricted and
+ * kodo-vsix has no way to verify it client-side. */
+function MetaContributorSection({ enabled, onChange }: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div>
+      <hr className="section-divider" />
+      <div className="section-heading">Contributor tier</div>
+      <p className="intro-text">
+        Meta offers a heavily discounted "contributor" tier in exchange for permission to use your prompts
+        and completions to train future Meta models. Off by default — your traffic is never used for
+        training unless you turn this on.
+      </p>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onChange((e.target as HTMLInputElement).checked)}
+        />
+        Enable the contributor tier for Meta
+      </label>
+      {enabled && (
+        <div className="ram-warning yellow">
+          ⚠️ The contributor tier is only available in selected countries. Check Meta's Model API
+          documentation online to confirm your account is eligible before relying on it.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CloudVendorPanel({ vendor, info, keys, modelsByVendor, onAddKey, metaContributorTier, onSetMetaContributorTier }: {
   vendor: string;
   info: CloudVendorRegistryInfo;
   keys: ApiKeyEntry[];
   modelsByVendor: Record<string, string>;
   onAddKey: () => void;
+  metaContributorTier: boolean;
+  onSetMetaContributorTier: (enabled: boolean) => void;
 }) {
   const vendorMeta = CLOUD_VENDORS[vendor] || { icon: '🧩' };
   return (
@@ -97,6 +137,9 @@ function CloudVendorPanel({ vendor, info, keys, modelsByVendor, onAddKey }: {
           <EffortSection vendor={vendor} info={info} effort={effort} modelId={modelsByVendor[effort]} />
         </div>
       ))}
+      {vendor === 'meta' && (
+        <MetaContributorSection enabled={metaContributorTier} onChange={onSetMetaContributorTier} />
+      )}
     </div>
   );
 }
@@ -119,9 +162,13 @@ interface CloudVendorSectionProps {
   modelsByVendor: Record<string, Record<string, string>>;
   keysByVendor: Record<string, ApiKeyEntry[]>;
   onAddKey: (vendor: string) => void;
+  metaContributorTier: boolean;
+  onSetMetaContributorTier: (enabled: boolean) => void;
 }
 
-export function CloudVendorSection({ vendor, cloudRegistry, modelsByVendor, keysByVendor, onAddKey }: CloudVendorSectionProps) {
+export function CloudVendorSection({
+  vendor, cloudRegistry, modelsByVendor, keysByVendor, onAddKey, metaContributorTier, onSetMetaContributorTier,
+}: CloudVendorSectionProps) {
   const info = cloudRegistry[vendor];
   if (!info) {
     return <CloudComingSoon vendor={vendor} />;
@@ -133,6 +180,8 @@ export function CloudVendorSection({ vendor, cloudRegistry, modelsByVendor, keys
       keys={keysByVendor[vendor] || []}
       modelsByVendor={modelsByVendor[vendor] || {}}
       onAddKey={() => onAddKey(vendor)}
+      metaContributorTier={metaContributorTier}
+      onSetMetaContributorTier={onSetMetaContributorTier}
     />
   );
 }

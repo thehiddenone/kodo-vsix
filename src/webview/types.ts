@@ -464,7 +464,14 @@ export interface State {
   thinkingStartedAt: number | null;
   streaming: boolean;
   lastPong: string | null;
-  cumulativeUsd: number;
+  /** Every input token processed so far this session (main + all
+   *  subsessions), cached or not. */
+  cumulativeInputTokens: number;
+  /** The subset of {@link cumulativeInputTokens} not served from cache;
+   *  shown separately only when it diverges from the total. */
+  cumulativeInputTokensUncached: number;
+  /** Every output token generated so far this session (main + all subsessions). */
+  cumulativeOutputTokens: number;
   lastCallTokens: LastCallTokens | null;
   fileEvents: FileEventData[];
   pendingGate: GateData | null;
@@ -632,7 +639,7 @@ export type Action =
   | { type: 'subsession_ended'; displayName: string; parentDisplayName: string; failed: boolean }
   | { type: 'prompt_sent'; text: string }
   | { type: 'restore_prompt'; text: string }
-  | { type: 'usage'; cumulativeUsd: number; lastCallTokens: LastCallTokens | null; durationSeconds: number }
+  | { type: 'usage'; cumulativeInputTokens: number; cumulativeInputTokensUncached: number; cumulativeOutputTokens: number; lastCallTokens: LastCallTokens | null; durationSeconds: number }
   | { type: 'file_change'; path: string; kind: string }
   | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
   | { type: 'approval_cleared' }

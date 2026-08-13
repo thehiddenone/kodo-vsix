@@ -241,6 +241,10 @@ export interface KodoSettingsState {
   cloudRegistry: CloudRegistry;
   modelsByVendor: Record<string, Record<string, string>>;
   keysByVendor: Record<string, ApiKeyEntry[]>;
+  /** Meta's account-wide "contributor" pricing tier -- `false` (off) by
+   * default; see the Meta tab's contributor toggle in
+   * `CloudVendorSection.tsx`. */
+  metaContributorTier: boolean;
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
   detectedVramGb: number | null;
@@ -340,6 +344,7 @@ export type OutboundMessage =
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }
   | { type: 'set_cloud_model'; vendor: string; effort: EffortLevel; model_id: string }
+  | { type: 'set_meta_contributor_tier'; enabled: boolean }
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }

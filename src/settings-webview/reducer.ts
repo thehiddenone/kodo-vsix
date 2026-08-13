@@ -17,6 +17,7 @@ export const initial: KodoSettingsState = {
   cloudRegistry: {},
   modelsByVendor: {},
   keysByVendor: {},
+  metaContributorTier: false,
   localRegistry: [],
   llamaServerOverridePath: null,
   downloads: [],
@@ -69,6 +70,9 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (data.keysByVendor && typeof data.keysByVendor === 'object') {
     next.keysByVendor = data.keysByVendor;
+  }
+  if (typeof data.metaContributorTier === 'boolean') {
+    next.metaContributorTier = data.metaContributorTier;
   }
   next.localRegistry = data.localRegistry || state.localRegistry;
   next.llamaServerOverridePath = data.llamaServerOverridePath !== undefined

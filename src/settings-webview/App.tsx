@@ -140,6 +140,8 @@ export function App() {
             modelsByVendor={state.modelsByVendor}
             keysByVendor={state.keysByVendor}
             onAddKey={setAddKeyModalVendor}
+            metaContributorTier={state.metaContributorTier}
+            onSetMetaContributorTier={(enabled) => vscode.postMessage({ type: 'set_meta_contributor_tier', enabled })}
           />
         )}
       </div>

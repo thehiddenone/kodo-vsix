@@ -719,7 +719,7 @@ function buildHtml(): string {
     // ----------------------------------------------------------------
     // Cloud mode: vendor list + "Cloud AI settings"
     // ----------------------------------------------------------------
-    const DISABLED_VENDORS = ['Google', 'Meta', 'Alibaba', 'DeepSeek', 'Kimi', 'OpenRouter'];
+    const DISABLED_VENDORS = ['Alibaba', 'DeepSeek', 'Kimi', 'OpenRouter'];
 
     function renderCloudDisclaimer(section) {
       const banner = document.createElement('div');

@@ -35,7 +35,12 @@ export class ActivityCache {
   private stage = 'IDLE';
   private agent: string | null = null;
   private tokens = '';
-  private usage: UsageSummary = { cumulativeUsd: 0, lastCallTokens: null };
+  private usage: UsageSummary = {
+    cumulativeInputTokens: 0,
+    cumulativeInputTokensUncached: 0,
+    cumulativeOutputTokens: 0,
+    lastCallTokens: null,
+  };
   private contextStats: ContextStats | null = null;
   private subsessionContextStats: SubsessionContextStats | null = null;
   private compacting = false;
@@ -98,9 +103,15 @@ export class ActivityCache {
     this.post({ type: 'file_change', ...fe });
   }
 
-  setUsage(cumulativeUsd: number, lastCallTokens: LastCallTokens | null, durationSeconds: number): void {
-    this.usage = { cumulativeUsd, lastCallTokens };
-    this.post({ type: 'usage', cumulativeUsd, lastCallTokens, durationSeconds });
+  setUsage(
+    cumulativeInputTokens: number,
+    cumulativeInputTokensUncached: number,
+    cumulativeOutputTokens: number,
+    lastCallTokens: LastCallTokens | null,
+    durationSeconds: number,
+  ): void {
+    this.usage = { cumulativeInputTokens, cumulativeInputTokensUncached, cumulativeOutputTokens, lastCallTokens };
+    this.post({ type: 'usage', ...this.usage, durationSeconds });
   }
 
   setContextStats(stats: ContextStats, subsessionStats: SubsessionContextStats | null): void {
@@ -146,8 +157,12 @@ export class ActivityCache {
     if (this.tokens) {
       this.post({ type: 'token', text: this.tokens });
     }
-    if (this.usage.lastCallTokens !== null || this.usage.cumulativeUsd > 0) {
-      this.post({ type: 'usage', ...this.usage });
+    if (
+      this.usage.lastCallTokens !== null ||
+      this.usage.cumulativeInputTokens > 0 ||
+      this.usage.cumulativeOutputTokens > 0
+    ) {
+      this.post({ type: 'usage', ...this.usage, durationSeconds: 0 });
     }
     if (this.contextStats !== null) {
       this.post({ type: 'context_stats', ...this.contextStats, subsession: this.subsessionContextStats });

@@ -206,6 +206,12 @@ export function readActiveCloudVendor(): string {
   return typeof value === 'string' && value ? value : DEFAULT_CLOUD_VENDOR;
 }
 
+/** Meta's account-wide "contributor" pricing tier (kodo/doc/SETTINGS.md
+ *  §2.2a) -- `false` (off) unless the settings.json key is explicitly `true`. */
+export function readMetaContributorTier(): boolean {
+  return readSettings()['meta_contributor_tier'] === true;
+}
+
 /**
  * Display-only fallback for vendors/efforts not yet present in
  * ~/.kodo/etc/settings.json — mirrors the kodo server's own
@@ -229,6 +235,22 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
     medium: 'gpt-5.6-terra',
     high: 'gpt-5.6-terra',
     max: 'gpt-5.6-sol',
+  },
+  // Meta has no effort-tiered lineup at all -- Muse Spark 1.2 is the one
+  // model Meta's Model API offers, so it covers all four tiers.
+  meta: {
+    low: 'muse-spark-1.2',
+    medium: 'muse-spark-1.2',
+    high: 'muse-spark-1.2',
+    max: 'muse-spark-1.2',
+  },
+  // Two Gemini SKUs exist for 4 effort tiers -- gemini-3.6-flash covers
+  // medium/high/max, gemini-3.5-flash-lite is reserved for low.
+  google: {
+    low: 'gemini-3.5-flash-lite',
+    medium: 'gemini-3.6-flash',
+    high: 'gemini-3.6-flash',
+    max: 'gemini-3.6-flash',
   },
 };
 

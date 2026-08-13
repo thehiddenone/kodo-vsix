@@ -10,7 +10,7 @@ import type { Envelope } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { CloudRegistry, EffortLevel } from '../llm-registry-types';
 import { sendControl } from './control-send';
-import { readCloudModels, readSettings, writeSettings } from './settings-io';
+import { readCloudModels, readMetaContributorTier, readSettings, writeSettings } from './settings-io';
 import { state } from './state';
 
 /** One entry per vendor in `cloudRegistryState`, keyed by vendor. */
@@ -18,12 +18,18 @@ export function cloudAiStateForPanel(): {
   cloudRegistry: CloudRegistry;
   modelsByVendor: Record<string, Record<string, string>>;
   keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]>;
+  metaContributorTier: boolean;
 } {
   const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
   for (const vendor of Object.keys(state.cloudRegistryState)) {
     keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
   }
-  return { cloudRegistry: state.cloudRegistryState, modelsByVendor: readCloudModels(), keysByVendor };
+  return {
+    cloudRegistry: state.cloudRegistryState,
+    modelsByVendor: readCloudModels(),
+    keysByVendor,
+    metaContributorTier: readMetaContributorTier(),
+  };
 }
 
 /** Push the cloud vendor tabs' fields into the Kōdo Settings panel — a no-op
@@ -48,6 +54,19 @@ export function setCloudModel(vendor: string, effort: EffortLevel, modelId: stri
   cloud[vendor] = vendorMap;
   models['cloud'] = cloud;
   writeSettings({ models });
+  sendControl(makeRequest('config.reload'));
+  pushCloudAiSettingsState();
+}
+
+/** Meta's account-wide "contributor" pricing tier (kodo/doc/SETTINGS.md
+ *  §2.2a, kodo/doc/LLM_REGISTRY.md §3) -- trades a heavy discount for
+ *  permission to train future Meta models on the account's traffic. Same
+ *  plain-settings-write + `config.reload` pattern as `setActiveCloudVendor`/
+ *  `setCloudModel` above: no server-side validation to run, so no dedicated
+ *  WS command. Read fresh by `kodo/runtime/_engine/_llm.py`'s Meta vendor
+ *  factory on every plugin resolution. */
+export function setMetaContributorTier(enabled: boolean): void {
+  writeSettings({ meta_contributor_tier: enabled });
   sendControl(makeRequest('config.reload'));
   pushCloudAiSettingsState();
 }

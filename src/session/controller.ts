@@ -727,7 +727,9 @@ export class SessionController {
     }
 
     if (env.kind === 'event' && evtType === 'usage.update') {
-      const cumulativeUsd = Number(env.payload.cumulative_usd ?? 0);
+      const cumulativeInputTokens = Number(env.payload.cumulative_input_tokens ?? 0);
+      const cumulativeInputTokensUncached = Number(env.payload.cumulative_input_tokens_uncached ?? 0);
+      const cumulativeOutputTokens = Number(env.payload.cumulative_output_tokens ?? 0);
       const durationSeconds = Number(env.payload.duration_seconds ?? 0);
       const raw = env.payload.last_call_tokens;
       const lastCallTokens =
@@ -739,7 +741,13 @@ export class SessionController {
               cache_read: Number((raw as Record<string, unknown>).cache_read ?? 0),
             }
           : null;
-      this.activity.setUsage(cumulativeUsd, lastCallTokens, durationSeconds);
+      this.activity.setUsage(
+        cumulativeInputTokens,
+        cumulativeInputTokensUncached,
+        cumulativeOutputTokens,
+        lastCallTokens,
+        durationSeconds,
+      );
       return;
     }
 

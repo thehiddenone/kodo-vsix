@@ -3,7 +3,9 @@ import type { LastCallTokens, ContextStats, SubsessionContextStats } from './typ
 import { formatTokens } from './format';
 interface UsagePanelProps {
   sessionName: string;
-  cumulativeUsd: number;
+  cumulativeInputTokens: number;
+  cumulativeInputTokensUncached: number;
+  cumulativeOutputTokens: number;
   lastCallTokens: LastCallTokens | null;
   contextStats: ContextStats | null;
   subsessionContextStats: SubsessionContextStats | null;
@@ -11,7 +13,7 @@ interface UsagePanelProps {
   onCompact: () => void;
 }
 
-export function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens, contextStats, subsessionContextStats, compacting, onCompact }: UsagePanelProps) {
+export function UsagePanel({ sessionName, cumulativeInputTokens, cumulativeInputTokensUncached, cumulativeOutputTokens, lastCallTokens, contextStats, subsessionContextStats, compacting, onCompact }: UsagePanelProps) {
   // Always render the header line so the session name is visible from the
   // very first frame — before a title is generated.
   return (
@@ -19,9 +21,12 @@ export function UsagePanel({ sessionName, cumulativeUsd, lastCallTokens, context
       <div style={styles.usageName}>
         Session name: <strong>{sessionName || 'Unnamed Session'}</strong>
       </div>
-      <div style={styles.usageCostLine}>
-        <span style={styles.usageTotal}>
-          Session cost: <strong>${cumulativeUsd.toFixed(4)}</strong>
+      <div style={styles.usageStatsLine}>
+        <span style={styles.usageTotals}>
+          Total input/output tokens: <strong>{cumulativeInputTokens.toLocaleString()}/{cumulativeOutputTokens.toLocaleString()}</strong>
+          {cumulativeInputTokensUncached !== cumulativeInputTokens && (
+            <> ({cumulativeInputTokensUncached.toLocaleString()} uncached)</>
+          )}
         </span>
         {lastCallTokens !== null && (
           <span style={styles.usageDetail}>

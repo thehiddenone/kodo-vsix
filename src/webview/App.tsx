@@ -194,7 +194,9 @@ export function App() {
         case 'usage':
           dispatch({
             type: 'usage',
-            cumulativeUsd: Number(msg.cumulativeUsd ?? 0),
+            cumulativeInputTokens: Number(msg.cumulativeInputTokens ?? 0),
+            cumulativeInputTokensUncached: Number(msg.cumulativeInputTokensUncached ?? 0),
+            cumulativeOutputTokens: Number(msg.cumulativeOutputTokens ?? 0),
             lastCallTokens: (msg.lastCallTokens as LastCallTokens | null) ?? null,
             durationSeconds: Number(msg.durationSeconds ?? 0),
           });
@@ -554,7 +556,9 @@ export function App() {
       {/* Usage panel */}
       <UsagePanel
         sessionName={state.sessionName}
-        cumulativeUsd={state.cumulativeUsd}
+        cumulativeInputTokens={state.cumulativeInputTokens}
+        cumulativeInputTokensUncached={state.cumulativeInputTokensUncached}
+        cumulativeOutputTokens={state.cumulativeOutputTokens}
         lastCallTokens={state.lastCallTokens}
         contextStats={state.contextStats}
         subsessionContextStats={state.subsessionContextStats}
