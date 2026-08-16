@@ -252,6 +252,14 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
     high: 'gemini-3.6-flash',
     max: 'gemini-3.6-flash',
   },
+  // Three Qwen3.8 SKUs exist for 4 effort tiers -- qwen3.8-plus covers both
+  // "medium" and "high", same shape as the openai row above.
+  alibaba: {
+    low: 'qwen3.8-flash',
+    medium: 'qwen3.8-plus',
+    high: 'qwen3.8-plus',
+    max: 'qwen3.8-max',
+  },
 };
 
 /** vendor -> effort -> model_id, mirrors settings.json's `models.cloud`, filled in with defaults. */
