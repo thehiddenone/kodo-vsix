@@ -260,6 +260,15 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
     high: 'qwen3.8-plus',
     max: 'qwen3.8-max',
   },
+  // Two DeepSeek SKUs exist for 4 effort tiers -- a plain 2-2 split (unlike
+  // the openai/alibaba "middle SKU covers two tiers" shape above): V4 Flash
+  // covers low/medium, V4 Pro covers high/max.
+  deepseek: {
+    low: 'deepseek-v4-flash',
+    medium: 'deepseek-v4-flash',
+    high: 'deepseek-v4-pro',
+    max: 'deepseek-v4-pro',
+  },
 };
 
 /** vendor -> effort -> model_id, mirrors settings.json's `models.cloud`, filled in with defaults. */

@@ -67,9 +67,9 @@ Then pick how you want to drive it.
 
 ### Path B — a cloud model
 
-**Kōdo: Settings** → **Anthropic**, **OpenAI**, **Meta**, **Google**, or **Alibaba** → add an API key, assign models to the four effort tiers, done. Keys live in VS Code's encrypted secret storage, never in a file or an environment variable, and are handed to the local server over the loopback socket at runtime. Meta's tab additionally offers an opt-in "contributor" tier — heavily discounted pricing in exchange for permission to train future Meta models on your traffic — off by default and shown with a warning (availability is country-restricted) when turned on.
+**Kōdo: Settings** → **Anthropic**, **OpenAI**, **Meta**, **Google**, **Alibaba**, or **DeepSeek** → add an API key, assign models to the four effort tiers, done. Keys live in VS Code's encrypted secret storage, never in a file or an environment variable, and are handed to the local server over the loopback socket at runtime. Meta's tab additionally offers an opt-in "contributor" tier — heavily discounted pricing in exchange for permission to train future Meta models on your traffic — off by default and shown with a warning (availability is country-restricted) when turned on.
 
-Anthropic, OpenAI, Meta, Google, and Alibaba are the five cloud vendors wired up today. The other tabs — DeepSeek, Kimi, OpenRouter — exist in the settings panel as honest "coming soon" placeholders rather than as working integrations pretending otherwise.
+Anthropic, OpenAI, Meta, Google, Alibaba, and DeepSeek are the six cloud vendors wired up today. The other tabs — Kimi, OpenRouter — exist in the settings panel as honest "coming soon" placeholders rather than as working integrations pretending otherwise.
 
 <!-- SCREENSHOT SLOT 2 — Kōdo Settings, Local Inference tab: the model catalogue with hardware-fit badges and a download in progress. Shows off the thing that took the longest to build.
 <img src="https://raw.githubusercontent.com/thehiddenone/kodo-vsix/main/images/screenshot-local-inference.png" alt="Local Inference settings with the model catalogue" width="900">
@@ -134,7 +134,7 @@ In rough priority order, and with the standard caveat that "roadmap" means "not 
 
 1. **Guided mode earning its keep.** Release is gated on demonstrated capability, not a feature list. A validator harness runs real Kōdo sessions end-to-end — real server, real protocol, real tools and gates, no VS Code and no human — and v1.0 ships when a battery of medium-to-high-complexity scenarios builds cleanly inside it with all generated tests passing: an HTTP/HTTPS server in C++ or Rust, a transactional in-memory database, a distributed-consensus key/value store. That battery has not been cleared.
 2. **Hybrid local↔cloud routing.** Treat local and cloud as one pool: a small local model triages each step and escalates to a frontier model only when the work genuinely needs one, keeping everything routine on your own GPU.
-3. **More cloud providers.** DeepSeek, Kimi, and OpenRouter as an aggregator — the settings tabs are already waiting for them.
+3. **More cloud providers.** Kimi and OpenRouter as an aggregator — the settings tabs are already waiting for them.
 4. **Agent studio.** Let users author their own agents, plus a prompt-helper agent that assists in writing the prompts that drive them.
 5. **Console mode.** A real headless interface, so `py-kodo` is useful without VS Code.
 6. **Spec and code staying in sync.** The north star: the spec as source of truth, code as its derived artifact — update the spec and Kōdo handles the rest. Including teaching the Problem Solver to operate on guided projects so an urgent fix never silently desyncs the two.
