@@ -269,6 +269,15 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
     high: 'deepseek-v4-pro',
     max: 'deepseek-v4-pro',
   },
+  // Two Kimi SKUs exist for 4 effort tiers -- a plain 2-2 split, same shape
+  // as the deepseek row above: kimi-k2.7-code covers low/medium, kimi-k3
+  // covers high/max.
+  kimi: {
+    low: 'kimi-k2.7-code',
+    medium: 'kimi-k2.7-code',
+    high: 'kimi-k3',
+    max: 'kimi-k3',
+  },
 };
 
 /** vendor -> effort -> model_id, mirrors settings.json's `models.cloud`, filled in with defaults. */
