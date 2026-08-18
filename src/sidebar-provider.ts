@@ -719,9 +719,16 @@ function buildHtml(): string {
     // ----------------------------------------------------------------
     // Cloud mode: vendor list + "Cloud AI settings"
     // ----------------------------------------------------------------
-    // OpenRouter (the last entry here) went live 2026-08-17 -- empty for now,
-    // kept as the landing spot for whatever cloud vendor is added next.
+    // All 8 cloud vendors are live -- empty for now, kept as the landing spot
+    // for whatever cloud vendor is added next.
     const DISABLED_VENDORS = [];
+
+    // OpenRouter deliberately has no cloudRegistry entry (no compiled-in
+    // model tuple -- kodo/doc/LLM_REGISTRY.md §3a), so it's never a key of
+    // _state.cloudRegistry and the loop below would otherwise never render a
+    // card for it. Same special-case CloudVendorSection.tsx makes for the
+    // Kōdo Settings webview's vendor nav.
+    const OPENROUTER_DISPLAY_NAME = 'OpenRouter';
 
     function renderCloudDisclaimer(section) {
       const banner = document.createElement('div');
@@ -774,7 +781,11 @@ function buildHtml(): string {
       heading.textContent = 'Select LLM provider';
       section.appendChild(heading);
 
-      const vendors = sortByPinned(Object.keys(_state.cloudRegistry), _state.pinnedCloudVendors, v => v);
+      const vendors = sortByPinned(
+        Object.keys(_state.cloudRegistry).concat(['openrouter']),
+        _state.pinnedCloudVendors,
+        v => v,
+      );
       const pinnedVendorCount = vendors.filter(v => _state.pinnedCloudVendors.includes(v)).length;
 
       vendors.forEach((vendor, index) => {
@@ -782,7 +793,7 @@ function buildHtml(): string {
           section.appendChild(document.createElement('hr')).className = 'pin-divider';
         }
 
-        const info = _state.cloudRegistry[vendor];
+        const displayName = vendor === 'openrouter' ? OPENROUTER_DISPLAY_NAME : _state.cloudRegistry[vendor].display_name;
         const isActive = _state.activeCloudVendor === vendor;
 
         const card = document.createElement('div');
@@ -805,7 +816,7 @@ function buildHtml(): string {
 
         const nameEl = document.createElement('span');
         nameEl.className = 'card-name';
-        nameEl.textContent = info.display_name;
+        nameEl.textContent = displayName;
         header.appendChild(nameEl);
 
         const isPinned = _state.pinnedCloudVendors.includes(vendor);
