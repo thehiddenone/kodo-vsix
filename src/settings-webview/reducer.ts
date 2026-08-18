@@ -18,6 +18,8 @@ export const initial: KodoSettingsState = {
   modelsByVendor: {},
   keysByVendor: {},
   metaContributorTier: false,
+  openRouterCatalog: [],
+  openRouterAutoMode: false,
   localRegistry: [],
   llamaServerOverridePath: null,
   downloads: [],
@@ -73,6 +75,12 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (typeof data.metaContributorTier === 'boolean') {
     next.metaContributorTier = data.metaContributorTier;
+  }
+  if (Array.isArray(data.openRouterCatalog)) {
+    next.openRouterCatalog = data.openRouterCatalog;
+  }
+  if (typeof data.openRouterAutoMode === 'boolean') {
+    next.openRouterAutoMode = data.openRouterAutoMode;
   }
   next.localRegistry = data.localRegistry || state.localRegistry;
   next.llamaServerOverridePath = data.llamaServerOverridePath !== undefined

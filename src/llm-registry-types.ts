@@ -23,6 +23,28 @@ export interface CloudVendorInfo {
 /** Vendor key (e.g. "anthropic") -> that vendor's hardcoded models. */
 export type CloudRegistry = Record<string, CloudVendorInfo>;
 
+/**
+ * One model from OpenRouter's own fetched/cached catalog (doc/LLM_REGISTRY.md
+ * §3a) — a **third**, differently-shaped registry from {@link CloudRegistry}
+ * above: OpenRouter has no compiled-in model tuple, so this list is dynamic
+ * (~414 entries as of 2026-08-17, refreshed server-side on a 12-hour TTL) and
+ * can briefly be `[]` right after a cold server start.
+ */
+export interface OpenRouterModelInfo {
+  id: string;
+  name: string;
+  /** Maximum input context in tokens; `0` if unknown. */
+  context_length: number;
+  /** USD per token. `openrouter/auto`'s own entry reports `-1` for
+   *  `price_prompt`/`price_completion` — a sentinel meaning "depends on
+   *  whichever model this routes a request to", not a real price. */
+  price_prompt: number;
+  price_completion: number;
+  price_cache_read: number;
+  price_cache_write: number;
+  supports_reasoning: boolean;
+}
+
 export type LocalEntryKind = 'hardcoded_hf' | 'custom_hf' | 'custom_file' | 'custom_server_url';
 
 /**
@@ -441,11 +463,17 @@ export function localLaunchWarnings(
   return warnings;
 }
 
-/** Which llama.cpp reasoning-tiering mechanism a `base_llm` uses — see
- * kodo/doc/LLM_REGISTRY.md §4.5. `qwen_reasoning_budget` rides a 6-tier
+/** Which reasoning-tiering mechanism a `base_llm` uses — see
+ * kodo/doc/LLM_REGISTRY.md §4.5/§3a. `qwen_reasoning_budget` rides a 6-tier
  * `--reasoning-budget`/`thinking_budget_tokens` scale; `gpt_oss_reasoning_effort`
- * rides GPT-OSS's built-in 3-tier `reasoning_effort`. */
-export type ThinkingFamily = 'qwen_reasoning_budget' | 'gpt_oss_reasoning_effort';
+ * rides GPT-OSS's built-in 3-tier `reasoning_effort`. `openrouter_reasoning_effort`
+ * is the one non-local entry: OpenRouter's session-controlled `reasoning.effort`
+ * parameter, keyed by the synthetic `base_llm` `"openrouter"` (not a real
+ * local registry entry) rather than any actual local model. */
+export type ThinkingFamily =
+  | 'qwen_reasoning_budget'
+  | 'gpt_oss_reasoning_effort'
+  | 'openrouter_reasoning_effort';
 
 export interface ThinkingFamilyInfo {
   family: ThinkingFamily;

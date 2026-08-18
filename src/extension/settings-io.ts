@@ -212,6 +212,13 @@ export function readMetaContributorTier(): boolean {
   return readSettings()['meta_contributor_tier'] === true;
 }
 
+/** OpenRouter's Cloud AI Settings tab "Auto mode" toggle (kodo/doc/SETTINGS.md
+ *  §2.2b) -- `false` (Manual mode) unless the settings.json key is explicitly
+ *  `true`. */
+export function readOpenRouterAutoMode(): boolean {
+  return readSettings()['openrouter_auto_mode'] === true;
+}
+
 /**
  * Display-only fallback for vendors/efforts not yet present in
  * ~/.kodo/etc/settings.json — mirrors the kodo server's own
@@ -277,6 +284,15 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
     medium: 'kimi-k2.7-code',
     high: 'kimi-k3',
     max: 'kimi-k3',
+  },
+  // OpenRouter has no fixed lineup at all -- every tier defaults to the
+  // router pseudo-model "openrouter/auto", overridable per tier in Manual
+  // mode (kodo/doc/LLM_REGISTRY.md §3a).
+  openrouter: {
+    low: 'openrouter/auto',
+    medium: 'openrouter/auto',
+    high: 'openrouter/auto',
+    max: 'openrouter/auto',
   },
 };
 

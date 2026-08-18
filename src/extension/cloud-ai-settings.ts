@@ -9,9 +9,16 @@ import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { CloudRegistry, EffortLevel } from '../llm-registry-types';
-import { sendControl } from './control-send';
-import { readCloudModels, readMetaContributorTier, readSettings, writeSettings } from './settings-io';
+import { sendControl, sendControlAwait } from './control-send';
+import {
+  readCloudModels,
+  readMetaContributorTier,
+  readOpenRouterAutoMode,
+  readSettings,
+  writeSettings,
+} from './settings-io';
 import { state } from './state';
+import { broadcastThinkingContext } from './thinking-context';
 
 /** One entry per vendor in `cloudRegistryState`, keyed by vendor. */
 export function cloudAiStateForPanel(): {
@@ -19,16 +26,26 @@ export function cloudAiStateForPanel(): {
   modelsByVendor: Record<string, Record<string, string>>;
   keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]>;
   metaContributorTier: boolean;
+  openRouterCatalog: import('../llm-registry-types').OpenRouterModelInfo[];
+  openRouterAutoMode: boolean;
 } {
   const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
   for (const vendor of Object.keys(state.cloudRegistryState)) {
     keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
+  }
+  // OpenRouter has no cloudRegistryState entry (kodo has no compiled-in model
+  // tuple for it) but is still a real vendor an API key can be added for —
+  // make sure it always has a (possibly empty) key list.
+  if (!('openrouter' in keysByVendor)) {
+    keysByVendor.openrouter = cloudCredentials.listKeys('openrouter');
   }
   return {
     cloudRegistry: state.cloudRegistryState,
     modelsByVendor: readCloudModels(),
     keysByVendor,
     metaContributorTier: readMetaContributorTier(),
+    openRouterCatalog: state.openRouterCatalogState,
+    openRouterAutoMode: readOpenRouterAutoMode(),
   };
 }
 
@@ -44,6 +61,11 @@ export function setActiveCloudVendor(vendor: string): void {
   sendControl(makeRequest('config.reload'));
   state.activeCloudVendorState = vendor;
   state.sidebarProvider?.update({ activeCloudVendor: vendor });
+  // OpenRouter is the one cloud vendor with a thinking-tier mechanism
+  // (kodo/doc/LLM_REGISTRY.md §3a) -- switching to or away from it changes
+  // whether the footer's Thinking Level toggle applies, same reason setMode
+  // already does this for the local/cloud switch.
+  broadcastThinkingContext();
 }
 
 export function setCloudModel(vendor: string, effort: EffortLevel, modelId: string): void {
@@ -68,6 +90,34 @@ export function setCloudModel(vendor: string, effort: EffortLevel, modelId: stri
 export function setMetaContributorTier(enabled: boolean): void {
   writeSettings({ meta_contributor_tier: enabled });
   sendControl(makeRequest('config.reload'));
+  pushCloudAiSettingsState();
+}
+
+/** OpenRouter's account-wide "Auto mode" toggle (kodo/doc/SETTINGS.md §2.2b,
+ *  kodo/doc/LLM_REGISTRY.md §3a) -- when enabled, every effort tier resolves
+ *  to the router pseudo-model "openrouter/auto" server-side regardless of
+ *  `models.cloud.openrouter`, which is deliberately left untouched (not
+ *  overwritten) so re-disabling Auto restores whatever was picked per-tier
+ *  in Manual mode. Same plain-settings-write + `config.reload` pattern as
+ *  `setMetaContributorTier` above -- no server-side validation to run beyond
+ *  a boolean, so no dedicated WS command either. */
+export function setOpenRouterAutoMode(enabled: boolean): void {
+  writeSettings({ openrouter_auto_mode: enabled });
+  sendControl(makeRequest('config.reload'));
+  pushCloudAiSettingsState();
+}
+
+/** Re-fetch OpenRouter's model catalog on demand (kodo/doc/WS_PROTOCOL.md
+ *  §7.6h) -- backs the OpenRouter tab's "Refresh model list" button, an
+ *  alternative to the server's own 12-hour background TTL refresh. Unlike
+ *  most of this file's setters, this is a real round trip (one OpenRouter
+ *  API call server-side), so it's async and the caller can show a busy
+ *  state around it if desired. */
+export async function refreshOpenRouterCatalog(): Promise<void> {
+  const resp = await sendControlAwait('openrouter.models.refresh', {});
+  if (Array.isArray(resp.models)) {
+    state.openRouterCatalogState = resp.models as import('../llm-registry-types').OpenRouterModelInfo[];
+  }
   pushCloudAiSettingsState();
 }
 

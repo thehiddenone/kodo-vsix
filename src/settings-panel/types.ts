@@ -13,6 +13,7 @@ import type {
   LlamaArgSpec,
   LocalDownloadState,
   LocalRegistryEntry,
+  OpenRouterModelInfo,
   SamplingParamSpec,
 } from '../llm-registry-types';
 import type { RememberedWorkspace } from '../workspace-resume-policy';
@@ -211,6 +212,17 @@ export interface KodoSettingsState {
    * §2.2a) -- `false` (off) by default; see the Meta tab's contributor
    * toggle in `settings-webview/CloudVendorSection.tsx`. */
   metaContributorTier: boolean;
+  /** OpenRouter's own fetched/cached model catalog (kodo/doc/LLM_REGISTRY.md
+   * §3a) -- a third, dynamic registry separate from `cloudRegistry` above
+   * (OpenRouter has no compiled-in model tuple); `[]` before the server's
+   * first background fetch completes. Drives the OpenRouter tab's searchable
+   * model picker. */
+  openRouterCatalog: OpenRouterModelInfo[];
+  /** OpenRouter's Cloud AI Settings tab "Auto mode" toggle (kodo/doc/SETTINGS.md
+   * §2.2b) -- `false` (Manual mode) by default; when `true`, every effort tier
+   * resolves to "openrouter/auto" server-side and the per-tier pickers are
+   * disabled client-side. */
+  openRouterAutoMode: boolean;
   /** "Local Inference" tab state (former Local Inference Settings panel). */
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
@@ -264,6 +276,8 @@ export type KodoSettingsMessage =
   | { type: 'activate_hf_token'; uuid: string }
   | { type: 'set_cloud_model'; vendor: string; effort: EffortLevel; model_id: string }
   | { type: 'set_meta_contributor_tier'; enabled: boolean }
+  | { type: 'set_openrouter_auto_mode'; enabled: boolean }
+  | { type: 'refresh_openrouter_catalog' }
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }

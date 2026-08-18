@@ -142,6 +142,10 @@ export function App() {
             onAddKey={setAddKeyModalVendor}
             metaContributorTier={state.metaContributorTier}
             onSetMetaContributorTier={(enabled) => vscode.postMessage({ type: 'set_meta_contributor_tier', enabled })}
+            openRouterCatalog={state.openRouterCatalog}
+            openRouterAutoMode={state.openRouterAutoMode}
+            onSetOpenRouterAutoMode={(enabled) => vscode.postMessage({ type: 'set_openrouter_auto_mode', enabled })}
+            onRefreshOpenRouterCatalog={() => vscode.postMessage({ type: 'refresh_openrouter_catalog' })}
           />
         )}
       </div>

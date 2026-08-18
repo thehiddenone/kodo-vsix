@@ -128,6 +128,21 @@ export interface CloudVendorRegistryInfo {
 
 export type CloudRegistry = Record<string, CloudVendorRegistryInfo>;
 
+/** One model from OpenRouter's own fetched/cached catalog (kodo/doc/
+ * LLM_REGISTRY.md §3a) -- a third, dynamic registry separate from
+ * CloudRegistry above (OpenRouter has no compiled-in model tuple). Powers
+ * the OpenRouter tab's searchable model picker. */
+export interface OpenRouterModelInfo {
+  id: string;
+  name: string;
+  context_length: number;
+  price_prompt: number;
+  price_completion: number;
+  price_cache_read: number;
+  price_cache_write: number;
+  supports_reasoning: boolean;
+}
+
 /** Webview-local mirrors of the knob/profile shapes in ../llm-registry-types
  *  (see that file for the full field docs), per this file's
  *  webview-local-copy convention. */
@@ -245,6 +260,12 @@ export interface KodoSettingsState {
    * default; see the Meta tab's contributor toggle in
    * `CloudVendorSection.tsx`. */
   metaContributorTier: boolean;
+  /** OpenRouter's own fetched/cached model catalog -- `[]` before the
+   * server's first background fetch completes. See OpenRouterModelInfo. */
+  openRouterCatalog: OpenRouterModelInfo[];
+  /** OpenRouter's Cloud AI Settings tab "Auto mode" toggle -- `false`
+   * (Manual mode) by default. */
+  openRouterAutoMode: boolean;
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
   detectedVramGb: number | null;
@@ -345,6 +366,8 @@ export type OutboundMessage =
   | { type: 'activate_hf_token'; uuid: string }
   | { type: 'set_cloud_model'; vendor: string; effort: EffortLevel; model_id: string }
   | { type: 'set_meta_contributor_tier'; enabled: boolean }
+  | { type: 'set_openrouter_auto_mode'; enabled: boolean }
+  | { type: 'refresh_openrouter_catalog' }
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }

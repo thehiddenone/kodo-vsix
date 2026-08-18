@@ -7,7 +7,7 @@
  */
 
 import type * as vscode from 'vscode';
-import type { CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
+import type { CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, OpenRouterModelInfo, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
 import type { ServerLauncher } from '../server-launcher';
 import type { SessionController } from '../session/controller';
 import type { SidebarProvider } from '../sidebar-provider';
@@ -61,6 +61,11 @@ interface WindowState {
   // Window-global control/LLM state (sidebar + settings-panel mirror)
   // ---------------------------------------------------------------------
   cloudRegistryState: CloudRegistry;
+  // OpenRouter's own fetched/cached model catalog (doc/LLM_REGISTRY.md §3a)
+  // -- a third, dynamic registry, separate from cloudRegistryState above
+  // (OpenRouter has no compiled-in model tuple). From hello.ack's
+  // `openrouter_catalog` field and the `openrouter.models.refresh` reply.
+  openRouterCatalogState: OpenRouterModelInfo[];
   activeCloudVendorState: string;
   localRegistryState: LocalRegistryEntry[];
   activeLocalModelState: string;
@@ -158,6 +163,7 @@ export const state: WindowState = {
   windowId: '',
 
   cloudRegistryState: {},
+  openRouterCatalogState: [],
   activeCloudVendorState: DEFAULT_CLOUD_VENDOR,
   localRegistryState: [],
   activeLocalModelState: '',

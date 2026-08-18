@@ -11,7 +11,7 @@ import { makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import * as hfTokens from '../hf-tokens';
 import { KodoSettingsPanel } from '../settings-panel/panel';
-import type { CloudRegistry } from '../llm-registry-types';
+import type { CloudRegistry, OpenRouterModelInfo } from '../llm-registry-types';
 import { pushCloudAiSettingsState } from './cloud-ai-settings';
 import { sendControl } from './control-send';
 import { resumePendingCreateProjectPrompt } from './create-project';
@@ -70,6 +70,9 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
   if (env.kind === 'response' && evtType === 'hello.ack') {
     if (env.payload.cloud_registry && typeof env.payload.cloud_registry === 'object') {
       state.cloudRegistryState = env.payload.cloud_registry as CloudRegistry;
+    }
+    if (Array.isArray(env.payload.openrouter_catalog)) {
+      state.openRouterCatalogState = env.payload.openrouter_catalog as OpenRouterModelInfo[];
     }
     if (typeof env.payload.active_cloud_vendor === 'string') {
       state.activeCloudVendorState = env.payload.active_cloud_vendor;

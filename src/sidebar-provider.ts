@@ -719,7 +719,9 @@ function buildHtml(): string {
     // ----------------------------------------------------------------
     // Cloud mode: vendor list + "Cloud AI settings"
     // ----------------------------------------------------------------
-    const DISABLED_VENDORS = ['OpenRouter'];
+    // OpenRouter (the last entry here) went live 2026-08-17 -- empty for now,
+    // kept as the landing spot for whatever cloud vendor is added next.
+    const DISABLED_VENDORS = [];
 
     function renderCloudDisclaimer(section) {
       const banner = document.createElement('div');

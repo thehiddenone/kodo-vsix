@@ -12,7 +12,14 @@ import { makeRequest } from '../envelope';
 import * as hfTokens from '../hf-tokens';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { KodoSettingsMessage, SessionListEntry } from '../settings-panel/types';
-import { cloudAiStateForPanel, pushCloudAiSettingsState, setCloudModel, setMetaContributorTier } from './cloud-ai-settings';
+import {
+  cloudAiStateForPanel,
+  pushCloudAiSettingsState,
+  refreshOpenRouterCatalog,
+  setCloudModel,
+  setMetaContributorTier,
+  setOpenRouterAutoMode,
+} from './cloud-ai-settings';
 import { sendControl, sendControlAwait } from './control-send';
 import {
   fetchLlamaCppVersionInfo,
@@ -357,6 +364,18 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'set_meta_contributor_tier') {
     setMetaContributorTier(msg.enabled);
+    return;
+  }
+  if (msg.type === 'set_openrouter_auto_mode') {
+    setOpenRouterAutoMode(msg.enabled);
+    return;
+  }
+  if (msg.type === 'refresh_openrouter_catalog') {
+    try {
+      await refreshOpenRouterCatalog();
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to refresh the OpenRouter model list.');
+    }
     return;
   }
   if (msg.type === 'add_key') {

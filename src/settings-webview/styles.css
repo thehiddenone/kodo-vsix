@@ -966,3 +966,58 @@
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
     }
+
+    /* --- OpenRouter model picker: search-as-you-type over ~414 models --- */
+    .model-picker { position: relative; max-width: 420px; }
+    .model-picker-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 3px 5px;
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: 0.92em;
+    }
+    .model-picker-input:disabled { opacity: 0.5; cursor: default; }
+    .model-picker-dropdown {
+      position: absolute;
+      z-index: 10;
+      top: calc(100% + 2px);
+      left: 0;
+      right: 0;
+      max-height: 260px;
+      overflow-y: auto;
+      background: var(--vscode-dropdown-background);
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+    .model-picker-option {
+      padding: 5px 8px;
+      cursor: pointer;
+      font-size: 0.88em;
+    }
+    .model-picker-option:hover, .model-picker-option.active {
+      background: var(--vscode-list-hoverBackground);
+    }
+    .model-picker-option-id {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 0.92em;
+    }
+    .model-picker-option-name {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+    }
+    .model-picker-empty {
+      padding: 6px 8px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.88em;
+    }
+    .model-picker-current {
+      margin-top: 6px;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+    }
+    .model-picker-current .value-code { color: var(--vscode-foreground); }
