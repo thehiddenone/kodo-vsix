@@ -4,7 +4,7 @@ import { styles } from './styles';
 import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart, SessionEntry } from './types';
 import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset } from './types';
 import type { SamplingParamSpec } from '../llm-registry-types';
-import { parseSamplingValues } from '../llm-registry-types';
+import { coerceThinkingFamily, parseSamplingValues } from '../llm-registry-types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
 import { ThrottleToast } from './ThrottleToast';
@@ -400,10 +400,7 @@ export function App() {
             commandControl: coerceCommandControl(msg.commandControl),
             editCommandLocked: Boolean(msg.editCommandLocked),
             thinkingLevel: String(msg.thinkingLevel ?? ''),
-            thinkingFamily:
-              msg.thinkingFamily === 'qwen_reasoning_budget' || msg.thinkingFamily === 'gpt_oss_reasoning_effort'
-                ? msg.thinkingFamily
-                : null,
+            thinkingFamily: coerceThinkingFamily(msg.thinkingFamily),
             thinkingTiers: Array.isArray(msg.thinkingTiers) ? msg.thinkingTiers.map((t) => String(t)) : [],
             running: Boolean(msg.running),
             workspaceConnected: msg.workspaceConnected !== false,

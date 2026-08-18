@@ -94,12 +94,36 @@ const _GPT_OSS_THINKING_DESC: Record<string, string> = {
   high: 'Thinking: High. Maximum reasoning effort — the most careful deliberation, at the cost of speed.',
 };
 
-/** Tooltip for a tier, keyed by family. Falls back to a plain label for an
+const _OPENROUTER_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. The smallest reasoning effort — fastest and cheapest replies.',
+  medium: "Thinking: Medium. OpenRouter's own default reasoning effort — balances speed and depth.",
+  high: 'Thinking: High. A large reasoning effort — more careful deliberation on demanding problems, at the cost of speed and tokens.',
+  max: 'Thinking: Max. The largest reasoning effort — reserved for the hardest problems, where speed and cost matter least.',
+};
+
+/** Appended to every OpenRouter tier tooltip: unlike the two local families
+ *  (where the family *is* the model's own mechanism), this one setting rides
+ *  every model OpenRouter can route to, and the ones that don't support
+ *  reasoning are documented to ignore the parameter silently — which is also
+ *  why the control stays enabled for the whole vendor rather than tracking a
+ *  per-model capability (kodo/doc/LLM_REGISTRY.md §3a). Especially relevant
+ *  under Auto mode, where the routed model isn't known until the request. */
+const _OPENROUTER_THINKING_CAVEAT = "\nModels that don't support reasoning ignore this.";
+
+const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
+  qwen_reasoning_budget: _QWEN_THINKING_DESC,
+  gpt_oss_reasoning_effort: _GPT_OSS_THINKING_DESC,
+  openrouter_reasoning_effort: _OPENROUTER_THINKING_DESC,
+};
+
+/** Tooltip for a tier, keyed by family — a full table per family rather than a
+ *  default one, since the same tier slug carries a different meaning in each
+ *  (and only OpenRouter has a `max`). Falls back to a plain label for an
  *  unrecognised tier (should not happen — the tier list comes straight from
  *  the server's `thinking_families` payload). */
 function _thinkingTierDesc(family: ThinkingFamily, tier: string): string {
-  const table = family === 'qwen_reasoning_budget' ? _QWEN_THINKING_DESC : _GPT_OSS_THINKING_DESC;
-  return table[tier] ?? `Thinking: ${tierLabel(tier)}.`;
+  const desc = _THINKING_DESC[family][tier] ?? `Thinking: ${tierLabel(tier)}.`;
+  return family === 'openrouter_reasoning_effort' ? desc + _OPENROUTER_THINKING_CAVEAT : desc;
 }
 
 /** The next tier in click-cycle order, wrapping — falls back to the first

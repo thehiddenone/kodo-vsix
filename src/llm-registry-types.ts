@@ -470,10 +470,27 @@ export function localLaunchWarnings(
  * is the one non-local entry: OpenRouter's session-controlled `reasoning.effort`
  * parameter, keyed by the synthetic `base_llm` `"openrouter"` (not a real
  * local registry entry) rather than any actual local model. */
-export type ThinkingFamily =
-  | 'qwen_reasoning_budget'
-  | 'gpt_oss_reasoning_effort'
-  | 'openrouter_reasoning_effort';
+export const THINKING_FAMILIES = [
+  'qwen_reasoning_budget',
+  'gpt_oss_reasoning_effort',
+  'openrouter_reasoning_effort',
+] as const;
+
+export type ThinkingFamily = (typeof THINKING_FAMILIES)[number];
+
+/** Validate a `thinkingFamily` arriving over the extension-host -> webview
+ * message boundary (where everything is `unknown`), returning `null` for an
+ * unrecognised value — which the Thinking control reads as "this model has no
+ * thinking mechanism" and disables itself.
+ *
+ * Derived from {@link THINKING_FAMILIES} rather than spelled out at the call
+ * site on purpose: an inline literal check here is exactly how
+ * `openrouter_reasoning_effort` stayed invisible to the UI after the server
+ * started sending it — the union above had the member, the runtime guard did
+ * not. Adding a family is now a one-line edit to that array. */
+export function coerceThinkingFamily(value: unknown): ThinkingFamily | null {
+  return THINKING_FAMILIES.includes(value as ThinkingFamily) ? (value as ThinkingFamily) : null;
+}
 
 export interface ThinkingFamilyInfo {
   family: ThinkingFamily;
