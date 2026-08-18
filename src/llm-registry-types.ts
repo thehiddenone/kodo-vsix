@@ -464,15 +464,35 @@ export function localLaunchWarnings(
 }
 
 /** Which reasoning-tiering mechanism a `base_llm` uses — see
- * kodo/doc/LLM_REGISTRY.md §4.5/§3a. `qwen_reasoning_budget` rides a 6-tier
- * `--reasoning-budget`/`thinking_budget_tokens` scale; `gpt_oss_reasoning_effort`
- * rides GPT-OSS's built-in 3-tier `reasoning_effort`. `openrouter_reasoning_effort`
- * is the one non-local entry: OpenRouter's session-controlled `reasoning.effort`
- * parameter, keyed by the synthetic `base_llm` `"openrouter"` (not a real
- * local registry entry) rather than any actual local model. */
+ * kodo/doc/LLM_REGISTRY.md §4.5/§4.5a/§3a.
+ *
+ * The first two are **local**: `qwen_reasoning_budget` rides a 6-tier
+ * `--reasoning-budget`/`thinking_budget_tokens` scale, `gpt_oss_reasoning_effort`
+ * rides GPT-OSS's built-in 3-tier `reasoning_effort`.
+ *
+ * The rest are **cloud** — one family per vendor, keyed by a synthetic
+ * `base_llm` that is just the vendor key (`"anthropic"`, `"openai"`, …; not a
+ * real local registry entry). They are separate families rather than one
+ * shared cloud family because each vendor's tier list is its own API's
+ * vocabulary, not a normalised kōdo scale: Google's ladder has no `max`,
+ * DeepSeek's and Kimi's have no `medium`, Alibaba's jumps `medium` → `xhigh`,
+ * Meta's has a `minimal` and no `max`. The tier the user sees is always
+ * exactly the value the backend sends, which is also why each family needs
+ * its own tooltip table in `ModeControls.tsx`.
+ *
+ * Treat this set as **open**: it is server-driven (the `thinking_families`
+ * payload), so a new vendor can appear before this array does — that is what
+ * `coerceThinkingFamily` exists to absorb. */
 export const THINKING_FAMILIES = [
   'qwen_reasoning_budget',
   'gpt_oss_reasoning_effort',
+  'anthropic_effort',
+  'openai_reasoning_effort',
+  'meta_reasoning_effort',
+  'google_thinking_level',
+  'alibaba_reasoning_effort',
+  'deepseek_reasoning_effort',
+  'kimi_reasoning_effort',
   'openrouter_reasoning_effort',
 ] as const;
 

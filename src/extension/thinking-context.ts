@@ -21,19 +21,20 @@ export function parseThinkingFamilies(raw: unknown): ThinkingFamilies {
 
 /** Derive the current `ThinkingContext` from the window-global pieces that
  * determine it: `modeState`, `activeLocalModelState`/`localRegistryState`
- * (to resolve a local entry's `base_llm`), `activeCloudVendorState` (for the
- * one cloud vendor with a thinking-tier mechanism — OpenRouter, keyed by the
- * synthetic `base_llm` `"openrouter"`, doc/LLM_REGISTRY.md §3a), and
+ * (to resolve a local entry's `base_llm`), `activeCloudVendorState` (in cloud
+ * mode the vendor key *is* the synthetic `base_llm` — every vendor has a
+ * thinking family of its own, doc/LLM_REGISTRY.md §4.5a/§3a), and
  * `thinkingFamiliesState`. `family: null` whenever the session's active
- * model has no thinking-tier mechanism (any other cloud vendor, or a local
- * entry outside both local families). */
+ * model has no thinking-tier mechanism (a local entry outside both local
+ * families, or a vendor the server sent no family for — the lookup below is
+ * what decides that, never a hardcoded vendor list here). */
 export function currentThinkingContext(): ThinkingContext {
   const activeEntry = state.localRegistryState.find((e) => e.name === state.activeLocalModelState);
   let baseLlm = '';
   if (state.modeState === 'local' && activeEntry) {
     baseLlm = activeEntry.base_llm;
-  } else if (state.modeState === 'cloud' && state.activeCloudVendorState === 'openrouter') {
-    baseLlm = 'openrouter';
+  } else if (state.modeState === 'cloud') {
+    baseLlm = state.activeCloudVendorState;
   }
   const info = baseLlm ? state.thinkingFamiliesState[baseLlm] : undefined;
   return info

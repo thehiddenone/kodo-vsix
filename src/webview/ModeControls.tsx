@@ -101,6 +101,55 @@ const _OPENROUTER_THINKING_DESC: Record<string, string> = {
   max: 'Thinking: Max. The largest reasoning effort — reserved for the hardest problems, where speed and cost matter least.',
 };
 
+const _ANTHROPIC_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. Most efficient — significant token savings, fewer tool calls, some capability reduction. Best for simple, scoped tasks.',
+  medium: 'Thinking: Medium. A balanced step down from the default — solid results at moderate token spend.',
+  high: "Thinking: High. Claude's own default — complex reasoning and difficult coding, where quality matters more than speed or cost.",
+  xhigh: 'Thinking: Extra high. Extended capability for long-horizon coding and agentic work — expect meaningfully higher token usage than High.',
+  max: 'Thinking: Max. Absolute maximum capability, no constraints on token spending. Reserve for genuinely frontier problems.',
+};
+
+const _OPENAI_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. Minimal reasoning before answering — fastest and cheapest replies.',
+  medium: "Thinking: Medium. GPT-5.6's own default reasoning effort — balances speed and depth.",
+  high: 'Thinking: High. More careful deliberation on demanding problems, at the cost of speed.',
+  xhigh: 'Thinking: Extra high. Extended reasoning for long-running coding and agentic tasks.',
+  max: 'Thinking: Max. The largest reasoning effort — for the hardest problems, where speed and cost matter least.',
+};
+
+const _META_THINKING_DESC: Record<string, string> = {
+  minimal: 'Thinking: Minimal. The smallest reasoning effort Muse Spark accepts — fastest replies, most likely to miss subtlety.',
+  low: 'Thinking: Low. A small reasoning effort — quick replies with a bit of deliberation.',
+  medium: 'Thinking: Medium. A moderate reasoning effort — balances speed and depth for everyday tasks.',
+  high: 'Thinking: High. More careful deliberation on demanding problems, at the cost of speed.',
+  xhigh: 'Thinking: Extra high. The largest reasoning effort Muse Spark accepts — for long-horizon agentic work.',
+};
+
+const _GOOGLE_THINKING_DESC: Record<string, string> = {
+  minimal: "Thinking: Minimal. The least thinking Gemini will do — fastest replies. (Gemini's reasoning cannot be switched off entirely.)",
+  low: 'Thinking: Low. A small thinking budget — quick replies with a bit of deliberation.',
+  medium: "Thinking: Medium. Gemini's own default thinking level — balances speed and depth.",
+  high: 'Thinking: High. The deepest thinking Gemini offers — more careful deliberation, at the cost of speed and tokens.',
+};
+
+const _ALIBABA_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. A small reasoning effort — fastest and cheapest replies.',
+  medium: 'Thinking: Medium. A moderate reasoning effort — balances speed and depth for everyday tasks.',
+  xhigh: "Thinking: Extra high. Qwen's own default — thorough analysis for demanding problems, at the cost of speed and tokens.",
+};
+
+const _DEEPSEEK_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. A small reasoning effort — fastest and cheapest replies.',
+  high: "Thinking: High. DeepSeek's own default reasoning effort — thorough deliberation on demanding problems.",
+  max: 'Thinking: Max. A distinct extended thinking mode, not just more of the same — DeepSeek recommends it for demanding agent work, at a real cost in tokens.',
+};
+
+const _KIMI_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. A small reasoning effort — the one to pick when K3 is reasoning for too long.',
+  high: 'Thinking: High. A large reasoning effort — careful deliberation on demanding problems, at the cost of speed.',
+  max: "Thinking: Max. Kimi's own default — the deepest reasoning, for the hardest problems.",
+};
+
 /** Appended to every OpenRouter tier tooltip: unlike the two local families
  *  (where the family *is* the model's own mechanism), this one setting rides
  *  every model OpenRouter can route to, and the ones that don't support
@@ -110,20 +159,46 @@ const _OPENROUTER_THINKING_DESC: Record<string, string> = {
  *  under Auto mode, where the routed model isn't known until the request. */
 const _OPENROUTER_THINKING_CAVEAT = "\nModels that don't support reasoning ignore this.";
 
+/** Appended to every Kimi tier tooltip. Kimi K3 takes a graded reasoning
+ *  effort; Kimi K2.7 Code accepts no effort parameter at all (its thinking is
+ *  permanently on at one fixed level), so on that model the tier is silently
+ *  dropped. The tier set is vendor-scoped, not per-model — a session talks to
+ *  both models in one turn, one per capability tier — so the caveat lives in
+ *  the tooltip rather than in a disabled control (kodo/doc/LLM_REGISTRY.md
+ *  §4.5a). */
+const _KIMI_THINKING_CAVEAT = '\nKimi K2.7 Code always thinks at its own fixed level and ignores this.';
+
+/** Family -> the caveat appended to every one of its tier tooltips, for the
+ *  families where the selected tier does not reach every model the vendor
+ *  serves. Absent means no caveat. */
+const _THINKING_CAVEAT: Partial<Record<ThinkingFamily, string>> = {
+  openrouter_reasoning_effort: _OPENROUTER_THINKING_CAVEAT,
+  kimi_reasoning_effort: _KIMI_THINKING_CAVEAT,
+};
+
 const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
   qwen_reasoning_budget: _QWEN_THINKING_DESC,
   gpt_oss_reasoning_effort: _GPT_OSS_THINKING_DESC,
+  anthropic_effort: _ANTHROPIC_THINKING_DESC,
+  openai_reasoning_effort: _OPENAI_THINKING_DESC,
+  meta_reasoning_effort: _META_THINKING_DESC,
+  google_thinking_level: _GOOGLE_THINKING_DESC,
+  alibaba_reasoning_effort: _ALIBABA_THINKING_DESC,
+  deepseek_reasoning_effort: _DEEPSEEK_THINKING_DESC,
+  kimi_reasoning_effort: _KIMI_THINKING_DESC,
   openrouter_reasoning_effort: _OPENROUTER_THINKING_DESC,
 };
 
 /** Tooltip for a tier, keyed by family — a full table per family rather than a
- *  default one, since the same tier slug carries a different meaning in each
- *  (and only OpenRouter has a `max`). Falls back to a plain label for an
+ *  default one, since the same tier slug carries a genuinely different meaning
+ *  in each: "high" is a token budget on a local Qwen, Claude's own default, and
+ *  the *top* of Gemini's ladder. Falls back to a plain label for an
  *  unrecognised tier (should not happen — the tier list comes straight from
- *  the server's `thinking_families` payload). */
+ *  the server's `thinking_families` payload, and a family that has arrived
+ *  before this build knew about it is coerced to null upstream). */
 function _thinkingTierDesc(family: ThinkingFamily, tier: string): string {
   const desc = _THINKING_DESC[family][tier] ?? `Thinking: ${tierLabel(tier)}.`;
-  return family === 'openrouter_reasoning_effort' ? desc + _OPENROUTER_THINKING_CAVEAT : desc;
+  return desc + (_THINKING_CAVEAT[family] ?? '');
 }
 
 /** The next tier in click-cycle order, wrapping — falls back to the first
