@@ -7,7 +7,7 @@
  */
 
 import type * as vscode from 'vscode';
-import type { CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, OpenRouterModelInfo, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
+import type { BedrockModelInfo, CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, OpenRouterModelInfo, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
 import type { ServerLauncher } from '../server-launcher';
 import type { SessionController } from '../session/controller';
 import type { SidebarProvider } from '../sidebar-provider';
@@ -16,6 +16,10 @@ import type { WsClient } from '../ws-client';
 // Mirrors _DEFAULT_USER_SETTINGS["models"]["local"] in kodo/server/_config.py.
 export const DEFAULT_LOCAL_MODEL = 'llamacpp-qwen36-27b-q4-k-xl';
 export const DEFAULT_CLOUD_VENDOR = 'anthropic';
+/** Mirrors the kodo server's own `bedrock_region` default
+ *  (kodo/src/kodo/server/_config.py) — the AWS region with the broadest
+ *  Bedrock model availability. */
+export const DEFAULT_BEDROCK_REGION = 'us-east-1';
 
 interface WindowState {
   extensionContext: vscode.ExtensionContext | null;
@@ -66,6 +70,12 @@ interface WindowState {
   // (OpenRouter has no compiled-in model tuple). From hello.ack's
   // `openrouter_catalog` field and the `openrouter.models.refresh` reply.
   openRouterCatalogState: OpenRouterModelInfo[];
+  // AWS Bedrock's own fetched/cached model catalog (doc/LLM_REGISTRY.md §3b)
+  // -- a fourth registry shape, and the only one that is region-scoped. From
+  // hello.ack's `bedrock_catalog` field and the `bedrock.models.refresh`
+  // reply. Empty means "not fetched for the configured region yet", which is
+  // what triggers `maybeRefreshBedrockCatalog`.
+  bedrockCatalogState: BedrockModelInfo[];
   activeCloudVendorState: string;
   localRegistryState: LocalRegistryEntry[];
   activeLocalModelState: string;
@@ -164,6 +174,7 @@ export const state: WindowState = {
 
   cloudRegistryState: {},
   openRouterCatalogState: [],
+  bedrockCatalogState: [],
   activeCloudVendorState: DEFAULT_CLOUD_VENDOR,
   localRegistryState: [],
   activeLocalModelState: '',

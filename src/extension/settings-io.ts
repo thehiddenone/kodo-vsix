@@ -12,7 +12,7 @@ import { makeRequest } from '../envelope';
 import type { UiSettings } from '../settings-panel/types';
 import { sendControl } from './control-send';
 import { showTransientNotification } from './server-lifecycle';
-import { DEFAULT_CLOUD_VENDOR, DEFAULT_LOCAL_MODEL, state } from './state';
+import { DEFAULT_BEDROCK_REGION, DEFAULT_CLOUD_VENDOR, DEFAULT_LOCAL_MODEL, state } from './state';
 import { broadcastSamplingContext } from './sampling-context';
 import { broadcastThinkingContext } from './thinking-context';
 
@@ -219,6 +219,16 @@ export function readOpenRouterAutoMode(): boolean {
   return readSettings()['openrouter_auto_mode'] === true;
 }
 
+/** The AWS region Bedrock is called in (kodo/doc/SETTINGS.md §2.2c).
+ *  Bedrock is regional — the model catalog, the available cross-region
+ *  inference profiles, and pricing all depend on it. Deliberately a plain
+ *  setting rather than part of the stored credential: a region is not a
+ *  secret. */
+export function readBedrockRegion(): string {
+  const value = readSettings()['bedrock_region'];
+  return typeof value === 'string' && value ? value : DEFAULT_BEDROCK_REGION;
+}
+
 /**
  * Display-only fallback for vendors/efforts not yet present in
  * ~/.kodo/etc/settings.json — mirrors the kodo server's own
@@ -293,6 +303,18 @@ const DEFAULT_CLOUD_MODELS: Record<string, Record<string, string>> = {
     medium: 'openrouter/auto',
     high: 'openrouter/auto',
     max: 'openrouter/auto',
+  },
+  // Bedrock has no fixed lineup either, and unlike OpenRouter no router
+  // pseudo-model to fall back on -- every Converse call names a concrete
+  // model or inference profile. All four tiers start on one broadly
+  // available cross-region Claude profile, meant to be re-pointed from the
+  // Bedrock tab's picker once the catalog has loaded for the user's region
+  // (kodo/doc/LLM_REGISTRY.md §3b).
+  bedrock: {
+    low: 'us.anthropic.claude-sonnet-4-6',
+    medium: 'us.anthropic.claude-sonnet-4-6',
+    high: 'us.anthropic.claude-sonnet-4-6',
+    max: 'us.anthropic.claude-sonnet-4-6',
   },
 };
 

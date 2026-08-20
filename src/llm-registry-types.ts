@@ -45,6 +45,37 @@ export interface OpenRouterModelInfo {
   supports_reasoning: boolean;
 }
 
+/**
+ * One invocable AWS Bedrock target from the server's fetched/cached catalog
+ * (kodo/doc/LLM_REGISTRY.md §3b) — a **fourth** registry shape, alongside
+ * {@link CloudRegistry} and {@link OpenRouterModelInfo}. Bedrock has no
+ * compiled-in model tuple either, and its catalog is additionally
+ * *region-scoped*: an empty list means either "not fetched yet" or "the
+ * server's cache holds a different region", and the extension treats both the
+ * same way — ask for a refresh.
+ *
+ * Unlike OpenRouter's entries these carry **no pricing**: Bedrock reports no
+ * cost on a response and prices its catalog per-region through a separate AWS
+ * API, so kodo shows Bedrock usage in tokens only.
+ */
+export interface BedrockModelInfo {
+  /** What goes on the wire as Converse's `modelId` — a bare foundation-model
+   *  id (`anthropic.claude-opus-5`) or a cross-region inference-profile id
+   *  (`us.anthropic.claude-opus-5`). */
+  id: string;
+  name: string;
+  /** Provider name from Bedrock ("Anthropic", "Meta", …); `''` if unresolved. */
+  provider: string;
+  /** Best-effort maximum input context in tokens; `0` when unknown — Bedrock
+   *  exposes no context-window field, so this comes from a per-family table
+   *  server-side. */
+  context_length: number;
+  /** `true` when {@link id} is a cross-region inference profile. Many models
+   *  are on-demand-invocable *only* this way, so these sort first. */
+  inference_profile: boolean;
+  supports_streaming: boolean;
+}
+
 export type LocalEntryKind = 'hardcoded_hf' | 'custom_hf' | 'custom_file' | 'custom_server_url';
 
 /**
@@ -494,6 +525,7 @@ export const THINKING_FAMILIES = [
   'deepseek_reasoning_effort',
   'kimi_reasoning_effort',
   'openrouter_reasoning_effort',
+  'bedrock_effort',
 ] as const;
 
 export type ThinkingFamily = (typeof THINKING_FAMILIES)[number];

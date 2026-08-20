@@ -11,8 +11,8 @@ import { makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import * as hfTokens from '../hf-tokens';
 import { KodoSettingsPanel } from '../settings-panel/panel';
-import type { CloudRegistry, OpenRouterModelInfo } from '../llm-registry-types';
-import { pushCloudAiSettingsState } from './cloud-ai-settings';
+import type { BedrockModelInfo, CloudRegistry, OpenRouterModelInfo } from '../llm-registry-types';
+import { maybeRefreshBedrockCatalog, pushCloudAiSettingsState } from './cloud-ai-settings';
 import { sendControl } from './control-send';
 import { resumePendingCreateProjectPrompt } from './create-project';
 import { applyLlamaState, onLlamaProgress } from './llamacpp';
@@ -74,6 +74,9 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
     if (Array.isArray(env.payload.openrouter_catalog)) {
       state.openRouterCatalogState = env.payload.openrouter_catalog as OpenRouterModelInfo[];
     }
+    if (Array.isArray(env.payload.bedrock_catalog)) {
+      state.bedrockCatalogState = env.payload.bedrock_catalog as BedrockModelInfo[];
+    }
     if (typeof env.payload.active_cloud_vendor === 'string') {
       state.activeCloudVendorState = env.payload.active_cloud_vendor;
     }
@@ -107,6 +110,13 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
     });
     pushLocalInferenceState();
     pushCloudAiSettingsState();
+    // Bedrock's catalog has no server-side background refresh loop to fall
+    // back on (the fetch needs AWS credentials the server doesn't hold), so
+    // an empty list here — cold cache, or a cache holding a different
+    // region's catalog — is the extension's cue to fetch it now, using the
+    // credentials it already has. Fire-and-forget and silent: a window with
+    // no Bedrock key configured must not be nagged for one.
+    void maybeRefreshBedrockCatalog();
     broadcastThinkingContext();
     broadcastSamplingContext();
     // The server is provably reachable now — reopen any of this window's

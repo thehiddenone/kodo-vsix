@@ -719,16 +719,20 @@ function buildHtml(): string {
     // ----------------------------------------------------------------
     // Cloud mode: vendor list + "Cloud AI settings"
     // ----------------------------------------------------------------
-    // All 8 cloud vendors are live -- empty for now, kept as the landing spot
+    // All 9 cloud vendors are live -- empty for now, kept as the landing spot
     // for whatever cloud vendor is added next.
     const DISABLED_VENDORS = [];
 
-    // OpenRouter deliberately has no cloudRegistry entry (no compiled-in
-    // model tuple -- kodo/doc/LLM_REGISTRY.md §3a), so it's never a key of
+    // The two aggregator vendors deliberately have no cloudRegistry entry
+    // (no compiled-in model tuple -- their catalogs are fetched at runtime;
+    // kodo/doc/LLM_REGISTRY.md §3a/§3b), so they're never keys of
     // _state.cloudRegistry and the loop below would otherwise never render a
-    // card for it. Same special-case CloudVendorSection.tsx makes for the
+    // card for either. Same special-case CloudVendorSection.tsx makes for the
     // Kōdo Settings webview's vendor nav.
-    const OPENROUTER_DISPLAY_NAME = 'OpenRouter';
+    const CATALOG_VENDOR_DISPLAY_NAMES = {
+      openrouter: 'OpenRouter',
+      bedrock: 'AWS Bedrock',
+    };
 
     function renderCloudDisclaimer(section) {
       const banner = document.createElement('div');
@@ -782,7 +786,7 @@ function buildHtml(): string {
       section.appendChild(heading);
 
       const vendors = sortByPinned(
-        Object.keys(_state.cloudRegistry).concat(['openrouter']),
+        Object.keys(_state.cloudRegistry).concat(Object.keys(CATALOG_VENDOR_DISPLAY_NAMES)),
         _state.pinnedCloudVendors,
         v => v,
       );
@@ -793,7 +797,7 @@ function buildHtml(): string {
           section.appendChild(document.createElement('hr')).className = 'pin-divider';
         }
 
-        const displayName = vendor === 'openrouter' ? OPENROUTER_DISPLAY_NAME : _state.cloudRegistry[vendor].display_name;
+        const displayName = CATALOG_VENDOR_DISPLAY_NAMES[vendor] || _state.cloudRegistry[vendor].display_name;
         const isActive = _state.activeCloudVendor === vendor;
 
         const card = document.createElement('div');

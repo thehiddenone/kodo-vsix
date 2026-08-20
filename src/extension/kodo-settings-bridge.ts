@@ -15,7 +15,9 @@ import type { KodoSettingsMessage, SessionListEntry } from '../settings-panel/ty
 import {
   cloudAiStateForPanel,
   pushCloudAiSettingsState,
+  refreshBedrockCatalog,
   refreshOpenRouterCatalog,
+  setBedrockRegion,
   setCloudModel,
   setMetaContributorTier,
   setOpenRouterAutoMode,
@@ -375,6 +377,26 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
       await refreshOpenRouterCatalog();
     } catch {
       vscode.window.showErrorMessage('Kōdo: could not reach the server to refresh the OpenRouter model list.');
+    }
+    return;
+  }
+  if (msg.type === 'set_bedrock_region') {
+    setBedrockRegion(msg.region);
+    return;
+  }
+  if (msg.type === 'refresh_bedrock_catalog') {
+    try {
+      // Unlike OpenRouter's, this refresh needs credentials -- `false` means
+      // there are none stored yet, which is a configuration state to point at
+      // rather than a failure to report.
+      const sent = await refreshBedrockCatalog();
+      if (!sent) {
+        vscode.window.showWarningMessage(
+          'Kōdo: add an AWS access key for Bedrock first — the model list is fetched with it.',
+        );
+      }
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to refresh the AWS Bedrock model list.');
     }
     return;
   }

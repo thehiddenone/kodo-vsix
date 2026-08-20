@@ -20,6 +20,8 @@ export const initial: KodoSettingsState = {
   metaContributorTier: false,
   openRouterCatalog: [],
   openRouterAutoMode: false,
+  bedrockCatalog: [],
+  bedrockRegion: 'us-east-1',
   localRegistry: [],
   llamaServerOverridePath: null,
   downloads: [],
@@ -81,6 +83,12 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (typeof data.openRouterAutoMode === 'boolean') {
     next.openRouterAutoMode = data.openRouterAutoMode;
+  }
+  if (Array.isArray(data.bedrockCatalog)) {
+    next.bedrockCatalog = data.bedrockCatalog;
+  }
+  if (typeof data.bedrockRegion === 'string') {
+    next.bedrockRegion = data.bedrockRegion;
   }
   next.localRegistry = data.localRegistry || state.localRegistry;
   next.llamaServerOverridePath = data.llamaServerOverridePath !== undefined

@@ -150,6 +150,14 @@ const _KIMI_THINKING_DESC: Record<string, string> = {
   max: "Thinking: Max. Kimi's own default — the deepest reasoning, for the hardest problems.",
 };
 
+const _BEDROCK_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. Minimal reasoning — skips thinking on simple tasks where speed matters most.',
+  medium: 'Thinking: Medium. Moderate reasoning — may skip thinking for very simple queries.',
+  high: "Thinking: High. Claude on Bedrock's own default — deep reasoning on complex tasks.",
+  xhigh: 'Thinking: Extra high. Extended reasoning depth, on the Claude models that offer it.',
+  max: 'Thinking: Max. No constraints on thinking depth — for genuinely frontier problems.',
+};
+
 /** Appended to every OpenRouter tier tooltip: unlike the two local families
  *  (where the family *is* the model's own mechanism), this one setting rides
  *  every model OpenRouter can route to, and the ones that don't support
@@ -168,12 +176,21 @@ const _OPENROUTER_THINKING_CAVEAT = "\nModels that don't support reasoning ignor
  *  §4.5a). */
 const _KIMI_THINKING_CAVEAT = '\nKimi K2.7 Code always thinks at its own fixed level and ignores this.';
 
+/** Appended to every AWS Bedrock tier tooltip. Bedrock has no unified
+ *  reasoning parameter of its own: per-model settings are passthrough and
+ *  Bedrock rejects a field the target model doesn't define, so Kōdo only
+ *  sends an effort to the Claude models documented to accept one and sends
+ *  nothing at all for the rest (kodo/doc/LLM_REGISTRY.md §3b). Saying so is
+ *  the honest counterpart to keeping one vendor-wide control. */
+const _BEDROCK_THINKING_CAVEAT = '\nOnly Claude models on Bedrock use this; other models ignore it.';
+
 /** Family -> the caveat appended to every one of its tier tooltips, for the
  *  families where the selected tier does not reach every model the vendor
  *  serves. Absent means no caveat. */
 const _THINKING_CAVEAT: Partial<Record<ThinkingFamily, string>> = {
   openrouter_reasoning_effort: _OPENROUTER_THINKING_CAVEAT,
   kimi_reasoning_effort: _KIMI_THINKING_CAVEAT,
+  bedrock_effort: _BEDROCK_THINKING_CAVEAT,
 };
 
 const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
@@ -187,6 +204,7 @@ const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
   deepseek_reasoning_effort: _DEEPSEEK_THINKING_DESC,
   kimi_reasoning_effort: _KIMI_THINKING_DESC,
   openrouter_reasoning_effort: _OPENROUTER_THINKING_DESC,
+  bedrock_effort: _BEDROCK_THINKING_DESC,
 };
 
 /** Tooltip for a tier, keyed by family — a full table per family rather than a

@@ -143,6 +143,22 @@ export interface OpenRouterModelInfo {
   supports_reasoning: boolean;
 }
 
+/** One invocable AWS Bedrock target from the server's fetched/cached catalog
+ * (kodo/doc/LLM_REGISTRY.md §3b) -- a fourth registry shape, and the only
+ * region-scoped one. Unlike OpenRouter's entries it carries no pricing:
+ * Bedrock reports no cost and prices its catalog through a separate AWS API.
+ * Powers the Bedrock tab's searchable model picker. */
+export interface BedrockModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  context_length: number;
+  /** `true` for a cross-region inference profile (`us.`/`eu.`/`apac.` ids).
+   *  Many models are on-demand-invocable only this way, so these sort first. */
+  inference_profile: boolean;
+  supports_streaming: boolean;
+}
+
 /** Webview-local mirrors of the knob/profile shapes in ../llm-registry-types
  *  (see that file for the full field docs), per this file's
  *  webview-local-copy convention. */
@@ -266,6 +282,13 @@ export interface KodoSettingsState {
   /** OpenRouter's Cloud AI Settings tab "Auto mode" toggle -- `false`
    * (Manual mode) by default. */
   openRouterAutoMode: boolean;
+  /** AWS Bedrock's own fetched/cached model catalog -- `[]` before the first
+   * fetch, or whenever the server's cache holds a different region's
+   * catalog. See BedrockModelInfo. */
+  bedrockCatalog: BedrockModelInfo[];
+  /** Which AWS region Bedrock is called in; the catalog above is scoped to
+   * it. */
+  bedrockRegion: string;
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
   detectedVramGb: number | null;
@@ -321,9 +344,34 @@ export const CLOUD_VENDORS: Record<string, CloudVendorMeta> = {
   deepseek: { label: 'DeepSeek', icon: '🐋', coming_soon_text: "DeepSeek's reasoning models are being integrated. Check back soon to configure DeepSeek access and effort-level assignments." },
   kimi: { label: 'Kimi', icon: '🌙', coming_soon_text: 'Kimi support is in the pipeline. Soon you’ll be able to bring your own Kimi API key and route work to its models here.' },
   openrouter: { label: 'OpenRouter', icon: '🔀', coming_soon_text: "OpenRouter will let you tap into many vendors through a single key. We're building the plumbing — this page will host that configuration." },
+  bedrock: { label: 'AWS Bedrock', icon: '🟧', coming_soon_text: "AWS Bedrock will let you run models on your own AWS account. We're building the plumbing — this page will host that configuration." },
 };
 
 export const CLOUD_VENDOR_KEYS = Object.keys(CLOUD_VENDORS);
+
+/** AWS regions offered in the Bedrock tab's region picker. Mirrors
+ *  `BEDROCK_REGIONS` in kodo/src/kodo/llms/_bedrock_catalog.py. Not
+ *  exhaustive and not authoritative -- AWS adds Bedrock regions on its own
+ *  schedule; the list exists so the common case is one click, and Bedrock
+ *  itself is the authority on whether a region works. */
+export const BEDROCK_REGIONS: string[] = [
+  'us-east-1',
+  'us-east-2',
+  'us-west-2',
+  'ca-central-1',
+  'eu-central-1',
+  'eu-west-1',
+  'eu-west-2',
+  'eu-west-3',
+  'eu-north-1',
+  'ap-northeast-1',
+  'ap-northeast-2',
+  'ap-northeast-3',
+  'ap-south-1',
+  'ap-southeast-1',
+  'ap-southeast-2',
+  'sa-east-1',
+];
 
 export interface NavEntry {
   key: string;
@@ -368,6 +416,8 @@ export type OutboundMessage =
   | { type: 'set_meta_contributor_tier'; enabled: boolean }
   | { type: 'set_openrouter_auto_mode'; enabled: boolean }
   | { type: 'refresh_openrouter_catalog' }
+  | { type: 'set_bedrock_region'; region: string }
+  | { type: 'refresh_bedrock_catalog' }
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }

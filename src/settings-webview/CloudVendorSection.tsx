@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'preact/hooks';
-import { CLOUD_VENDORS, EFFORT_EXAMPLES, EFFORT_LABELS, EFFORT_LEVELS } from './types';
-import type { ApiKeyEntry, CloudRegistry, CloudVendorRegistryInfo, EffortLevel, OpenRouterModelInfo } from './types';
+import { BEDROCK_REGIONS, CLOUD_VENDORS, EFFORT_EXAMPLES, EFFORT_LABELS, EFFORT_LEVELS } from './types';
+import type { ApiKeyEntry, BedrockModelInfo, CloudRegistry, CloudVendorRegistryInfo, EffortLevel, OpenRouterModelInfo } from './types';
 import { vscode } from './vscode';
 
 function CloudKeysSection({ vendor, vendorLabel, keys, onAddKey }: {
@@ -148,15 +148,31 @@ function CloudVendorPanel({ vendor, info, keys, modelsByVendor, onAddKey, metaCo
 const OPENROUTER_AUTO_MODEL_ID = 'openrouter/auto';
 const MAX_MODEL_PICKER_RESULTS = 40;
 
-/** Search-as-you-type combobox over OpenRouter's ~414-model catalog (kodo/doc/
- * LLM_REGISTRY.md §3a) -- the full list is pushed once (hello.ack's
- * openrouter_catalog field) and filtered client-side here, no per-keystroke
- * round trip. Replaces EffortSection's plain <select> for this one vendor,
- * since a 414-option <select> is unusable. */
-function OpenRouterModelPicker({ modelId, catalog, disabled, onSelect }: {
+/** One row in {@link CatalogModelPicker}, normalised from whichever
+ * fetched-catalog vendor is being rendered. */
+interface PickerOption {
+  id: string;
+  name: string;
+  /** Optional trailing note on the row, e.g. Bedrock's provider name. */
+  hint?: string;
+}
+
+/** Search-as-you-type combobox over a fetched model catalog -- OpenRouter's
+ * ~414 models (kodo/doc/LLM_REGISTRY.md §3a) or AWS Bedrock's regional
+ * catalog (§3b). Either list is pushed whole (hello.ack's
+ * `openrouter_catalog`/`bedrock_catalog`) and filtered client-side here, no
+ * per-keystroke round trip. Replaces EffortSection's plain <select> for those
+ * two vendors, since a several-hundred-option <select> is unusable. */
+function CatalogModelPicker({ modelId, options, disabled, placeholderNoun, hasKey, onSelect }: {
   modelId: string;
-  catalog: OpenRouterModelInfo[];
+  options: PickerOption[];
   disabled: boolean;
+  /** Plural noun for the empty/placeholder copy, e.g. "models". */
+  placeholderNoun: string;
+  /** Whether this vendor has at least one API key/credential configured --
+   * without one the catalog can never populate, so the empty state should
+   * say so rather than claim to still be loading. */
+  hasKey: boolean;
   onSelect: (modelId: string) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -166,12 +182,17 @@ function OpenRouterModelPicker({ modelId, catalog, disabled, onSelect }: {
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matches = q
-      ? catalog.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
-      : catalog;
+      ? options.filter(
+          (m) =>
+            m.id.toLowerCase().includes(q) ||
+            m.name.toLowerCase().includes(q) ||
+            (m.hint ?? '').toLowerCase().includes(q),
+        )
+      : options;
     return matches.slice(0, MAX_MODEL_PICKER_RESULTS);
-  }, [query, catalog]);
+  }, [query, options]);
 
-  const current = catalog.find((m) => m.id === modelId) ?? null;
+  const current = options.find((m) => m.id === modelId) ?? null;
 
   function pick(id: string) {
     onSelect(id);
@@ -185,7 +206,13 @@ function OpenRouterModelPicker({ modelId, catalog, disabled, onSelect }: {
         type="text"
         className="model-picker-input"
         disabled={disabled}
-        placeholder={catalog.length ? `Search ${catalog.length} models…` : 'Loading model list…'}
+        placeholder={
+          options.length
+            ? `Search ${options.length} ${placeholderNoun}…`
+            : hasKey
+              ? 'Loading model list…'
+              : 'API key is required to load model list'
+        }
         value={query}
         onInput={(e) => { setQuery((e.target as HTMLInputElement).value); setOpen(true); }}
         onFocus={() => setOpen(true)}
@@ -207,7 +234,7 @@ function OpenRouterModelPicker({ modelId, catalog, disabled, onSelect }: {
                 }}
               >
                 <div className="model-picker-option-id">{m.id}</div>
-                <div className="model-picker-option-name">{m.name}</div>
+                <div className="model-picker-option-name">{m.hint ? `${m.hint} — ${m.name}` : m.name}</div>
               </div>
             ))
           )}
@@ -223,21 +250,24 @@ function OpenRouterModelPicker({ modelId, catalog, disabled, onSelect }: {
   );
 }
 
-function OpenRouterEffortSection({ effort, modelId, catalog, autoMode, onSelect }: {
+function OpenRouterEffortSection({ effort, modelId, options, autoMode, hasKey, onSelect }: {
   effort: EffortLevel;
   modelId: string | undefined;
-  catalog: OpenRouterModelInfo[];
+  options: PickerOption[];
   autoMode: boolean;
+  hasKey: boolean;
   onSelect: (modelId: string) => void;
 }) {
   return (
     <div>
       <div className="effort-title">{EFFORT_LABELS[effort]}</div>
       <div className="effort-example">{EFFORT_EXAMPLES[effort]}</div>
-      <OpenRouterModelPicker
+      <CatalogModelPicker
         modelId={modelId || OPENROUTER_AUTO_MODEL_ID}
-        catalog={catalog}
+        options={options}
         disabled={autoMode}
+        placeholderNoun="models"
+        hasKey={hasKey}
         onSelect={onSelect}
       />
       {autoMode && (
@@ -263,6 +293,10 @@ function OpenRouterVendorPanel({ keys, modelsByVendor, catalog, autoMode, onAddK
   onRefreshCatalog: () => void;
 }) {
   const vendorMeta = CLOUD_VENDORS.openrouter || { icon: '🔀' };
+  const pickerOptions = useMemo(
+    () => catalog.map((m) => ({ id: m.id, name: m.name })),
+    [catalog],
+  );
   return (
     <div>
       <h2>{vendorMeta.icon} OpenRouter LLMs</h2>
@@ -297,9 +331,144 @@ function OpenRouterVendorPanel({ keys, modelsByVendor, catalog, autoMode, onAddK
           <OpenRouterEffortSection
             effort={effort}
             modelId={modelsByVendor[effort]}
-            catalog={catalog}
+            options={pickerOptions}
             autoMode={autoMode}
+            hasKey={keys.length > 0}
             onSelect={(model_id) => vscode.postMessage({ type: 'set_cloud_model', vendor: 'openrouter', effort, model_id })}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** AWS Bedrock's credentials are a **pair** — an IAM access key id and a
+ * secret access key — where every other vendor's is a single string. They are
+ * still stored and listed through exactly the same named-multi-key mechanism
+ * (`cloud-credentials.ts`); only the add form differs, which is why this
+ * reuses {@link CloudKeysSection} unchanged and the two-field form lives in
+ * `AddKeyModal.tsx`. See kodo/doc/LLM_REGISTRY.md §3b. */
+function BedrockCredentialsHelp() {
+  return (
+    <p className="intro-text">
+      Kōdo signs Bedrock requests with a long-term IAM user access key — an access key ID and a secret
+      access key, entered together. Create a dedicated IAM user for this, grant it just{' '}
+      <span className="value-code">bedrock:InvokeModelWithResponseStream</span>,{' '}
+      <span className="value-code">bedrock:ListFoundationModels</span> and{' '}
+      <span className="value-code">bedrock:ListInferenceProfiles</span>, and make sure the models you want
+      are enabled for your account in the Bedrock console.
+    </p>
+  );
+}
+
+/** Bedrock is regional: which models exist, which cross-region inference
+ * profiles can serve them, and what they cost all depend on the region — so
+ * changing it also invalidates the fetched model catalog (which is why the
+ * host drops and re-fetches it, see `cloud-ai-settings.ts`). */
+function BedrockRegionSection({ region, onChange }: {
+  region: string;
+  onChange: (region: string) => void;
+}) {
+  const known = BEDROCK_REGIONS.includes(region) ? BEDROCK_REGIONS : [region, ...BEDROCK_REGIONS];
+  return (
+    <div>
+      <div className="section-heading">AWS region</div>
+      <p className="intro-text">
+        Bedrock is regional — the models available to you, and the cross-region inference profiles that can
+        serve them, both depend on this. Changing it reloads the model list below.
+      </p>
+      <select
+        className="settings-select model-select"
+        value={region}
+        onChange={(e) => onChange((e.target as HTMLSelectElement).value)}
+      >
+        {known.map((r) => <option key={r} value={r}>{r}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function BedrockEffortSection({ effort, modelId, options, hasKey, onSelect }: {
+  effort: EffortLevel;
+  modelId: string | undefined;
+  options: PickerOption[];
+  hasKey: boolean;
+  onSelect: (modelId: string) => void;
+}) {
+  return (
+    <div>
+      <div className="effort-title">{EFFORT_LABELS[effort]}</div>
+      <div className="effort-example">{EFFORT_EXAMPLES[effort]}</div>
+      <CatalogModelPicker
+        modelId={modelId || ''}
+        options={options}
+        disabled={false}
+        placeholderNoun="models and inference profiles"
+        hasKey={hasKey}
+        onSelect={onSelect}
+      />
+    </div>
+  );
+}
+
+/** Bedrock has no CloudRegistry entry either (its catalog is fetched per
+ * region, not compiled in — kodo/doc/LLM_REGISTRY.md §3b), so like OpenRouter
+ * it needs its own panel rather than CloudVendorPanel's plain-&lt;select&gt;
+ * EffortSection. It differs from the OpenRouter panel in three places: the
+ * credentials are a key *pair*, there is a region to choose, and there is no
+ * Auto mode — Bedrock has no router pseudo-model, so every effort tier names
+ * a concrete model or inference profile. */
+function BedrockVendorPanel({ keys, modelsByVendor, catalog, region, onAddKey, onSetRegion, onRefreshCatalog }: {
+  keys: ApiKeyEntry[];
+  modelsByVendor: Record<string, string>;
+  catalog: BedrockModelInfo[];
+  region: string;
+  onAddKey: () => void;
+  onSetRegion: (region: string) => void;
+  onRefreshCatalog: () => void;
+}) {
+  const vendorMeta = CLOUD_VENDORS.bedrock || { icon: '🟧' };
+  // Cross-region inference profiles are what most Bedrock models must be
+  // called through, so they are labelled as such rather than left looking
+  // like duplicate entries.
+  const pickerOptions = useMemo(
+    () => catalog.map((m) => ({
+      id: m.id,
+      name: m.inference_profile ? `${m.name} (cross-region profile)` : m.name,
+      hint: m.provider,
+    })),
+    [catalog],
+  );
+  return (
+    <div>
+      <h2>{vendorMeta.icon} AWS Bedrock LLMs</h2>
+      <hr className="section-divider" />
+      <p className="intro-text">
+        Bedrock serves models from many providers through your own AWS account, billed to AWS rather than to
+        each vendor separately. Pick a region, then assign one of its models — or a cross-region inference
+        profile — to each level of effort.
+      </p>
+      <BedrockCredentialsHelp />
+      <CloudKeysSection vendor="bedrock" vendorLabel="AWS Bedrock" keys={keys} onAddKey={onAddKey} />
+      <hr className="section-divider" />
+      <BedrockRegionSection region={region} onChange={onSetRegion} />
+      <hr className="section-divider" />
+      <div className="section-heading">Model catalog</div>
+      <p className="intro-text">
+        {catalog.length
+          ? `${catalog.length} models and inference profiles available in ${region}.`
+          : `Model list not loaded for ${region} yet — add an access key above, then refresh. Kōdo fetches the list from your own AWS account.`}
+      </p>
+      <button className="secondary-btn" onClick={onRefreshCatalog}>Refresh model list</button>
+      {EFFORT_LEVELS.map((effort) => (
+        <div key={effort}>
+          <hr className="section-divider" />
+          <BedrockEffortSection
+            effort={effort}
+            modelId={modelsByVendor[effort]}
+            options={pickerOptions}
+            hasKey={keys.length > 0}
+            onSelect={(model_id) => vscode.postMessage({ type: 'set_cloud_model', vendor: 'bedrock', effort, model_id })}
           />
         </div>
       ))}
@@ -331,11 +500,16 @@ interface CloudVendorSectionProps {
   openRouterAutoMode: boolean;
   onSetOpenRouterAutoMode: (enabled: boolean) => void;
   onRefreshOpenRouterCatalog: () => void;
+  bedrockCatalog: BedrockModelInfo[];
+  bedrockRegion: string;
+  onSetBedrockRegion: (region: string) => void;
+  onRefreshBedrockCatalog: () => void;
 }
 
 export function CloudVendorSection({
   vendor, cloudRegistry, modelsByVendor, keysByVendor, onAddKey, metaContributorTier, onSetMetaContributorTier,
   openRouterCatalog, openRouterAutoMode, onSetOpenRouterAutoMode, onRefreshOpenRouterCatalog,
+  bedrockCatalog, bedrockRegion, onSetBedrockRegion, onRefreshBedrockCatalog,
 }: CloudVendorSectionProps) {
   // OpenRouter deliberately has no cloudRegistry entry (no compiled-in model
   // tuple -- kodo/doc/LLM_REGISTRY.md §3a), so it must be checked before the
@@ -351,6 +525,21 @@ export function CloudVendorSection({
         onAddKey={() => onAddKey('openrouter')}
         onSetAutoMode={onSetOpenRouterAutoMode}
         onRefreshCatalog={onRefreshOpenRouterCatalog}
+      />
+    );
+  }
+  // Bedrock has no cloudRegistry entry either, for the same reason -- see
+  // BedrockVendorPanel.
+  if (vendor === 'bedrock') {
+    return (
+      <BedrockVendorPanel
+        keys={keysByVendor.bedrock || []}
+        modelsByVendor={modelsByVendor.bedrock || {}}
+        catalog={bedrockCatalog}
+        region={bedrockRegion}
+        onAddKey={() => onAddKey('bedrock')}
+        onSetRegion={onSetBedrockRegion}
+        onRefreshCatalog={onRefreshBedrockCatalog}
       />
     );
   }

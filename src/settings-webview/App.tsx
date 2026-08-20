@@ -146,6 +146,10 @@ export function App() {
             openRouterAutoMode={state.openRouterAutoMode}
             onSetOpenRouterAutoMode={(enabled) => vscode.postMessage({ type: 'set_openrouter_auto_mode', enabled })}
             onRefreshOpenRouterCatalog={() => vscode.postMessage({ type: 'refresh_openrouter_catalog' })}
+            bedrockCatalog={state.bedrockCatalog}
+            bedrockRegion={state.bedrockRegion}
+            onSetBedrockRegion={(region) => vscode.postMessage({ type: 'set_bedrock_region', region })}
+            onRefreshBedrockCatalog={() => vscode.postMessage({ type: 'refresh_bedrock_catalog' })}
           />
         )}
       </div>

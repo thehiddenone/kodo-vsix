@@ -13,6 +13,7 @@ import type {
   LlamaArgSpec,
   LocalDownloadState,
   LocalRegistryEntry,
+  BedrockModelInfo,
   OpenRouterModelInfo,
   SamplingParamSpec,
 } from '../llm-registry-types';
@@ -223,6 +224,16 @@ export interface KodoSettingsState {
    * resolves to "openrouter/auto" server-side and the per-tier pickers are
    * disabled client-side. */
   openRouterAutoMode: boolean;
+  /** AWS Bedrock's own fetched/cached model catalog (kodo/doc/LLM_REGISTRY.md
+   * §3b) -- a fourth registry shape, and the only region-scoped one. `[]`
+   * both before the first fetch and whenever the server's cache holds a
+   * different region's catalog; the extension treats both as "refresh it".
+   * Drives the Bedrock tab's searchable model picker. */
+  bedrockCatalog: BedrockModelInfo[];
+  /** Which AWS region Bedrock is called in (kodo/doc/SETTINGS.md §2.2c).
+   * A plain setting, not part of the stored credential -- a region is not a
+   * secret, and the catalog above is scoped to it. */
+  bedrockRegion: string;
   /** "Local Inference" tab state (former Local Inference Settings panel). */
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
@@ -278,6 +289,8 @@ export type KodoSettingsMessage =
   | { type: 'set_meta_contributor_tier'; enabled: boolean }
   | { type: 'set_openrouter_auto_mode'; enabled: boolean }
   | { type: 'refresh_openrouter_catalog' }
+  | { type: 'set_bedrock_region'; region: string }
+  | { type: 'refresh_bedrock_catalog' }
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }
