@@ -150,6 +150,9 @@ export function App() {
             bedrockRegion={state.bedrockRegion}
             onSetBedrockRegion={(region) => vscode.postMessage({ type: 'set_bedrock_region', region })}
             onRefreshBedrockCatalog={() => vscode.postMessage({ type: 'refresh_bedrock_catalog' })}
+            cloudUniform={state.cloudUniform}
+            onSetCloudUniformEnabled={(vendor, enabled) => vscode.postMessage({ type: 'set_cloud_uniform_enabled', vendor, enabled })}
+            onSetCloudUniformModel={(vendor, model_id) => vscode.postMessage({ type: 'set_cloud_uniform_model', vendor, model_id })}
           />
         )}
       </div>

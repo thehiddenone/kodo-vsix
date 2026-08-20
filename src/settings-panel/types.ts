@@ -8,6 +8,7 @@ import type { ApiKeyEntry } from '../cloud-credentials';
 import type { HfTokenEntry } from '../hf-tokens';
 import type {
   CloudRegistry,
+  CloudUniformEntry,
   EffortLevel,
   KnobDefs,
   LlamaArgSpec,
@@ -234,6 +235,9 @@ export interface KodoSettingsState {
    * A plain setting, not part of the stored credential -- a region is not a
    * secret, and the catalog above is scoped to it. */
   bedrockRegion: string;
+  /** vendor -> its "use one model for all effort levels" shortcut state
+   * (kodo/doc/SETTINGS.md's `models.cloud_uniform`). See CloudUniformEntry. */
+  cloudUniform: Record<string, CloudUniformEntry>;
   /** "Local Inference" tab state (former Local Inference Settings panel). */
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
@@ -291,6 +295,8 @@ export type KodoSettingsMessage =
   | { type: 'refresh_openrouter_catalog' }
   | { type: 'set_bedrock_region'; region: string }
   | { type: 'refresh_bedrock_catalog' }
+  | { type: 'set_cloud_uniform_enabled'; vendor: string; enabled: boolean }
+  | { type: 'set_cloud_uniform_model'; vendor: string; model_id: string }
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }

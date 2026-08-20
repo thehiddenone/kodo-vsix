@@ -128,6 +128,17 @@ export interface CloudVendorRegistryInfo {
 
 export type CloudRegistry = Record<string, CloudVendorRegistryInfo>;
 
+/** One vendor's "use one model for all effort levels" shortcut state
+ * (kodo/doc/SETTINGS.md's `models.cloud_uniform`) -- an alternative to
+ * `modelsByVendor`'s per-effort-tier map, not a replacement for it: when
+ * `enabled`, the server resolves every effort tier to `modelId` regardless of
+ * the per-tier map, which is left untouched underneath. `modelId` is `null`
+ * until the user first picks one. */
+export interface CloudUniformEntry {
+  enabled: boolean;
+  modelId: string | null;
+}
+
 /** One model from OpenRouter's own fetched/cached catalog (kodo/doc/
  * LLM_REGISTRY.md §3a) -- a third, dynamic registry separate from
  * CloudRegistry above (OpenRouter has no compiled-in model tuple). Powers
@@ -289,6 +300,9 @@ export interface KodoSettingsState {
   /** Which AWS region Bedrock is called in; the catalog above is scoped to
    * it. */
   bedrockRegion: string;
+  /** vendor -> its "use one model for all effort levels" shortcut state. See
+   * CloudUniformEntry. */
+  cloudUniform: Record<string, CloudUniformEntry>;
   localRegistry: LocalRegistryEntry[];
   llamaServerOverridePath: string | null;
   detectedVramGb: number | null;
@@ -418,6 +432,8 @@ export type OutboundMessage =
   | { type: 'refresh_openrouter_catalog' }
   | { type: 'set_bedrock_region'; region: string }
   | { type: 'refresh_bedrock_catalog' }
+  | { type: 'set_cloud_uniform_enabled'; vendor: string; enabled: boolean }
+  | { type: 'set_cloud_uniform_model'; vendor: string; model_id: string }
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }

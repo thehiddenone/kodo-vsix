@@ -19,6 +19,8 @@ import {
   refreshOpenRouterCatalog,
   setBedrockRegion,
   setCloudModel,
+  setCloudUniformEnabled,
+  setCloudUniformModel,
   setMetaContributorTier,
   setOpenRouterAutoMode,
 } from './cloud-ai-settings';
@@ -382,6 +384,14 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'set_bedrock_region') {
     setBedrockRegion(msg.region);
+    return;
+  }
+  if (msg.type === 'set_cloud_uniform_enabled') {
+    setCloudUniformEnabled(msg.vendor, msg.enabled);
+    return;
+  }
+  if (msg.type === 'set_cloud_uniform_model') {
+    setCloudUniformModel(msg.vendor, msg.model_id);
     return;
   }
   if (msg.type === 'refresh_bedrock_catalog') {

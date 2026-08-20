@@ -229,6 +229,33 @@ export function readBedrockRegion(): string {
   return typeof value === 'string' && value ? value : DEFAULT_BEDROCK_REGION;
 }
 
+/** Every vendor's "use one model for all effort levels" shortcut
+ *  (kodo/doc/SETTINGS.md's `models.cloud_uniform`) -- `{enabled: false,
+ *  modelId: null}` for a vendor missing from settings.json entirely (a fresh
+ *  install, or one predating this key). Mirrors `readCloudModels`' merge
+ *  pattern: known vendors always come back with a well-formed entry, never
+ *  `undefined`, so callers never need an extra fallback. */
+export function readCloudUniform(): Record<string, { enabled: boolean; modelId: string | null }> {
+  const result: Record<string, { enabled: boolean; modelId: string | null }> = {};
+  for (const vendor of Object.keys(DEFAULT_CLOUD_MODELS)) {
+    result[vendor] = { enabled: false, modelId: null };
+  }
+  const models = readSettings()['models'] as Record<string, unknown> | undefined;
+  const cloudUniform = models?.['cloud_uniform'];
+  if (cloudUniform && typeof cloudUniform === 'object') {
+    for (const [vendor, entry] of Object.entries(cloudUniform as Record<string, unknown>)) {
+      if (entry && typeof entry === 'object') {
+        const e = entry as Record<string, unknown>;
+        result[vendor] = {
+          enabled: e.enabled === true,
+          modelId: typeof e.model_id === 'string' ? e.model_id : null,
+        };
+      }
+    }
+  }
+  return result;
+}
+
 /**
  * Display-only fallback for vendors/efforts not yet present in
  * ~/.kodo/etc/settings.json — mirrors the kodo server's own

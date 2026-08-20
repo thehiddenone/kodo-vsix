@@ -1,6 +1,7 @@
+import type { ComponentChildren } from 'preact';
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { BEDROCK_REGIONS, CLOUD_VENDORS, EFFORT_EXAMPLES, EFFORT_LABELS, EFFORT_LEVELS } from './types';
-import type { ApiKeyEntry, BedrockModelInfo, CloudRegistry, CloudVendorRegistryInfo, EffortLevel, OpenRouterModelInfo } from './types';
+import type { ApiKeyEntry, BedrockModelInfo, CloudRegistry, CloudUniformEntry, CloudVendorRegistryInfo, EffortLevel, OpenRouterModelInfo } from './types';
 import { vscode } from './vscode';
 
 function CloudKeysSection({ vendor, vendorLabel, keys, onAddKey }: {
@@ -43,11 +44,17 @@ function CloudKeysSection({ vendor, vendorLabel, keys, onAddKey }: {
   );
 }
 
-function EffortSection({ vendor, info, effort, modelId }: {
+function EffortSection({ vendor, info, effort, modelId, disabled }: {
   vendor: string;
   info: CloudVendorRegistryInfo;
   effort: EffortLevel;
   modelId: string | undefined;
+  /** Locked while the vendor's "use one model for all effort levels"
+   *  shortcut is enabled (see {@link UniformModelSection}) -- that shortcut
+   *  overrides every tier server-side, so editing one here would be
+   *  misleading even though the underlying selection is preserved
+   *  untouched. */
+  disabled?: boolean;
 }) {
   const current = modelId && info.models.some((m) => m.model_id === modelId) ? modelId : info.models[0]?.model_id;
   const selected = info.models.find((m) => m.model_id === current) ?? null;
@@ -58,19 +65,88 @@ function EffortSection({ vendor, info, effort, modelId }: {
       <select
         className="settings-select model-select"
         value={current}
+        disabled={disabled}
         onChange={(e) => vscode.postMessage({
           type: 'set_cloud_model', vendor, effort, model_id: (e.target as HTMLSelectElement).value,
         })}
       >
         {info.models.map((model) => <option key={model.model_id} value={model.model_id}>{model.name}</option>)}
       </select>
-      {selected && (
+      {disabled ? (
+        <div className="model-detail">
+          <span className="model-recommendation">Locked to the shortcut model while "use one model for all effort levels" is on.</span>
+        </div>
+      ) : selected && (
         <div className="model-detail">
           <span className="model-name">{selected.name}</span>
           {selected.recommendation && <span className="model-recommendation">{selected.recommendation}</span>}
         </div>
       )}
     </div>
+  );
+}
+
+/** Vendor-wide "use one model for all effort levels" shortcut — an
+ * alternative to picking a model per effort tier below, for a user who just
+ * wants one specific cloud model handling every call to this vendor. Checking
+ * the box reveals `picker` (a vendor-appropriate model chooser passed in by
+ * the caller) and disables the four per-tier rows beneath; the underlying
+ * `models.cloud.<vendor>` map is deliberately left untouched while this is on
+ * (kodo/doc/SETTINGS.md's `models.cloud_uniform`) — same non-destructive-
+ * override shape as OpenRouter's Auto mode, so unchecking restores whatever
+ * was picked per-tier before, with no data loss. */
+function UniformModelSection({ enabled, checkboxDisabled, lockedNote, picker, onToggle }: {
+  enabled: boolean;
+  /** Disabled (and unable to be checked) while a vendor-specific competing
+   *  toggle is active — only OpenRouter's Auto mode does this today. */
+  checkboxDisabled: boolean;
+  /** Shown under the checkbox instead of the picker when `checkboxDisabled`
+   *  explains why (e.g. "...while Auto mode is on"). */
+  lockedNote?: string;
+  picker: ComponentChildren;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <div>
+      <hr className="section-divider" />
+      <div className="section-heading">Use one model for all effort levels</div>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={checkboxDisabled}
+          onChange={(e) => onToggle((e.target as HTMLInputElement).checked)}
+        />
+        Use the same model for every effort level
+      </label>
+      {checkboxDisabled && lockedNote && (
+        <div className="model-detail">
+          <span className="model-recommendation">{lockedNote}</span>
+        </div>
+      )}
+      {enabled && !checkboxDisabled && picker}
+    </div>
+  );
+}
+
+/** Plain-`<select>` model picker for {@link UniformModelSection} on a
+ * compiled-in-registry vendor (Anthropic/OpenAI/Meta/Google/Alibaba/
+ * DeepSeek/Kimi) — mirrors {@link EffortSection}'s own `<select>` exactly,
+ * just writing `model_id` rather than one effort tier. */
+function UniformModelSelect({ info, modelId, onSelect }: {
+  info: CloudVendorRegistryInfo;
+  modelId: string | null;
+  onSelect: (modelId: string) => void;
+}) {
+  const current = modelId && info.models.some((m) => m.model_id === modelId) ? modelId : info.models[0]?.model_id;
+  return (
+    <select
+      className="settings-select model-select"
+      value={current}
+      onChange={(e) => onSelect((e.target as HTMLSelectElement).value)}
+    >
+      {info.models.map((model) => <option key={model.model_id} value={model.model_id}>{model.name}</option>)}
+    </select>
   );
 }
 
@@ -112,7 +188,10 @@ function MetaContributorSection({ enabled, onChange }: {
   );
 }
 
-function CloudVendorPanel({ vendor, info, keys, modelsByVendor, onAddKey, metaContributorTier, onSetMetaContributorTier }: {
+function CloudVendorPanel({
+  vendor, info, keys, modelsByVendor, onAddKey, metaContributorTier, onSetMetaContributorTier,
+  cloudUniform, onSetCloudUniformEnabled, onSetCloudUniformModel,
+}: {
   vendor: string;
   info: CloudVendorRegistryInfo;
   keys: ApiKeyEntry[];
@@ -120,6 +199,9 @@ function CloudVendorPanel({ vendor, info, keys, modelsByVendor, onAddKey, metaCo
   onAddKey: () => void;
   metaContributorTier: boolean;
   onSetMetaContributorTier: (enabled: boolean) => void;
+  cloudUniform: CloudUniformEntry;
+  onSetCloudUniformEnabled: (enabled: boolean) => void;
+  onSetCloudUniformModel: (modelId: string) => void;
 }) {
   const vendorMeta = CLOUD_VENDORS[vendor] || { icon: '🧩' };
   return (
@@ -132,10 +214,22 @@ function CloudVendorPanel({ vendor, info, keys, modelsByVendor, onAddKey, metaCo
         problems.
       </p>
       <CloudKeysSection vendor={vendor} vendorLabel={info.display_name} keys={keys} onAddKey={onAddKey} />
+      <UniformModelSection
+        enabled={cloudUniform.enabled}
+        checkboxDisabled={false}
+        picker={<UniformModelSelect info={info} modelId={cloudUniform.modelId} onSelect={onSetCloudUniformModel} />}
+        onToggle={onSetCloudUniformEnabled}
+      />
       {EFFORT_LEVELS.map((effort) => (
         <div key={effort}>
           <hr className="section-divider" />
-          <EffortSection vendor={vendor} info={info} effort={effort} modelId={modelsByVendor[effort]} />
+          <EffortSection
+            vendor={vendor}
+            info={info}
+            effort={effort}
+            modelId={modelsByVendor[effort]}
+            disabled={cloudUniform.enabled}
+          />
         </div>
       ))}
       {vendor === 'meta' && (
@@ -250,14 +344,19 @@ function CatalogModelPicker({ modelId, options, disabled, placeholderNoun, hasKe
   );
 }
 
-function OpenRouterEffortSection({ effort, modelId, options, autoMode, hasKey, onSelect }: {
+function OpenRouterEffortSection({ effort, modelId, options, autoMode, uniformEnabled, hasKey, onSelect }: {
   effort: EffortLevel;
   modelId: string | undefined;
   options: PickerOption[];
   autoMode: boolean;
+  /** The "use one model for all effort levels" shortcut (see
+   *  {@link UniformModelSection}) -- mutually exclusive with `autoMode` at
+   *  the UI layer, but both lock this row the same way. */
+  uniformEnabled: boolean;
   hasKey: boolean;
   onSelect: (modelId: string) => void;
 }) {
+  const locked = autoMode || uniformEnabled;
   return (
     <div>
       <div className="effort-title">{EFFORT_LABELS[effort]}</div>
@@ -265,14 +364,18 @@ function OpenRouterEffortSection({ effort, modelId, options, autoMode, hasKey, o
       <CatalogModelPicker
         modelId={modelId || OPENROUTER_AUTO_MODEL_ID}
         options={options}
-        disabled={autoMode}
+        disabled={locked}
         placeholderNoun="models"
         hasKey={hasKey}
         onSelect={onSelect}
       />
-      {autoMode && (
+      {locked && (
         <div className="model-detail">
-          <span className="model-recommendation">Locked to the auto router while Auto mode is on.</span>
+          <span className="model-recommendation">
+            {autoMode
+              ? 'Locked to the auto router while Auto mode is on.'
+              : 'Locked to the shortcut model while "use one model for all effort levels" is on.'}
+          </span>
         </div>
       )}
     </div>
@@ -283,7 +386,10 @@ function OpenRouterEffortSection({ effort, modelId, options, autoMode, hasKey, o
  * for it -- kodo/doc/LLM_REGISTRY.md §3a), so it needs its own panel rather
  * than CloudVendorPanel's plain-<select> EffortSection, which assumes a
  * short, static per-vendor model list. */
-function OpenRouterVendorPanel({ keys, modelsByVendor, catalog, autoMode, onAddKey, onSetAutoMode, onRefreshCatalog }: {
+function OpenRouterVendorPanel({
+  keys, modelsByVendor, catalog, autoMode, onAddKey, onSetAutoMode, onRefreshCatalog,
+  cloudUniform, onSetCloudUniformEnabled, onSetCloudUniformModel,
+}: {
   keys: ApiKeyEntry[];
   modelsByVendor: Record<string, string>;
   catalog: OpenRouterModelInfo[];
@@ -291,6 +397,9 @@ function OpenRouterVendorPanel({ keys, modelsByVendor, catalog, autoMode, onAddK
   onAddKey: () => void;
   onSetAutoMode: (enabled: boolean) => void;
   onRefreshCatalog: () => void;
+  cloudUniform: CloudUniformEntry;
+  onSetCloudUniformEnabled: (enabled: boolean) => void;
+  onSetCloudUniformModel: (modelId: string) => void;
 }) {
   const vendorMeta = CLOUD_VENDORS.openrouter || { icon: '🔀' };
   const pickerOptions = useMemo(
@@ -321,10 +430,34 @@ function OpenRouterVendorPanel({ keys, modelsByVendor, catalog, autoMode, onAddK
         <input
           type="checkbox"
           checked={autoMode}
+          disabled={cloudUniform.enabled}
           onChange={(e) => onSetAutoMode((e.target as HTMLInputElement).checked)}
         />
         Let OpenRouter automatically pick a model for every effort level
       </label>
+      {cloudUniform.enabled && (
+        <div className="model-detail">
+          <span className="model-recommendation">
+            Turn off "use one model for all effort levels" below to use Auto mode instead.
+          </span>
+        </div>
+      )}
+      <UniformModelSection
+        enabled={cloudUniform.enabled}
+        checkboxDisabled={autoMode}
+        lockedNote='Turn off Auto mode above to use one specific model for every effort level instead.'
+        picker={(
+          <CatalogModelPicker
+            modelId={cloudUniform.modelId || ''}
+            options={pickerOptions}
+            disabled={false}
+            placeholderNoun="models"
+            hasKey={keys.length > 0}
+            onSelect={onSetCloudUniformModel}
+          />
+        )}
+        onToggle={onSetCloudUniformEnabled}
+      />
       {EFFORT_LEVELS.map((effort) => (
         <div key={effort}>
           <hr className="section-divider" />
@@ -333,6 +466,7 @@ function OpenRouterVendorPanel({ keys, modelsByVendor, catalog, autoMode, onAddK
             modelId={modelsByVendor[effort]}
             options={pickerOptions}
             autoMode={autoMode}
+            uniformEnabled={cloudUniform.enabled}
             hasKey={keys.length > 0}
             onSelect={(model_id) => vscode.postMessage({ type: 'set_cloud_model', vendor: 'openrouter', effort, model_id })}
           />
@@ -388,10 +522,14 @@ function BedrockRegionSection({ region, onChange }: {
   );
 }
 
-function BedrockEffortSection({ effort, modelId, options, hasKey, onSelect }: {
+function BedrockEffortSection({ effort, modelId, options, disabled, hasKey, onSelect }: {
   effort: EffortLevel;
   modelId: string | undefined;
   options: PickerOption[];
+  /** Locked while the "use one model for all effort levels" shortcut is
+   *  enabled (see {@link UniformModelSection}) -- Bedrock has no Auto mode
+   *  to compete with, so this is the only source of a locked row here. */
+  disabled: boolean;
   hasKey: boolean;
   onSelect: (modelId: string) => void;
 }) {
@@ -402,11 +540,16 @@ function BedrockEffortSection({ effort, modelId, options, hasKey, onSelect }: {
       <CatalogModelPicker
         modelId={modelId || ''}
         options={options}
-        disabled={false}
+        disabled={disabled}
         placeholderNoun="models and inference profiles"
         hasKey={hasKey}
         onSelect={onSelect}
       />
+      {disabled && (
+        <div className="model-detail">
+          <span className="model-recommendation">Locked to the shortcut model while "use one model for all effort levels" is on.</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -418,7 +561,10 @@ function BedrockEffortSection({ effort, modelId, options, hasKey, onSelect }: {
  * credentials are a key *pair*, there is a region to choose, and there is no
  * Auto mode — Bedrock has no router pseudo-model, so every effort tier names
  * a concrete model or inference profile. */
-function BedrockVendorPanel({ keys, modelsByVendor, catalog, region, onAddKey, onSetRegion, onRefreshCatalog }: {
+function BedrockVendorPanel({
+  keys, modelsByVendor, catalog, region, onAddKey, onSetRegion, onRefreshCatalog,
+  cloudUniform, onSetCloudUniformEnabled, onSetCloudUniformModel,
+}: {
   keys: ApiKeyEntry[];
   modelsByVendor: Record<string, string>;
   catalog: BedrockModelInfo[];
@@ -426,6 +572,9 @@ function BedrockVendorPanel({ keys, modelsByVendor, catalog, region, onAddKey, o
   onAddKey: () => void;
   onSetRegion: (region: string) => void;
   onRefreshCatalog: () => void;
+  cloudUniform: CloudUniformEntry;
+  onSetCloudUniformEnabled: (enabled: boolean) => void;
+  onSetCloudUniformModel: (modelId: string) => void;
 }) {
   const vendorMeta = CLOUD_VENDORS.bedrock || { icon: '🟧' };
   // Cross-region inference profiles are what most Bedrock models must be
@@ -460,6 +609,21 @@ function BedrockVendorPanel({ keys, modelsByVendor, catalog, region, onAddKey, o
           : `Model list not loaded for ${region} yet — add an access key above, then refresh. Kōdo fetches the list from your own AWS account.`}
       </p>
       <button className="secondary-btn" onClick={onRefreshCatalog}>Refresh model list</button>
+      <UniformModelSection
+        enabled={cloudUniform.enabled}
+        checkboxDisabled={false}
+        picker={(
+          <CatalogModelPicker
+            modelId={cloudUniform.modelId || ''}
+            options={pickerOptions}
+            disabled={false}
+            placeholderNoun="models and inference profiles"
+            hasKey={keys.length > 0}
+            onSelect={onSetCloudUniformModel}
+          />
+        )}
+        onToggle={onSetCloudUniformEnabled}
+      />
       {EFFORT_LEVELS.map((effort) => (
         <div key={effort}>
           <hr className="section-divider" />
@@ -467,6 +631,7 @@ function BedrockVendorPanel({ keys, modelsByVendor, catalog, region, onAddKey, o
             effort={effort}
             modelId={modelsByVendor[effort]}
             options={pickerOptions}
+            disabled={cloudUniform.enabled}
             hasKey={keys.length > 0}
             onSelect={(model_id) => vscode.postMessage({ type: 'set_cloud_model', vendor: 'bedrock', effort, model_id })}
           />
@@ -504,13 +669,22 @@ interface CloudVendorSectionProps {
   bedrockRegion: string;
   onSetBedrockRegion: (region: string) => void;
   onRefreshBedrockCatalog: () => void;
+  /** vendor -> its "use one model for all effort levels" shortcut state
+   *  (kodo/doc/SETTINGS.md's `models.cloud_uniform`). */
+  cloudUniform: Record<string, CloudUniformEntry>;
+  onSetCloudUniformEnabled: (vendor: string, enabled: boolean) => void;
+  onSetCloudUniformModel: (vendor: string, modelId: string) => void;
 }
+
+const EMPTY_CLOUD_UNIFORM: CloudUniformEntry = { enabled: false, modelId: null };
 
 export function CloudVendorSection({
   vendor, cloudRegistry, modelsByVendor, keysByVendor, onAddKey, metaContributorTier, onSetMetaContributorTier,
   openRouterCatalog, openRouterAutoMode, onSetOpenRouterAutoMode, onRefreshOpenRouterCatalog,
   bedrockCatalog, bedrockRegion, onSetBedrockRegion, onRefreshBedrockCatalog,
+  cloudUniform, onSetCloudUniformEnabled, onSetCloudUniformModel,
 }: CloudVendorSectionProps) {
+  const uniform = cloudUniform[vendor] ?? EMPTY_CLOUD_UNIFORM;
   // OpenRouter deliberately has no cloudRegistry entry (no compiled-in model
   // tuple -- kodo/doc/LLM_REGISTRY.md §3a), so it must be checked before the
   // registry lookup below, or it would incorrectly fall through to
@@ -525,6 +699,9 @@ export function CloudVendorSection({
         onAddKey={() => onAddKey('openrouter')}
         onSetAutoMode={onSetOpenRouterAutoMode}
         onRefreshCatalog={onRefreshOpenRouterCatalog}
+        cloudUniform={uniform}
+        onSetCloudUniformEnabled={(enabled) => onSetCloudUniformEnabled('openrouter', enabled)}
+        onSetCloudUniformModel={(modelId) => onSetCloudUniformModel('openrouter', modelId)}
       />
     );
   }
@@ -540,6 +717,9 @@ export function CloudVendorSection({
         onAddKey={() => onAddKey('bedrock')}
         onSetRegion={onSetBedrockRegion}
         onRefreshCatalog={onRefreshBedrockCatalog}
+        cloudUniform={uniform}
+        onSetCloudUniformEnabled={(enabled) => onSetCloudUniformEnabled('bedrock', enabled)}
+        onSetCloudUniformModel={(modelId) => onSetCloudUniformModel('bedrock', modelId)}
       />
     );
   }
@@ -556,6 +736,9 @@ export function CloudVendorSection({
       onAddKey={() => onAddKey(vendor)}
       metaContributorTier={metaContributorTier}
       onSetMetaContributorTier={onSetMetaContributorTier}
+      cloudUniform={uniform}
+      onSetCloudUniformEnabled={(enabled) => onSetCloudUniformEnabled(vendor, enabled)}
+      onSetCloudUniformModel={(modelId) => onSetCloudUniformModel(vendor, modelId)}
     />
   );
 }

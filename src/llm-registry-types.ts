@@ -358,6 +358,19 @@ export interface LocalDownloadState {
   bytes_per_second: number | null;
 }
 
+/** One vendor's "use one model for all effort levels" shortcut state
+ * (kodo/doc/SETTINGS.md's `models.cloud_uniform`) -- an alternative to the
+ * per-effort-tier map above (`CloudRegistry`/`modelsByVendor`), not a
+ * replacement for it: when `enabled`, the server resolves every effort tier
+ * to `modelId` regardless of the per-tier map, which is left untouched
+ * underneath (same non-destructive-override shape as OpenRouter's Auto mode
+ * -- see `openrouter_auto_mode` in doc/SETTINGS.md §2.2b). `modelId` is
+ * `null` until the user first picks one in the Cloud AI Settings webview. */
+export interface CloudUniformEntry {
+  enabled: boolean;
+  modelId: string | null;
+}
+
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
 
 export const EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'max'];

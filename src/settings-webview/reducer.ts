@@ -22,6 +22,7 @@ export const initial: KodoSettingsState = {
   openRouterAutoMode: false,
   bedrockCatalog: [],
   bedrockRegion: 'us-east-1',
+  cloudUniform: {},
   localRegistry: [],
   llamaServerOverridePath: null,
   downloads: [],
@@ -89,6 +90,9 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (typeof data.bedrockRegion === 'string') {
     next.bedrockRegion = data.bedrockRegion;
+  }
+  if (data.cloudUniform && typeof data.cloudUniform === 'object') {
+    next.cloudUniform = data.cloudUniform;
   }
   next.localRegistry = data.localRegistry || state.localRegistry;
   next.llamaServerOverridePath = data.llamaServerOverridePath !== undefined

@@ -8,11 +8,12 @@ import * as cloudCredentials from '../cloud-credentials';
 import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
-import type { CloudRegistry, EffortLevel } from '../llm-registry-types';
+import type { CloudRegistry, CloudUniformEntry, EffortLevel } from '../llm-registry-types';
 import { sendControl, sendControlAwait } from './control-send';
 import {
   readBedrockRegion,
   readCloudModels,
+  readCloudUniform,
   readMetaContributorTier,
   readOpenRouterAutoMode,
   readSettings,
@@ -31,6 +32,7 @@ export function cloudAiStateForPanel(): {
   openRouterAutoMode: boolean;
   bedrockCatalog: import('../llm-registry-types').BedrockModelInfo[];
   bedrockRegion: string;
+  cloudUniform: Record<string, CloudUniformEntry>;
 } {
   const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
   for (const vendor of Object.keys(state.cloudRegistryState)) {
@@ -57,6 +59,7 @@ export function cloudAiStateForPanel(): {
     openRouterAutoMode: readOpenRouterAutoMode(),
     bedrockCatalog: state.bedrockCatalogState,
     bedrockRegion: readBedrockRegion(),
+    cloudUniform: readCloudUniform(),
   };
 }
 
@@ -87,6 +90,48 @@ export function setCloudModel(vendor: string, effort: EffortLevel, modelId: stri
   cloud[vendor] = vendorMap;
   models['cloud'] = cloud;
   writeSettings({ models });
+  sendControl(makeRequest('config.reload'));
+  pushCloudAiSettingsState();
+}
+
+/** Read-modify-write one vendor's entry in `models.cloud_uniform`, preserving
+ *  every other vendor's entry (and the rest of `models`) exactly like
+ *  `setCloudModel` does for `models.cloud`. */
+function patchCloudUniform(vendor: string, patch: Partial<CloudUniformEntry>): void {
+  const models = (readSettings()['models'] as Record<string, unknown> | undefined) ?? {};
+  const cloudUniform = (models['cloud_uniform'] as Record<string, unknown> | undefined) ?? {};
+  const current = (cloudUniform[vendor] as Record<string, unknown> | undefined) ?? {};
+  cloudUniform[vendor] = {
+    enabled: current.enabled === true,
+    model_id: typeof current.model_id === 'string' ? current.model_id : null,
+    ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+    ...(patch.modelId !== undefined ? { model_id: patch.modelId } : {}),
+  };
+  models['cloud_uniform'] = cloudUniform;
+  writeSettings({ models });
+}
+
+/** Vendor-wide "use one model for all effort levels" shortcut (kodo/doc/
+ *  SETTINGS.md's `models.cloud_uniform`, kodo/doc/LLM_REGISTRY.md §3c) --
+ *  when enabled, every effort tier resolves to that vendor's
+ *  `models.cloud_uniform.<vendor>.model_id` server-side regardless of
+ *  `models.cloud.<vendor>`, which is deliberately left untouched (not
+ *  overwritten) so re-disabling restores whatever was picked per-tier. Same
+ *  non-destructive-override shape as `setOpenRouterAutoMode` above -- no
+ *  server-side validation to run beyond a boolean, so no dedicated WS
+ *  command either. */
+export function setCloudUniformEnabled(vendor: string, enabled: boolean): void {
+  patchCloudUniform(vendor, { enabled });
+  sendControl(makeRequest('config.reload'));
+  pushCloudAiSettingsState();
+}
+
+/** The specific model `setCloudUniformEnabled`'s shortcut resolves to for
+ *  *vendor* once enabled. Writable independently of `enabled` -- the picker
+ *  works the same whether the checkbox is currently on or off, exactly like
+ *  `setCloudModel`'s per-tier pickers do. */
+export function setCloudUniformModel(vendor: string, modelId: string): void {
+  patchCloudUniform(vendor, { modelId });
   sendControl(makeRequest('config.reload'));
   pushCloudAiSettingsState();
 }
