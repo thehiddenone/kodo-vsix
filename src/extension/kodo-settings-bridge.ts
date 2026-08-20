@@ -11,7 +11,7 @@ import * as cloudCredentials from '../cloud-credentials';
 import { makeRequest } from '../envelope';
 import * as hfTokens from '../hf-tokens';
 import { KodoSettingsPanel } from '../settings-panel/panel';
-import type { KodoSettingsMessage, SessionListEntry } from '../settings-panel/types';
+import type { KodoSettingsMessage, SessionListEntry, SkillsState } from '../settings-panel/types';
 import {
   cloudAiStateForPanel,
   pushCloudAiSettingsState,
@@ -90,6 +90,39 @@ async function fetchSessionsForPanel(): Promise<SessionListEntry[]> {
   }
 }
 
+/** Fetch the installed Agent Skills backing the Kōdo Settings panel's "Skills"
+ * section (`skills.list`, kodo/doc/WS_PROTOCOL.md §7.6j). `root` comes from the
+ * server rather than being rebuilt here, so the path the section tells the user
+ * to drop skills into is always the one the server actually scans. Entries with
+ * a non-empty `error` are kept — the section renders them as error rows so a
+ * broken skill can be seen and deleted (kodo/doc/SKILLS.md §5). Returns an empty
+ * listing (and shows a toast) if the server is unreachable. */
+async function fetchSkillsForPanel(): Promise<SkillsState> {
+  try {
+    const resp = await sendControlAwait('skills.list', {});
+    return parseSkillsResponse(resp);
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to list skills.');
+    return { root: '', skills: [] };
+  }
+}
+
+/** Shape a `skills.list.ack`/`skills.delete.ack` payload into `SkillsState`.
+ * Both acks carry the same listing, which is what lets a delete refresh the
+ * table from its own response with no follow-up round-trip. */
+function parseSkillsResponse(resp: Record<string, unknown>): SkillsState {
+  const list = Array.isArray(resp.skills) ? (resp.skills as Record<string, unknown>[]) : [];
+  return {
+    root: typeof resp.root === 'string' ? resp.root : '',
+    skills: list.map((s) => ({
+      name: String(s.name ?? ''),
+      description: String(s.description ?? ''),
+      path: String(s.path ?? ''),
+      error: String(s.error ?? ''),
+    })),
+  };
+}
+
 /** Open (or reveal) the Kōdo Settings panel, seeded with the current global
  * rules, stuck-detection settings, and llama.cpp version info fetched
  * up-front. Pass `selectSection` (e.g. `'local-inference'`, or a cloud vendor
@@ -112,12 +145,13 @@ export async function openKodoSettings(
   selectSection?: string,
   configureEntry?: string,
 ): Promise<void> {
-  const [rules, stuckDetection, housekeeperLlm, llamaCpp, sessions] = await Promise.all([
+  const [rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, skills] = await Promise.all([
     fetchGlobalRules(),
     fetchStuckDetection(),
     fetchHousekeeperLlm(),
     fetchLlamaCppVersionInfo(),
     fetchSessionsForPanel(),
+    fetchSkillsForPanel(),
   ]);
   // Unlike the four above, ui-settings.json is a local file kodo-vsix alone
   // owns — no server round trip — and the "Local Inference" tab's fields are
@@ -141,8 +175,8 @@ export async function openKodoSettings(
   const panel = KodoSettingsPanel.createOrShow(
     state.extensionContext!.extensionUri,
     {
-      rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, sessionRules: null, uiSettings,
-      hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
+      rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, sessionRules: null, skills,
+      uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
     },
     (msg) => void onKodoSettingsMessage(msg),
     selectSection,
@@ -155,7 +189,7 @@ export async function openKodoSettings(
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
   panel.update({
-    rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, uiSettings,
+    rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, skills, uiSettings,
     hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
   });
 }
@@ -194,6 +228,57 @@ async function deleteSessionFromSettingsPanel(sessionId: string): Promise<void> 
     return;
   }
   KodoSettingsPanel.instance?.update({ sessions: await fetchSessionsForPanel() });
+}
+
+/** Open one skill's folder in a **new** VS Code window (Kōdo Settings →
+ * Skills, folder icon). A skill lives outside every workspace root, so the
+ * useful thing to do with it is edit it on its own: `vscode.openFolder` with
+ * `forceNewWindow` leaves whatever the user was working on untouched, unlike
+ * the reuse-this-window behaviour that would discard their current workspace.
+ * The path comes from `skills.list`, so it is the server's own resolved path
+ * rather than one rebuilt here. */
+async function openSkillFolder(skillPath: string): Promise<void> {
+  if (!skillPath) {
+    return;
+  }
+  await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(skillPath), {
+    forceNewWindow: true,
+  });
+}
+
+/** Delete a skill from the Kōdo Settings panel's "Skills" list (trash icon).
+ * Confirms with the same native modal shape as `deleteSessionFromSettingsPanel`
+ * above, then sends `skills.delete` (kodo/doc/WS_PROTOCOL.md §7.6j). Both the
+ * success and failure acks carry the refreshed listing, so the table updates
+ * from the response either way — a failure is most often a skill someone
+ * already removed from disk, and the refreshed table is what shows that. */
+async function deleteSkillFromSettingsPanel(name: string): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    `Delete the skill "${name}"?`,
+    {
+      modal: true,
+      detail: 'This is a destructive action that cannot be undone. The skill\'s entire '
+        + 'folder — its SKILL.md and every file alongside it — will be permanently '
+        + 'deleted from disk.\n\n'
+        + 'Agents will stop being offered this skill immediately.',
+    },
+    'Yes',
+  );
+  if (choice !== 'Yes') {
+    return;
+  }
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('skills.delete', { name });
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to delete this skill.');
+    return;
+  }
+  KodoSettingsPanel.instance?.update({ skills: parseSkillsResponse(resp) });
+  if (resp.ok !== true) {
+    const message = typeof resp.error === 'string' ? resp.error : 'Unknown error.';
+    vscode.window.showErrorMessage(`Kōdo: failed to delete this skill — ${message}`);
+  }
 }
 
 /** Open a session from the Kōdo Settings panel's "Sessions" list — the same
@@ -312,6 +397,14 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'open_session') {
     await openSessionFromSettingsPanel(msg.sessionId);
+    return;
+  }
+  if (msg.type === 'open_skill') {
+    await openSkillFolder(msg.path);
+    return;
+  }
+  if (msg.type === 'delete_skill') {
+    await deleteSkillFromSettingsPanel(msg.name);
     return;
   }
   if (msg.type === 'fetch_session_rules') {

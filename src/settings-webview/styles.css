@@ -269,6 +269,50 @@
     .icon-btn:hover:not(:disabled) {
       background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
     }
+    .skill-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 22%) 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .skill-row:first-child { border-top: none; }
+    .skill-header {
+      font-size: 0.8em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--vscode-descriptionForeground);
+      background: var(--vscode-editorWidget-background, transparent);
+      padding: 6px 10px;
+    }
+    .skill-header .skill-name { font-weight: 600; }
+    /* The action column is sized by the two 40px icon buttons in a data row;
+       the header's placeholder must reserve exactly that width or the columns
+       drift apart. */
+    .skill-header .session-icons { width: 84px; }
+    .skill-name {
+      font-weight: 600;
+      font-size: 0.95em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Descriptions are the routing signal a skill is written around and run
+       long, so they wrap rather than ellipsize — clamped to keep one verbose
+       skill from dominating the table, with the full text in the tooltip. */
+    .skill-description {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.88em;
+      line-height: 1.45;
+      min-width: 0;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .skill-header .skill-description { display: block; }
+    .skill-error { color: var(--vscode-errorForeground, #f48771); }
     .readonly-list {
       margin: 0 0 4px;
     }

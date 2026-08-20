@@ -57,6 +57,30 @@ export interface SessionRulesState {
   rules: GlobalRuleEntry[];
 }
 
+/** One row of the Kōdo Settings panel's "Skills" table — one installed Agent
+ * Skill under `~/.kodo/skills` (kodo/doc/SKILLS.md, WS_PROTOCOL.md §7.6j).
+ * `name` is the skill's *directory* name, which is its identity: it is what
+ * Open and Delete act on and what the server matches. A directory whose
+ * `SKILL.md` failed to load is still listed, with an empty `description` and a
+ * non-empty `error` — shown as an error row so a broken skill is visible and
+ * deletable rather than silently missing. */
+export interface SkillEntry {
+  name: string;
+  description: string;
+  /** Absolute path of the skill's directory — what "Open" opens. */
+  path: string;
+  /** Empty for a healthy skill; the load failure otherwise. */
+  error: string;
+}
+
+/** The "Skills" section's whole state. `root` is the server-reported skills
+ * directory (`~/.kodo/skills`), shown in the section's intro so the user knows
+ * where to drop a skill — never rebuilt client-side. */
+export interface SkillsState {
+  root: string;
+  skills: SkillEntry[];
+}
+
 export interface StuckDetectionSettings {
   active: 'off' | 'local_only' | 'local_and_cloud';
   scope: 'top_level' | 'top_level_and_subagents';
@@ -278,6 +302,7 @@ export interface KodoSettingsState {
   llamaCpp: LlamaCppInfo;
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
+  skills: SkillsState;
   uiSettings: UiSettings;
   hfTokens: HfTokenEntry[];
   cloudRegistry: CloudRegistry;
@@ -395,6 +420,7 @@ export interface NavEntry {
 export const NAV: NavEntry[] = [
   { key: 'general', label: 'General' },
   { key: 'sessions', label: 'Sessions' },
+  { key: 'skills', label: 'Skills' },
   { key: 'global-rules', label: 'Global Allow-Rules' },
   { key: 'local-inference', label: 'Local Inference' },
   ...CLOUD_VENDOR_KEYS.map((key) => ({ key, label: `${CLOUD_VENDORS[key].icon} ${CLOUD_VENDORS[key].label}` })),
@@ -423,6 +449,8 @@ export type OutboundMessage =
   | { type: 'open_session'; sessionId: string }
   | { type: 'fetch_session_rules'; sessionId: string }
   | { type: 'delete_session_rules'; sessionId: string; rules: GlobalRuleEntry[] }
+  | { type: 'open_skill'; path: string }
+  | { type: 'delete_skill'; name: string }
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }

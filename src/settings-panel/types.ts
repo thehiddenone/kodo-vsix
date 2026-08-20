@@ -51,6 +51,30 @@ export interface SessionRulesState {
   rules: GlobalRuleEntry[];
 }
 
+/** One row of the Kōdo Settings panel's "Skills" table — one installed Agent
+ * Skill under `~/.kodo/skills` (kodo/doc/SKILLS.md, WS_PROTOCOL.md §7.6j).
+ * `name` is the skill's *directory* name, which is its identity: it is what
+ * Open and Delete act on and what the server matches. A directory whose
+ * `SKILL.md` failed to load is still listed, with an empty `description` and a
+ * non-empty `error` — shown as an error row so a broken skill is visible and
+ * deletable rather than silently missing. */
+export interface SkillEntry {
+  name: string;
+  description: string;
+  /** Absolute path of the skill's directory — what "Open" opens. */
+  path: string;
+  /** Empty for a healthy skill; the load failure otherwise. */
+  error: string;
+}
+
+/** The "Skills" section's whole state. `root` is the server-reported skills
+ * directory (`~/.kodo/skills`), shown in the section's intro so the user knows
+ * where to drop a skill — never rebuilt client-side. */
+export interface SkillsState {
+  root: string;
+  skills: SkillEntry[];
+}
+
 /** The `stuck_detection` settings block (kodo/doc/SETTINGS.md §2.6,
  * kodo/doc/WS_PROTOCOL.md §7.6d) — backs the Kōdo Settings panel's
  * "General" section. */
@@ -200,6 +224,8 @@ export interface KodoSettingsState {
   llamaCpp: LlamaCppInfo;
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
+  /** Installed Agent Skills + the skills root (kodo/doc/SKILLS.md §5). */
+  skills: SkillsState;
   uiSettings: UiSettings;
   /** Configured HuggingFace tokens. */
   hfTokens: HfTokenEntry[];
@@ -286,6 +312,8 @@ export type KodoSettingsMessage =
   | { type: 'open_session'; sessionId: string }
   | { type: 'fetch_session_rules'; sessionId: string }
   | { type: 'delete_session_rules'; sessionId: string; rules: GlobalRuleEntry[] }
+  | { type: 'open_skill'; path: string }
+  | { type: 'delete_skill'; name: string }
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }

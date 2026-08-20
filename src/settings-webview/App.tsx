@@ -14,6 +14,7 @@ import { Nav } from './Nav';
 import { initial, reducer } from './reducer';
 import { SessionSettingsModal } from './SessionSettingsModal';
 import { SessionsSection } from './SessionsSection';
+import { SkillsSection } from './SkillsSection';
 import { CLOUD_VENDOR_KEYS } from './types';
 import type { InboundMessage } from './types';
 import { vscode } from './vscode';
@@ -112,6 +113,7 @@ export function App() {
         {selectedKey === 'sessions' && (
           <SessionsSection sessions={state.sessions} onOpenSettings={openSessionSettings} />
         )}
+        {selectedKey === 'skills' && <SkillsSection skills={state.skills} />}
         {selectedKey === 'global-rules' && <GlobalRulesSection rules={state.rules} />}
         {selectedKey === 'local-inference' && (
           <LocalInferenceSection

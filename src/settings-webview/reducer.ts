@@ -10,6 +10,7 @@ export const initial: KodoSettingsState = {
   llamaCpp: { installedVersion: null, latestVersion: null, busy: false },
   sessions: [],
   sessionRules: null,
+  skills: { root: '', skills: [] },
   uiSettings: {
     showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h', enterSubmits: true, showAllLocalLlmQuants: false,
   },
@@ -63,6 +64,9 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (data.sessionRules === null || (data.sessionRules && typeof data.sessionRules === 'object')) {
     next.sessionRules = data.sessionRules;
+  }
+  if (data.skills && typeof data.skills === 'object') {
+    next.skills = data.skills;
   }
   if (Array.isArray(data.hfTokens)) {
     next.hfTokens = data.hfTokens;
