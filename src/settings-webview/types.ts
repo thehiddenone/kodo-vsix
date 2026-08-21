@@ -81,6 +81,36 @@ export interface SkillsState {
   skills: SkillEntry[];
 }
 
+/** One candidate found while scanning a repo for `skills.install_scan`
+ * (kodo/doc/WS_PROTOCOL.md §7.6j) — name/description only, since the temp
+ * clone it came from is already deleted by the time the reply arrives. */
+export interface SkillScanEntry {
+  name: string;
+  description: string;
+}
+
+/** The outcome of one `skills.install_scan` request, threaded into the Kōdo
+ * Settings panel's install-from-repository modal. `null` until the modal's
+ * first scan reply arrives; `repoUrl` lets the modal tell a reply for the URL
+ * it currently has open apart from a stale one left over from a prior scan. */
+export interface SkillScanResult {
+  repoUrl: string;
+  ok: boolean;
+  skills: SkillScanEntry[];
+  error: string;
+}
+
+/** The outcome of one `skills.install` request — the install modal's final
+ * "here's what happened" step. `null` until the first install reply arrives. */
+export interface SkillInstallResult {
+  repoUrl: string;
+  ok: boolean;
+  installed: string[];
+  conflicts: string[];
+  missing: string[];
+  error: string;
+}
+
 export interface StuckDetectionSettings {
   active: 'off' | 'local_only' | 'local_and_cloud';
   scope: 'top_level' | 'top_level_and_subagents';
@@ -303,6 +333,8 @@ export interface KodoSettingsState {
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
   skills: SkillsState;
+  skillScan: SkillScanResult | null;
+  skillInstall: SkillInstallResult | null;
   uiSettings: UiSettings;
   hfTokens: HfTokenEntry[];
   cloudRegistry: CloudRegistry;
@@ -451,6 +483,9 @@ export type OutboundMessage =
   | { type: 'delete_session_rules'; sessionId: string; rules: GlobalRuleEntry[] }
   | { type: 'open_skill'; path: string }
   | { type: 'delete_skill'; name: string }
+  | { type: 'scan_skill_repo'; repoUrl: string }
+  | { type: 'install_skills'; repoUrl: string; install: { name: string; overwrite: boolean }[] }
+  | { type: 'install_local_skill_pick' }
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }

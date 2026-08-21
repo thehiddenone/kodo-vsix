@@ -9,6 +9,7 @@ import { ConfigureModal } from './ConfigureModal';
 import { GeneralSection } from './GeneralSection';
 import { ProfileModal } from './ProfileModal';
 import { GlobalRulesSection } from './GlobalRulesSection';
+import { InstallSkillsModal } from './InstallSkillsModal';
 import { LocalInferenceSection } from './LocalInferenceSection';
 import { Nav } from './Nav';
 import { initial, reducer } from './reducer';
@@ -29,6 +30,7 @@ export function App() {
   const [fileModalOpen, setFileModalOpen] = useState(false);
   const [filePickedPath, setFilePickedPath] = useState<string | null>(null);
   const [serverModalOpen, setServerModalOpen] = useState(false);
+  const [installSkillsModalOpen, setInstallSkillsModalOpen] = useState(false);
   // Which LLM's Configure (Default-profile knobs) modal is open, and which
   // LLM's Manage-profiles modal is open — separate, since they are two
   // different editors reachable from the same card (and from the sidebar's
@@ -81,10 +83,14 @@ export function App() {
       if (serverModalOpen) { setServerModalOpen(false); }
       if (configureEntryName) { setConfigureEntryName(null); }
       if (profileEntryName) { setProfileEntryName(null); }
+      if (installSkillsModalOpen) { setInstallSkillsModalOpen(false); }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [sessionSettingsFor, addTokenModalOpen, addKeyModalVendor, hfModalOpen, fileModalOpen, serverModalOpen, configureEntryName, profileEntryName]);
+  }, [
+    sessionSettingsFor, addTokenModalOpen, addKeyModalVendor, hfModalOpen, fileModalOpen,
+    serverModalOpen, configureEntryName, profileEntryName, installSkillsModalOpen,
+  ]);
 
   function openSessionSettings(sessionId: string) {
     setSessionSettingsFor(sessionId);
@@ -113,7 +119,9 @@ export function App() {
         {selectedKey === 'sessions' && (
           <SessionsSection sessions={state.sessions} onOpenSettings={openSessionSettings} />
         )}
-        {selectedKey === 'skills' && <SkillsSection skills={state.skills} />}
+        {selectedKey === 'skills' && (
+          <SkillsSection skills={state.skills} onInstallClick={() => setInstallSkillsModalOpen(true)} />
+        )}
         {selectedKey === 'global-rules' && <GlobalRulesSection rules={state.rules} />}
         {selectedKey === 'local-inference' && (
           <LocalInferenceSection
@@ -189,6 +197,14 @@ export function App() {
           entry={profileEntry}
           llamaArgCatalog={state.llamaArgCatalog}
           onClose={() => setProfileEntryName(null)}
+        />
+      )}
+      {installSkillsModalOpen && (
+        <InstallSkillsModal
+          existingSkills={state.skills.skills}
+          scan={state.skillScan}
+          install={state.skillInstall}
+          onClose={() => setInstallSkillsModalOpen(false)}
         />
       )}
     </div>

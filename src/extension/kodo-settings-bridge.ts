@@ -176,6 +176,7 @@ export async function openKodoSettings(
     state.extensionContext!.extensionUri,
     {
       rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, sessionRules: null, skills,
+      skillScan: null, skillInstall: null,
       uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
     },
     (msg) => void onKodoSettingsMessage(msg),
@@ -228,6 +229,156 @@ async function deleteSessionFromSettingsPanel(sessionId: string): Promise<void> 
     return;
   }
   KodoSettingsPanel.instance?.update({ sessions: await fetchSessionsForPanel() });
+}
+
+/** Scan a git repo for installable Agent Skills (`skills.install_scan`,
+ * kodo/doc/WS_PROTOCOL.md §7.6j) — the install-from-repository modal's first
+ * step. The result always lands in `skillScan`, success or failure, so the
+ * modal's "Scanning…" state always clears; a missing `git` CLI or a clone
+ * failure additionally shows an error toast, matching every other
+ * server-round-trip failure in this file. A clone can take a while over the
+ * network, hence the longer-than-default timeout. */
+async function scanSkillRepoForPanel(repoUrl: string): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('skills.install_scan', { repo_url: repoUrl }, 70_000);
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to scan this repository.');
+    KodoSettingsPanel.instance?.update({
+      skillScan: { repoUrl, ok: false, skills: [], error: 'Could not reach the server.' },
+    });
+    return;
+  }
+  const ok = resp.ok === true;
+  const list = Array.isArray(resp.skills) ? (resp.skills as Record<string, unknown>[]) : [];
+  KodoSettingsPanel.instance?.update({
+    skillScan: {
+      repoUrl,
+      ok,
+      skills: list.map((s) => ({
+        name: String(s.name ?? ''),
+        description: String(s.description ?? ''),
+      })),
+      error: typeof resp.error === 'string' ? resp.error : '',
+    },
+  });
+  if (!ok) {
+    const message = typeof resp.error === 'string' ? resp.error : 'Unknown error.';
+    vscode.window.showErrorMessage(`Kōdo: could not scan this repository — ${message}`);
+  }
+}
+
+/** Install the user's selected skills from a git repo (`skills.install`,
+ * kodo/doc/WS_PROTOCOL.md §7.6j) — the install modal's final step. Same
+ * result-lands-either-way contract as `scanSkillRepoForPanel` above, and also
+ * refreshes the main Skills table from the same reply — it carries the
+ * post-install listing, the same refresh-from-response convention
+ * `deleteSkillFromSettingsPanel` uses. */
+async function installSkillsFromPanel(
+  repoUrl: string,
+  install: { name: string; overwrite: boolean }[],
+): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('skills.install', { repo_url: repoUrl, install }, 70_000);
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to install these skills.');
+    KodoSettingsPanel.instance?.update({
+      skillInstall: {
+        repoUrl, ok: false, installed: [], conflicts: [], missing: [],
+        error: 'Could not reach the server.',
+      },
+    });
+    return;
+  }
+  const ok = resp.ok === true;
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+  KodoSettingsPanel.instance?.update({
+    skills: parseSkillsResponse(resp),
+    skillInstall: {
+      repoUrl,
+      ok,
+      installed: strings(resp.installed),
+      conflicts: strings(resp.conflicts),
+      missing: strings(resp.missing),
+      error: typeof resp.error === 'string' ? resp.error : '',
+    },
+  });
+  if (!ok) {
+    const message = typeof resp.error === 'string' ? resp.error : 'Unknown error.';
+    vscode.window.showErrorMessage(`Kōdo: could not install these skills — ${message}`);
+  }
+}
+
+/** "Install from a local file…" (Kōdo Settings → Skills) — a native
+ * `showOpenDialog` file picker, filtered to `.md`, then straight to
+ * `skills.install_local` (kodo/doc/WS_PROTOCOL.md §7.6j). Unlike "Install
+ * from a repository…" this needs no custom modal: the picked file already
+ * names the one skill to install (kodo/doc/SKILLS.md §2), so a filename
+ * check plus a native confirm-on-conflict dialog is the whole UI. The
+ * filename check happens here, client-side, before any round trip — the
+ * server would reject it too, but there is no reason to pay a network hop
+ * for a mistake this cheap to catch locally. */
+async function installLocalSkillPicked(): Promise<void> {
+  const picked = await vscode.window.showOpenDialog({
+    title: 'Kōdo: Select a SKILL.md file',
+    canSelectMany: false,
+    filters: { 'Skill files': ['md'] },
+  });
+  const fsPath = picked?.[0]?.fsPath;
+  if (!fsPath) {
+    return;
+  }
+  const filename = fsPath.split(/[\\/]/).pop() ?? '';
+  if (filename !== 'SKILL.md') {
+    vscode.window.showErrorMessage('Kōdo: please select a SKILL.md file.');
+    return;
+  }
+  await installLocalSkillOverWs(fsPath, false);
+}
+
+/** Send `skills.install_local` for *path*, and — on a conflict with an
+ * already-installed skill — confirm with a native modal and resend with
+ * `overwrite: true`. Recurses at most once: the second call always passes
+ * `overwrite: true`, which the server accepts unconditionally (no further
+ * conflict to report). Reuses `parseSkillsResponse`, since the ack carries
+ * the same `root`/`skills` listing shape as every other skills ack. */
+async function installLocalSkillOverWs(path: string, overwrite: boolean): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('skills.install_local', { path, overwrite });
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to install this skill.');
+    return;
+  }
+  if (resp.ok !== true) {
+    const message = typeof resp.error === 'string' ? resp.error : 'Unknown error.';
+    vscode.window.showErrorMessage(`Kōdo: could not install this skill — ${message}`);
+    KodoSettingsPanel.instance?.update({ skills: parseSkillsResponse(resp) });
+    return;
+  }
+
+  KodoSettingsPanel.instance?.update({ skills: parseSkillsResponse(resp) });
+
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+  const conflicts = strings(resp.conflicts);
+  if (conflicts.length > 0) {
+    const name = conflicts[0];
+    const choice = await vscode.window.showWarningMessage(
+      `A skill named "${name}" is already installed.`,
+      { modal: true, detail: 'Overwrite it with the one at the file you selected?' },
+      'Overwrite',
+    );
+    if (choice === 'Overwrite') {
+      await installLocalSkillOverWs(path, true);
+    }
+    return;
+  }
+
+  const installed = strings(resp.installed);
+  if (installed.length > 0) {
+    vscode.window.showInformationMessage(`Kōdo: installed skill "${installed[0]}".`);
+  }
 }
 
 /** Open one skill's folder in a **new** VS Code window (Kōdo Settings →
@@ -405,6 +556,18 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'delete_skill') {
     await deleteSkillFromSettingsPanel(msg.name);
+    return;
+  }
+  if (msg.type === 'scan_skill_repo') {
+    await scanSkillRepoForPanel(msg.repoUrl);
+    return;
+  }
+  if (msg.type === 'install_skills') {
+    await installSkillsFromPanel(msg.repoUrl, msg.install);
+    return;
+  }
+  if (msg.type === 'install_local_skill_pick') {
+    await installLocalSkillPicked();
     return;
   }
   if (msg.type === 'fetch_session_rules') {

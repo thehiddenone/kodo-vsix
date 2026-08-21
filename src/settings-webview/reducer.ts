@@ -11,6 +11,8 @@ export const initial: KodoSettingsState = {
   sessions: [],
   sessionRules: null,
   skills: { root: '', skills: [] },
+  skillScan: null,
+  skillInstall: null,
   uiSettings: {
     showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h', enterSubmits: true, showAllLocalLlmQuants: false,
   },
@@ -67,6 +69,12 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (data.skills && typeof data.skills === 'object') {
     next.skills = data.skills;
+  }
+  if (data.skillScan === null || (data.skillScan && typeof data.skillScan === 'object')) {
+    next.skillScan = data.skillScan;
+  }
+  if (data.skillInstall === null || (data.skillInstall && typeof data.skillInstall === 'object')) {
+    next.skillInstall = data.skillInstall;
   }
   if (Array.isArray(data.hfTokens)) {
     next.hfTokens = data.hfTokens;

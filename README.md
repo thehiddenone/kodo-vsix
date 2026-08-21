@@ -6,7 +6,7 @@
 
 [![VS Code Marketplace](https://vsmarketplacebadges.dev/version/StanislavMorozov.vs-kodo.svg)](https://marketplace.visualstudio.com/items?itemName=StanislavMorozov.vs-kodo)
 
-**Kōdo** (コード) turns natural language into working code through a multi-agent LLM workflow — and it's built from the ground up to run that workflow on your own hardware, model included. No subscription, no API key, no round trip to someone else's datacenter.
+**Kōdo** turns natural language into working code through a multi-agent LLM workflow — and it's built from the ground up to run that workflow on your own hardware, model included. No subscription, no API key, no round trip to someone else's datacenter.
 
 That's the pitch. How much of it holds up today is spelled out in [Honest status](#honest-status), and you should read that section before you decide this is going to solve your afternoon.
 

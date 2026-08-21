@@ -39,18 +39,28 @@ function SkillRow({ skill }: RowProps) {
 
 interface SkillsSectionProps {
   skills: SkillsState;
+  onInstallClick: () => void;
 }
 
-export function SkillsSection({ skills }: SkillsSectionProps) {
+export function SkillsSection({ skills, onInstallClick }: SkillsSectionProps) {
   return (
     <div>
       <h2>Skills</h2>
       <p className="intro-text">
         Skills are instruction packs agents follow for a particular kind of task, in the open{' '}
-        <code>SKILL.md</code> format. Install one by copying its folder into{' '}
-        <code>{skills.root || '~/.kodo/skills'}</code> — it takes effect immediately, with no
-        restart. Use the folder icon to open a skill in a new window, or the trash icon to delete
-        it from disk.
+        <code>SKILL.md</code> format. Install one from a git repository below, or by hand by
+        copying its folder into <code>{skills.root || '~/.kodo/skills'}</code> — either way it
+        takes effect immediately, with no restart. Use the folder icon to open a skill in a new
+        window, or the trash icon to delete it from disk.
+      </p>
+      <p>
+        <button className="secondary-btn" onClick={onInstallClick}>Install from a repository…</button>{' '}
+        <button
+          className="secondary-btn"
+          onClick={() => vscode.postMessage({ type: 'install_local_skill_pick' })}
+        >
+          Install from a local file…
+        </button>
       </p>
       {skills.skills.length === 0 ? (
         <div id="empty-msg">No skills installed yet.</div>
