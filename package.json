@@ -4,7 +4,7 @@
   "displayName": "Kōdo",
   "icon": "images/kodo128px.png",
   "description": "Kōdo (コード) is yet another AI coding assistant. With the advent of LLMs like Qwen36-27B, many coding tasks may not need subscriptions or API access tokens. Kōdo lets you choose a suitable quant of an LLM, load it into llama.cpp, and transform electricity into computer programs. Whether it's a good idea, remains to be seen.",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "engines": {
     "vscode": "^1.90.0"
   },
