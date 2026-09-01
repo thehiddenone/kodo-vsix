@@ -11,7 +11,7 @@ import { sendControlAwait } from './control-send';
  * a fetch error and to defensively coerce a malformed `.ack` payload. */
 export const DEFAULT_STUCK_DETECTION: StuckDetectionSettings = {
   active: 'local_only',
-  scope: 'top_level',
+  scope: 'top_level_and_subagents',
   auto_unstuck_interactive: false,
 };
 

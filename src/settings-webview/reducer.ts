@@ -5,7 +5,11 @@ import type { KodoSettingsState } from './types';
 
 export const initial: KodoSettingsState = {
   rules: [],
-  stuckDetection: { active: 'local_only', scope: 'top_level', auto_unstuck_interactive: false },
+  stuckDetection: {
+    active: 'local_only',
+    scope: 'top_level_and_subagents',
+    auto_unstuck_interactive: false,
+  },
   housekeeperLlm: { selected: '', options: [] },
   llamaCpp: { installedVersion: null, latestVersion: null, busy: false },
   sessions: [],
