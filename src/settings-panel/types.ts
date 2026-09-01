@@ -170,6 +170,15 @@ export interface UiSettings {
    *  the reverse (`false`: Enter adds a newline, Shift+Enter sends). Backs
    *  the "General" section's "How to submit a prompt" radio choice. */
   enterSubmits: boolean;
+  /** Auto-scroll mode for the chat webview's session feed: `off` never
+   *  auto-scrolls; `auto` sticks to the bottom while the user is there and
+   *  stops once they scroll up; `always` force-scrolls to the bottom on
+   *  every new chunk of content regardless of scroll position. Backs the
+   *  "General" section's "Auto-scroll" radio choice; consumed by
+   *  webview/App.tsx's stream-scroll effect (webview/types.ts's
+   *  `AutoScrollMode`, kept as a plain union here rather than shared — see
+   *  this file's `clockFormat` doc comment on why). */
+  autoScroll: 'off' | 'auto' | 'always';
   /** Names of pinned local LLM registry entries, in pin order (oldest pin
    *  first/topmost) — sidebar-only, never surfaced in this settings panel.
    *  See `sidebar-provider.ts`'s pin/unpin handling. */

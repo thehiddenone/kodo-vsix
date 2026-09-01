@@ -18,7 +18,8 @@ export const initial: KodoSettingsState = {
   skillScan: null,
   skillInstall: null,
   uiSettings: {
-    showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h', enterSubmits: true, showAllLocalLlmQuants: false,
+    showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h', enterSubmits: true, autoScroll: 'auto',
+    showAllLocalLlmQuants: false,
   },
   hfTokens: [],
   cloudRegistry: {},

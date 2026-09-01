@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
 import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart, SessionEntry } from './types';
-import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset } from './types';
+import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset, coerceAutoScrollMode } from './types';
 import type { SamplingParamSpec } from '../llm-registry-types';
 import { coerceThinkingFamily, parseSamplingValues } from '../llm-registry-types';
 import { reducer, initial } from './reducer';
@@ -25,9 +25,58 @@ import { ModeControls } from './ModeControls';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { SamplingModal } from './SamplingModal';
 import { FooterButton } from './FooterButton';
+/** How close to the bottom (px) counts as "at the bottom" for the auto-scroll
+ *  feed — a small tolerance absorbs sub-pixel rounding from browser zoom. */
+const STREAM_BOTTOM_EPSILON = 4;
+
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-scroll (General > Auto-scroll, UiSettings.autoScroll). `stickToBottomRef`
+  // is the live "should 'auto' mode currently follow new content" flag: it
+  // starts true (a freshly opened feed is at its bottom), flips false the
+  // instant the user scrolls upward (away from the bottom) in
+  // handleStreamScroll below, and flips back true once they scroll all the
+  // way back down. Tracked via refs, not reducer state, since it's read/written
+  // on every scroll tick and content update and never needs to trigger a
+  // render by itself — only the scrollTop assignment below does the work.
+  const streamRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+
+  function handleStreamScroll(e: Event) {
+    const el = e.currentTarget as HTMLDivElement;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (el.scrollTop < lastScrollTopRef.current - 1) {
+      // An attempt to scroll in the opposite direction (upward, away from
+      // the bottom) — stop following new content until the user scrolls
+      // all the way back down. Tracked regardless of the current
+      // autoScroll mode so the flag reflects real scroll position the
+      // moment 'auto' is selected (e.g. after being 'off' mid-conversation).
+      stickToBottomRef.current = false;
+    } else if (distanceFromBottom <= STREAM_BOTTOM_EPSILON) {
+      stickToBottomRef.current = true;
+    }
+    lastScrollTopRef.current = el.scrollTop;
+  }
+
+  // Runs after every render (no dependency array) so it catches every way new
+  // content can land at the bottom of the feed — streamed tokens/thinking/tool
+  // args, committed session entries, and the naming/compacting/waiting
+  // indicators — without having to enumerate each one as a dependency.
+  // 'off' never scrolls; 'always' ignores scroll position entirely; 'auto'
+  // only follows while stickToBottomRef is true.
+  useEffect(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    const mode = state.uiSettings.autoScroll;
+    if (mode === 'off') return;
+    if (mode === 'always' || stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      lastScrollTopRef.current = el.scrollTop;
+    }
+  });
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -250,6 +299,7 @@ export function App() {
             timezone: typeof msg.timezone === 'string' && msg.timezone ? msg.timezone : 'system',
             clockFormat: coerceClockFormatPreset(msg.clockFormat),
             enterSubmits: typeof msg.enterSubmits === 'boolean' ? msg.enterSubmits : true,
+            autoScroll: coerceAutoScrollMode(msg.autoScroll),
           });
           break;
         case 'file_change':
@@ -573,7 +623,7 @@ export function App() {
       />
 
       {/* Session feed */}
-      <div style={styles.stream}>
+      <div ref={streamRef} style={styles.stream} onScroll={handleStreamScroll}>
         {groupSessionEntries(state.session).map((block) =>
           block.kind === 'entry' ? (
             renderEntry(block.entry, block.index)

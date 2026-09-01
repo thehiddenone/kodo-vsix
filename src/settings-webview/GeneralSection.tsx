@@ -34,6 +34,12 @@ const CLOCK_FORMAT_OPTIONS: [string, string][] = [
   ['dmy_12h', 'DD/MM/YYYY, 12-hour (23/07/2026 2:41 PM)'],
 ];
 
+const AUTO_SCROLL_OPTIONS: [UiSettings['autoScroll'], string][] = [
+  ['off', 'Off'],
+  ['auto', 'Auto'],
+  ['always', 'Always'],
+];
+
 const STUCK_ACTIVE_OPTIONS: [StuckDetectionSettings['active'], string][] = [
   ['off', 'Off'],
   ['local_only', 'Only for local LLMs'],
@@ -103,6 +109,34 @@ function ShowTimestampsSection({ uiSettings }: { uiSettings: UiSettings }) {
         disabled={disabled}
         onChange={(value) => post({ ...uiSettings, clockFormat: value })}
       />
+    </div>
+  );
+}
+
+function AutoScrollSection({ uiSettings }: { uiSettings: UiSettings }) {
+  const post = (next: UiSettings) => vscode.postMessage({ type: 'set_ui_settings', ...next });
+  return (
+    <div>
+      <div className="section-subheading">Auto-scroll</div>
+      <p className="intro-text">
+        Control whether the conversation follows new content as it streams in. <strong>Off</strong> never
+        auto-scrolls. <strong>Auto</strong> follows new content while you&apos;re scrolled to the bottom, and stops
+        the instant you scroll up to read something earlier — scroll back to the bottom to turn it on again.{' '}
+        <strong>Always</strong> keeps jumping to the bottom as new content arrives, even if you&apos;ve scrolled up.
+      </p>
+      <div className="radio-group">
+        {AUTO_SCROLL_OPTIONS.map(([value, label]) => (
+          <label className="radio-row" key={value}>
+            <input
+              type="radio"
+              name="auto-scroll"
+              checked={uiSettings.autoScroll === value}
+              onChange={(e) => (e.target as HTMLInputElement).checked && post({ ...uiSettings, autoScroll: value })}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -233,6 +267,8 @@ export function GeneralSection({ uiSettings, stuckDetection, housekeeperLlm }: G
       <PromptSubmitSection uiSettings={uiSettings} />
       <hr className="section-divider" />
       <ShowTimestampsSection uiSettings={uiSettings} />
+      <hr className="section-divider" />
+      <AutoScrollSection uiSettings={uiSettings} />
       <hr className="section-divider" />
       <HousekeeperLlmSection housekeeperLlm={housekeeperLlm} />
       <hr className="section-divider" />

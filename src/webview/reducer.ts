@@ -1189,6 +1189,7 @@ export function reducer(state: State, action: Action): State {
           timezone: action.timezone,
           clockFormat: action.clockFormat,
           enterSubmits: action.enterSubmits,
+          autoScroll: action.autoScroll,
         },
       };
     default:

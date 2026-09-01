@@ -37,6 +37,7 @@ export interface UiSettings {
   timezone: string;
   clockFormat: string;
   enterSubmits: boolean;
+  autoScroll: 'off' | 'auto' | 'always';
 }
 
 /** Coerce an untyped wire value into a workflow mode (default guided). */

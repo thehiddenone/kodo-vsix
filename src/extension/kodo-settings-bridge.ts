@@ -520,6 +520,7 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
       timezone: msg.timezone,
       clockFormat: msg.clockFormat,
       enterSubmits: msg.enterSubmits,
+      autoScroll: msg.autoScroll,
       showAllLocalLlmQuants: msg.showAllLocalLlmQuants,
     });
     KodoSettingsPanel.instance?.update({ uiSettings });

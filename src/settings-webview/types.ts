@@ -150,6 +150,12 @@ export interface UiSettings {
    *  (`true`, the default), or the reverse (`false`). Backs the "General"
    *  section's "How to submit a prompt" radio choice. */
   enterSubmits: boolean;
+  /** Auto-scroll mode for the chat webview's session feed: `off` never
+   *  auto-scrolls; `auto` sticks to the bottom while the user is there and
+   *  stops once they scroll up; `always` force-scrolls to the bottom on
+   *  every new chunk of content regardless of scroll position. Backs
+   *  `GeneralSection.tsx`'s "Auto-scroll" radio choice. */
+  autoScroll: 'off' | 'auto' | 'always';
   /** Whether the "Local Inference" tab's "Available local LLM quants" list
    *  shows every entry (`true`) or hides ones the detected VRAM+RAM can't
    *  run (`false`, the default). Never hides an already-installed entry.

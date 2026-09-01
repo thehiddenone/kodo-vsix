@@ -31,6 +31,18 @@ export function coerceClockFormatPreset(value: unknown): ClockFormatPreset {
     : 'ymd_24h';
 }
 
+/** The "Auto-scroll" mode backing the General section's radio choice —
+ *  `off` never auto-scrolls; `auto` sticks to the bottom while the user is
+ *  there and stops the moment they scroll up (see App.tsx's stream-scroll
+ *  effect); `always` force-scrolls to the bottom on every new chunk of
+ *  content, ignoring manual scroll position entirely. */
+export type AutoScrollMode = 'off' | 'auto' | 'always';
+
+/** Coerce an untyped wire value into a valid {@link AutoScrollMode} (default `auto`). */
+export function coerceAutoScrollMode(value: unknown): AutoScrollMode {
+  return value === 'off' || value === 'auto' || value === 'always' ? value : 'auto';
+}
+
 /**
  * The "Show Timestamps" flags (kodo-vsix-only — never sent to or read by the
  * kodo server): whether a timestamp line is rendered above each primary
@@ -52,16 +64,20 @@ export interface UiSettings {
    *  `App.tsx`'s `handleKeyDown`. Backs the "General" section's "How to
    *  submit a prompt" radio choice. */
   enterSubmits: boolean;
+  /** See {@link AutoScrollMode}. Backs the "General" section's "Auto-scroll"
+   *  radio choice; read by App.tsx's stream-scroll effect. */
+  autoScroll: AutoScrollMode;
 }
 
-/** Flags-off, system-zone, ISO-order-24h, Enter-sends default — matches
- *  extension.ts's `_DEFAULT_UI_SETTINGS` and settings-webview/reducer.ts's
- *  initial `uiSettings`. */
+/** Flags-off, system-zone, ISO-order-24h, Enter-sends, Auto-scroll-on
+ *  default — matches extension.ts's `_DEFAULT_UI_SETTINGS` and
+ *  settings-webview/reducer.ts's initial `uiSettings`. */
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   showTimestamps: false,
   timezone: 'system',
   clockFormat: 'ymd_24h',
   enterSubmits: true,
+  autoScroll: 'auto',
 };
 
 export interface LastCallTokens {

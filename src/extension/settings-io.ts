@@ -45,6 +45,7 @@ const DEFAULT_UI_SETTINGS: UiSettings = {
   timezone: 'system',
   clockFormat: 'ymd_24h',
   enterSubmits: true,
+  autoScroll: 'auto',
   pinnedLocalModels: [],
   pinnedCloudVendors: [],
   dismissedLocalLaunchWarnings: [],
@@ -78,6 +79,9 @@ export function readUiSettings(): UiSettings {
     timezone: typeof raw.timezone === 'string' && raw.timezone ? raw.timezone : DEFAULT_UI_SETTINGS.timezone,
     clockFormat: typeof raw.clockFormat === 'string' && raw.clockFormat ? raw.clockFormat : DEFAULT_UI_SETTINGS.clockFormat,
     enterSubmits: typeof raw.enterSubmits === 'boolean' ? raw.enterSubmits : DEFAULT_UI_SETTINGS.enterSubmits,
+    autoScroll: raw.autoScroll === 'off' || raw.autoScroll === 'auto' || raw.autoScroll === 'always'
+      ? raw.autoScroll
+      : DEFAULT_UI_SETTINGS.autoScroll,
     pinnedLocalModels: Array.isArray(raw.pinnedLocalModels)
       ? raw.pinnedLocalModels.filter((n): n is string => typeof n === 'string')
       : DEFAULT_UI_SETTINGS.pinnedLocalModels,
