@@ -9,6 +9,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import * as cloudCredentials from '../cloud-credentials';
+import { kodoDiagnostics } from '../diagnostics';
 import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from '../reconcile-policy';
 import type { SessionDeps } from '../session/types';
 import { SessionController } from '../session/controller';
@@ -40,7 +41,17 @@ function sessionDeps(): SessionDeps {
     getSamplingContext: currentSamplingContext,
     getUiSettings: readUiSettings,
     handleApiKeyRequest: (vendor, requestId, send) => {
-      state.apiKeyQueue = state.apiKeyQueue.then(() => handleApiKeyRequest(vendor, requestId, send));
+      // The `.catch` is load-bearing, not defensive: a rejection left in the
+      // chain makes `apiKeyQueue` a permanently rejected promise, so every
+      // later `.then` is skipped, no window in this session ever prompts
+      // again, and the server's KeyBroker waits forever for a response that
+      // is no longer coming. `handleApiKeyRequest` answers its own failures;
+      // this is the backstop for anything that escapes it.
+      state.apiKeyQueue = state.apiKeyQueue
+        .then(() => handleApiKeyRequest(vendor, requestId, send))
+        .catch((err) => {
+          kodoDiagnostics().appendLine(`[kodo] API key request queue error (${vendor}): ${String(err)}`);
+        });
     },
     chooseProjectFolder: (requestId, send) => {
       state.chooseProjectFolderQueue = state.chooseProjectFolderQueue.then(() =>

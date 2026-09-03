@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import * as cloudCredentials from '../cloud-credentials';
+import { kodoDiagnostics } from '../diagnostics';
 import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
@@ -252,30 +253,76 @@ export async function maybeRefreshBedrockCatalog(): Promise<void> {
 // add-a-key flow when the vendor has none configured yet.
 // ---------------------------------------------------------------------------
 
+/** Drop keys whose SecretStorage secret has vanished
+ *  ({@link cloudCredentials.pruneMissingKeys}), refresh the panel, and say so.
+ *
+ *  Silence is not an option here: the key disappears from the settings list,
+ *  and a user who sees a configured key one moment and an "enter your API key"
+ *  prompt the next has no way to tell that from a bug. One message names every
+ *  dropped key — pruning is idempotent, so it is shown once and never repeats
+ *  for the same key.
+ *
+ *  @param vendor Restrict to one vendor; omit to sweep all of them. */
+export async function pruneMissingCloudKeys(vendor?: string): Promise<void> {
+  if (!state.extensionContext) {
+    return;
+  }
+  const missing = await cloudCredentials.pruneMissingKeys(state.extensionContext, vendor);
+  if (missing.length === 0) {
+    return;
+  }
+  pushCloudAiSettingsState();
+
+  const listed = missing.map((k) => `${k.vendor}: "${k.name}"`).join(', ');
+  const plural = missing.length > 1;
+  vscode.window.showWarningMessage(
+    `Kōdo: ${plural ? 'these API keys are' : 'this API key is'} no longer in VS Code's secret storage ` +
+      `and ${plural ? 'have' : 'has'} been removed — ${listed}. ` +
+      `Add ${plural ? 'them' : 'it'} again in Kōdo Settings → Cloud AI.`,
+  );
+}
+
 export async function handleApiKeyRequest(
   vendor: string,
   requestId: string,
   send: (env: Envelope) => void,
 ): Promise<void> {
   if (!state.extensionContext) {
+    // No context, no SecretStorage — answer anyway. The server's KeyBroker
+    // blocks on this request until it gets a response (kodo/doc/
+    // WS_PROTOCOL.md §6.3), so a silent return hangs the session's turn.
+    send(makeResponse(requestId, { error: 'cancelled' }));
     return;
   }
 
-  const key = await cloudCredentials.resolveApiKey(state.extensionContext, vendor);
-  pushCloudAiSettingsState();
-  // A Bedrock key that was just added is also what the (credential-gated)
-  // model catalog fetch needs, and the picker is empty until it lands.
-  if (vendor === 'bedrock') {
-    void maybeRefreshBedrockCatalog();
-  }
-  if (key) {
-    send(makeResponse(requestId, { api_key: key }));
-    return;
-  }
+  try {
+    // A key whose secret is gone must not be mistaken for one that merely
+    // failed to resolve: prune it (and tell the user why the prompt below is
+    // about to appear) before falling back to the interactive add flow.
+    await pruneMissingCloudKeys(vendor);
 
-  vscode.window.showErrorMessage(
-    `Kōdo: prompt not sent. A ${vendor} API key is required to use cloud-based LLM. ` +
-      'Alternatively, you can configure Kōdo to use a local model running on your machine (e.g., llama.cpp).',
-  );
-  send(makeResponse(requestId, { error: 'cancelled' }));
+    const key = await cloudCredentials.resolveApiKey(state.extensionContext, vendor);
+    pushCloudAiSettingsState();
+    // A Bedrock key that was just added is also what the (credential-gated)
+    // model catalog fetch needs, and the picker is empty until it lands.
+    if (vendor === 'bedrock') {
+      void maybeRefreshBedrockCatalog();
+    }
+    if (key) {
+      send(makeResponse(requestId, { api_key: key }));
+      return;
+    }
+
+    vscode.window.showErrorMessage(
+      `Kōdo: prompt not sent. A ${vendor} API key is required to use cloud-based LLM. ` +
+        'Alternatively, you can configure Kōdo to use a local model running on your machine (e.g., llama.cpp).',
+    );
+    send(makeResponse(requestId, { error: 'cancelled' }));
+  } catch (err) {
+    // Same reason as the no-context branch: every path out of here owes the
+    // server a response.
+    kodoDiagnostics().appendLine(`[kodo] API key request for ${vendor} failed: ${String(err)}`);
+    vscode.window.showErrorMessage(`Kōdo: could not read the stored ${vendor} API key — ${String(err)}`);
+    send(makeResponse(requestId, { error: 'cancelled' }));
+  }
 }

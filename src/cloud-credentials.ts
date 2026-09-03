@@ -25,6 +25,14 @@ export interface ApiKeyEntry {
   active: boolean;
 }
 
+/** A key listed in `cloud_settings.json` whose SecretStorage secret is gone —
+ *  see {@link pruneMissingKeys}. */
+export interface MissingKey {
+  vendor: string;
+  name: string;
+  uuid: string;
+}
+
 interface VendorKeyMap {
   keys: Record<string, string>;
   active: string | null;
@@ -62,6 +70,75 @@ export function listKeys(vendor: string): ApiKeyEntry[] {
     uuid,
     active: uuid === vendorMap.active,
   }));
+}
+
+/**
+ * Delete every configured key whose SecretStorage secret has gone missing,
+ * and report what was dropped.
+ *
+ * The two halves of a key live in different places — the name -> UUID map in
+ * `~/.kodo/etc/cloud_settings.json`, the secret itself in VS Code's
+ * SecretStorage — and only the first is part of the extension's *identity*:
+ * SecretStorage is namespaced per `publisher.name`, so renaming the extension
+ * (`stanislavmorozov.kodo` -> `stanislavmorozov.vs-kodo`, package.json, July
+ * 2026) orphaned every secret stored before it while the JSON survived
+ * untouched. The result was a key the settings panel proudly badged "Active"
+ * that {@link getActiveKey} could not resolve, so every cloud turn popped the
+ * "enter your API key" prompt with no explanation. Pruning makes the JSON tell
+ * the truth: what it lists is what can actually be used.
+ *
+ * A SecretStorage read that *throws* is never treated as a missing key — a
+ * locked keychain must not delete the user's configuration.
+ *
+ * @param context Extension context owning the SecretStorage namespace.
+ * @param vendor Restrict to one vendor; omit to sweep every vendor in the file.
+ * @returns The dropped keys (empty when everything resolved).
+ */
+export async function pruneMissingKeys(
+  context: vscode.ExtensionContext,
+  vendor?: string,
+): Promise<MissingKey[]> {
+  const settings = _readCloudSettings();
+  const missing: MissingKey[] = [];
+
+  for (const v of vendor ? [vendor] : Object.keys(settings)) {
+    const vendorMap = settings[v];
+    if (!vendorMap) {
+      continue;
+    }
+    for (const [name, uuid] of Object.entries(vendorMap.keys)) {
+      let secret: string | undefined;
+      try {
+        secret = await context.secrets.get(uuid);
+      } catch {
+        // Read failure, not absence — see the doc comment.
+        continue;
+      }
+      if (!secret) {
+        missing.push({ vendor: v, name, uuid });
+      }
+    }
+  }
+
+  if (missing.length === 0) {
+    return missing;
+  }
+  // Re-read before writing: the secret reads above are awaited, so an
+  // `addKey` may have landed since the snapshot — apply the removals to the
+  // current file, and only where the name still maps to the same dead UUID.
+  const current = _readCloudSettings();
+  for (const { vendor: v, name, uuid } of missing) {
+    const vendorMap = current[v];
+    if (!vendorMap || vendorMap.keys[name] !== uuid) {
+      continue;
+    }
+    delete vendorMap.keys[name];
+    if (vendorMap.active === uuid) {
+      vendorMap.active = null;
+    }
+  }
+  _writeCloudSettings(current);
+  return missing;
 }
 
 /** The active key's secret for *vendor*, or `undefined` if none is configured. */

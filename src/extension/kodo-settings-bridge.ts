@@ -14,6 +14,7 @@ import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { KodoSettingsMessage, SessionListEntry, SkillsState } from '../settings-panel/types';
 import {
   cloudAiStateForPanel,
+  pruneMissingCloudKeys,
   pushCloudAiSettingsState,
   refreshBedrockCatalog,
   refreshOpenRouterCatalog,
@@ -171,6 +172,10 @@ export async function openKodoSettings(
     knobDefs: state.knobDefsState,
     llamaArgCatalog: state.llamaArgCatalogState,
   };
+  // Sweep dead keys before reading the key lists: the panel's "Active" badge
+  // comes straight off cloud_settings.json, so a key whose secret is gone
+  // would otherwise be displayed as usable right up until a turn asks for it.
+  await pruneMissingCloudKeys();
   const cloudAi = cloudAiStateForPanel();
   const panel = KodoSettingsPanel.createOrShow(
     state.extensionContext!.extensionUri,

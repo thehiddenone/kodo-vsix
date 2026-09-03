@@ -12,7 +12,7 @@ import type { Envelope } from '../envelope';
 import * as hfTokens from '../hf-tokens';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { BedrockModelInfo, CloudRegistry, OpenRouterModelInfo } from '../llm-registry-types';
-import { maybeRefreshBedrockCatalog, pushCloudAiSettingsState } from './cloud-ai-settings';
+import { maybeRefreshBedrockCatalog, pruneMissingCloudKeys, pushCloudAiSettingsState } from './cloud-ai-settings';
 import { sendControl } from './control-send';
 import { resumePendingCreateProjectPrompt } from './create-project';
 import { applyLlamaState, onLlamaProgress } from './llamacpp';
@@ -117,6 +117,10 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
     // credentials it already has. Fire-and-forget and silent: a window with
     // no Bedrock key configured must not be nagged for one.
     void maybeRefreshBedrockCatalog();
+    // Catch keys whose secret has gone missing now, while the window is idle,
+    // rather than at the worst possible moment — mid-turn, when the server
+    // pulls the key and the only remaining move is to prompt for it.
+    void pruneMissingCloudKeys();
     broadcastThinkingContext();
     broadcastSamplingContext();
     // The server is provably reachable now — reopen any of this window's
