@@ -25,6 +25,20 @@ export const APPROX_TOKENS_TITLE =
   'Approximate number of tokens, estimated from text length (~4 characters per token). Not the model’s exact tokenization.';
 
 /**
+ * Throughput for `tokens` produced over `durationMs`, rounded to a tenth (e.g.
+ * "42.7"). Returns `null` when the duration is unknown or not yet positive —
+ * rehydrated history carries no duration, and a live counter's first render can
+ * land in the same millisecond it started — so callers omit the rate entirely
+ * rather than dividing by zero or flashing a nonsense number.
+ */
+export function tokenRate(tokens: number, durationMs: number | null): string | null {
+  if (durationMs === null || durationMs <= 0) {
+    return null;
+  }
+  return (tokens / (durationMs / 1000)).toFixed(1);
+}
+
+/**
  * "<prefix> in Xs, ~N tokens, ~R tok/s" — the completion summary shown once a
  * thinking block or tool-arg generation finishes. Token counts are approximate
  * (see {@link approxTokens}); pair this label with {@link APPROX_TOKENS_TITLE}
@@ -34,12 +48,11 @@ export const APPROX_TOKENS_TITLE =
  */
 export function completionLabel(prefix: string, chars: number, durationMs: number | null): string {
   const tokens = approxTokens(chars);
-  if (durationMs === null || durationMs <= 0) {
+  const rate = tokenRate(tokens, durationMs);
+  if (durationMs === null || rate === null) {
     return `${prefix}, ~${tokens.toLocaleString()} tokens`;
   }
-  const secs = durationMs / 1000;
-  const rate = (tokens / secs).toFixed(1);
-  return `${prefix} in ${Math.round(secs)}s, ~${tokens.toLocaleString()} tokens, ~${rate} tok/s`;
+  return `${prefix} in ${Math.round(durationMs / 1000)}s, ~${tokens.toLocaleString()} tokens, ~${rate} tok/s`;
 }
 /** Compact a token count for the header: 1234 → "1,234", 25600 → "25.6K". */
 export function formatTokens(n: number): string {

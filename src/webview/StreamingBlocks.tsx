@@ -2,13 +2,25 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { styles } from './styles';
 import { BouncingDots } from './indicators';
 import { useElapsedTick } from './hooks';
-import { approxTokens, completionLabel, formatTokens, APPROX_TOKENS_TITLE } from './format';
+import { approxTokens, completionLabel, formatTokens, tokenRate, APPROX_TOKENS_TITLE } from './format';
 import type { SessionEntry } from './types';
-/** "~<N> tokens · <S>s" line shown under a live streaming summary. Token count
- *  is approximate (estimated from text length) — hence the "~" and tooltip. */
+/** "~<N> tokens · <S>s · ~<R> tok/s" line shown under a live streaming summary,
+ *  ticked by {@link useElapsedTick} in the owning block. Token count is
+ *  approximate (estimated from text length) — hence the "~" and tooltip — and
+ *  so is the rate derived from it. The rate is computed off the raw elapsed
+ *  milliseconds, not the whole-second `elapsed` readout, so it is meaningful
+ *  from the first tick instead of dividing by a floored 0; it is dropped
+ *  entirely while the elapsed time is still zero or the start is unknown. */
 function StreamingMeta({ content, startedAt }: { content: string; startedAt: number | null }) {
-  const elapsed = startedAt !== null ? Math.floor((Date.now() - startedAt) / 1000) : 0;
-  return <div style={styles.toolgenMeta} title={APPROX_TOKENS_TITLE}>{`~${approxTokens(content.length).toLocaleString()} tokens · ${elapsed}s`}</div>;
+  const elapsedMs = startedAt !== null ? Date.now() - startedAt : null;
+  const elapsed = elapsedMs !== null ? Math.floor(elapsedMs / 1000) : 0;
+  const rate = tokenRate(approxTokens(content.length), elapsedMs);
+  return (
+    <div style={styles.toolgenMeta} title={APPROX_TOKENS_TITLE}>
+      {`~${approxTokens(content.length).toLocaleString()} tokens · ${elapsed}s`}
+      {rate !== null && ` · ~${rate} tok/s`}
+    </div>
+  );
 }
 
 interface ThinkingBlockProps {

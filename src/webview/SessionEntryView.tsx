@@ -4,7 +4,7 @@ import type { SessionEntry, DiffLinkData, CheckpointData, UiSettings } from './t
 import { Markdown } from './markdown';
 import { ThinkingBlock, CompactionBlock, WebSearchBlock } from './StreamingBlocks';
 import { RunCommandProgress } from './indicators';
-import { completionLabel, APPROX_TOKENS_TITLE, formatTimestamp } from './format';
+import { completionLabel, tokenRate, APPROX_TOKENS_TITLE, formatTimestamp } from './format';
 
 /**
  * The opt-in "Show Timestamps" line rendered above a user_message/
@@ -273,11 +273,17 @@ export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
       const mins = Math.floor(entry.durationMs / 60000);
       const secs = Math.round((entry.durationMs % 60000) / 1000);
       const timeStr = mins > 0 ? `${mins} min ${secs} seconds` : `${secs} seconds`;
+      // Unlike the per-block streaming readouts these counts are the server's
+      // real tokenization for the whole turn, so the rate carries no "~".
+      const rate = tokenRate(entry.outputTokens, entry.durationMs);
+      const received = rate === null
+        ? `${entry.outputTokens} tokens received`
+        : `${entry.outputTokens} tokens received (${rate} tok/s)`;
       return (
         <div style={styles.statusResponse}>
           {'Kodo responded in '}
           {timeStr}
-          {`, ${entry.inputTokens} tokens sent, ${entry.outputTokens} tokens received, context window size ${entry.contextTokens}.`}
+          {`, ${entry.inputTokens} tokens sent, ${received}, context window size ${entry.contextTokens}.`}
         </div>
       );
     }
