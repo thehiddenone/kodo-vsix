@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { styles } from './styles';
 import { SessionEntryView } from './SessionEntryView';
@@ -15,14 +15,30 @@ interface SubsessionGroupViewProps {
 }
 
 /**
- * Wraps one subsession's transcript in a collapsible block, expanded by
- * default. The take-over/task-brief lines stay outside the collapsible area
- * (always visible); only the subsession's own conversation entries hide when
+ * Wraps one subsession's transcript in a collapsible block. Only the *running*
+ * subsession is expanded: a group with no "end" divider yet starts expanded,
+ * every already-finished one (which is all of them when a session is loaded
+ * from history) starts collapsed, and a running one auto-collapses the moment
+ * its end divider arrives. Collapsing on finish only fires on that
+ * running -> finished transition, so a block the user expanded by hand stays
+ * expanded across later re-renders.
+ *
+ * The take-over/task-brief lines stay outside the collapsible area (always
+ * visible); only the subsession's own conversation entries hide when
  * collapsed. The hand-back `<kodo>`/`<kodo_crit>` line renders after the
  * block, once the subsession has actually ended.
  */
 export function SubsessionGroupView({ group, uiSettings, children }: SubsessionGroupViewProps) {
-  const [collapsed, setCollapsed] = useState(false);
+  const running = group.endEntry === null;
+  const [collapsed, setCollapsed] = useState(!running);
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      // Just handed back to the parent (cleanly or `failed`) — fold it away.
+      setCollapsed(true);
+    }
+    wasRunning.current = running;
+  }, [running]);
   const displayName = group.startEntry.displayName;
   return (
     <div>

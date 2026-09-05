@@ -420,8 +420,13 @@ export type SessionEntry =
   // is "auto" (autonomous/auto-unstuck) or "manual" (the user clicked
   // "Unstick it"); `source` identifies which detector fired
   // ("stall" | "missing_return_result" | "cyclic_thinking" |
-  // "think_in_tool_call" | "tool_call_cyclic") — used live (not on replay)
-  // to decide whether a mid-stream buffer needs flushing, see reducer.ts.
+  // "think_in_tool_call" | "tool_call_cyclic" | "repeated_tool_call") — used
+  // live (not on replay) to decide whether a mid-stream buffer needs
+  // flushing, see reducer.ts. Only the three mid-stream sources
+  // (cyclic_thinking, think_in_tool_call, tool_call_cyclic) ever need that;
+  // "stall", "missing_return_result" and "repeated_tool_call" all fire at a
+  // round boundary with nothing buffered, so they need no branch of their own
+  // (kodo doc/STUCK_DETECTION.md §2.11 for the last of those).
   // Persisted as a "nudge"-kind message and replayed via session_history.
   // Replaces the former 'agent_unstuck_nudge'/'cyclic_thinking_notice' pair
   // (unified 2026-08-03); old sessions with those kinds still replay as this
