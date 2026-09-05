@@ -39,7 +39,7 @@ export class PromptGateManager {
       gateId: env.id,
       gateType: String(env.payload.gate_type ?? ''),
       summary: String(env.payload.summary ?? ''),
-      artifactPath: env.payload.artifact_path ? String(env.payload.artifact_path) : null,
+      paths: Array.isArray(env.payload.paths) ? env.payload.paths.map((p) => String(p)) : [],
     };
     this.post({ type: 'approval_request', ...this.gate });
   }
@@ -50,6 +50,10 @@ export class PromptGateManager {
         type: 'prompt.approval.response',
         action: String(msg.action ?? 'agree'),
         feedback_text: String(msg.feedback ?? '') || null,
+        // Which member file the user had selected when they rejected. The
+        // engine anchors the finding it mints from their feedback to it, so the
+        // author knows which file to revisit; empty means "about the set".
+        artifact_path: String(msg.artifactPath ?? '') || null,
       }),
     );
     this.gate = null;

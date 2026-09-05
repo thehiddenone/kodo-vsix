@@ -615,7 +615,7 @@ export function reducer(state: State, action: Action): State {
           gateId: action.gateId,
           gateType: action.gateType,
           summary: action.summary,
-          artifactPath: action.artifactPath,
+          paths: action.paths,
         },
         streaming: false,
       };

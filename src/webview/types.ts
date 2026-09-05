@@ -96,7 +96,10 @@ export interface GateData {
   gateId: string;
   gateType: string;
   summary: string;
-  artifactPath: string | null;
+  /** Every file the decision covers — see the identical field in
+   *  `src/session/types.ts`. Accepting settles the whole set at once; per-file
+   *  acceptance would permit a half-accepted, unbuildable change. */
+  paths: string[];
 }
 
 /** One question in an ask_user batch. `options` are plain answer strings, the
@@ -664,7 +667,7 @@ export type Action =
   | { type: 'restore_prompt'; text: string }
   | { type: 'usage'; cumulativeInputTokens: number; cumulativeInputTokensUncached: number; cumulativeOutputTokens: number; lastCallTokens: LastCallTokens | null; durationSeconds: number }
   | { type: 'file_change'; path: string; kind: string }
-  | { type: 'approval_request'; gateId: string; gateType: string; summary: string; artifactPath: string | null }
+  | { type: 'approval_request'; gateId: string; gateType: string; summary: string; paths: string[] }
   | { type: 'approval_cleared' }
   | { type: 'question_request'; requestId: string; toolCallId: string; questions: AskUserQuestion[] }
   | { type: 'question_answered'; toolCallId: string; answers: AskUserAnswer[] }

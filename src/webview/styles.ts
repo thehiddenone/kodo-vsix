@@ -812,6 +812,39 @@ export const styles = {
     fontStyle: 'italic',
   },
   gateArtifact: { marginBottom: '8px' },
+  // A work product's member files, listed on the acceptance gate. The whole set
+  // is accepted or rejected in one decision; the per-row toggle only chooses
+  // which file a *rejection*'s feedback is anchored to.
+  gateFilesHint: {
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+    marginBottom: '4px',
+  },
+  gateFileRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    justifyContent: 'space-between',
+  },
+  gateFileSelect: {
+    background: 'transparent',
+    color: 'var(--vscode-descriptionForeground)',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '10px',
+    padding: '0 4px',
+    flexShrink: 0,
+  },
+  gateFileSelected: {
+    background: 'transparent',
+    color: 'var(--vscode-textLink-foreground)',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '10px',
+    padding: '0 4px',
+    fontWeight: 'bold',
+    flexShrink: 0,
+  },
   gateActions: { display: 'flex', flexDirection: 'column', gap: '6px' },
   gateTopRow: { display: 'flex', gap: '8px', alignItems: 'center' },
   agreeBtn: {

@@ -95,7 +95,12 @@ export interface GateData {
   gateId: string;
   gateType: string;
   summary: string;
-  artifactPath: string | null;
+  /** Every file the decision covers. A `document_review` gate settles a whole
+   *  work product — all the files one review round wrote together — as a single
+   *  accept or reject, so the panel lists them all and the user's rejection may
+   *  name which one they were looking at. One entry for a single-file set;
+   *  empty for a gate that is not about files at all. */
+  paths: string[];
 }
 
 export interface AskUserQuestion {

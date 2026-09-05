@@ -315,7 +315,7 @@ export function App() {
             gateId: String(msg.gateId ?? ''),
             gateType: String(msg.gateType ?? ''),
             summary: String(msg.summary ?? ''),
-            artifactPath: msg.artifactPath ? String(msg.artifactPath) : null,
+            paths: Array.isArray(msg.paths) ? msg.paths.map((p) => String(p)) : [],
           });
           break;
         case 'question_request': {
@@ -716,12 +716,13 @@ export function App() {
       ) : state.pendingGate !== null ? (
         <ApprovalGate
           gate={state.pendingGate}
-          onRespond={(action, feedback) => {
+          onRespond={(action, feedback, artifactPath) => {
             vscode.postMessage({
               type: 'approval_respond',
               gateId: state.pendingGate!.gateId,
               action,
               feedback,
+              artifactPath,
             });
             dispatch({ type: 'approval_cleared' });
           }}
