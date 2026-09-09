@@ -91,6 +91,18 @@ export interface FileEventData {
   kind: string;
 }
 
+/** One outstanding finding offered at the approval gate for the user to tick
+ *  off as done. Only ever non-empty for an author whose sole reviewer is the
+ *  user — with a critic in the loop the gate fires on an empty backlog. */
+export interface GateFinding {
+  id: string;
+  kind: string;
+  description: string;
+  reportedBy: string;
+  /** `path:line` per location, pre-formatted; empty for an unanchored finding. */
+  locations: string[];
+}
+
 export interface GateData {
   gateId: string;
   gateType: string;
@@ -101,6 +113,11 @@ export interface GateData {
    *  name which one they were looking at. One entry for a single-file set;
    *  empty for a gate that is not about files at all. */
   paths: string[];
+  /** Still-outstanding findings the user may resolve individually while
+   *  responding. Without this, an author the user alone reviews accumulates
+   *  every objection ever raised, since nothing closes a finding until the
+   *  whole work product is approved. */
+  findings: GateFinding[];
 }
 
 export interface AskUserQuestion {

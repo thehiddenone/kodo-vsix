@@ -35,11 +35,30 @@ export class PromptGateManager {
   }
 
   handleApproval(env: Envelope): void {
+    const rawFindings = Array.isArray(env.payload.findings) ? env.payload.findings : [];
     this.gate = {
       gateId: env.id,
       gateType: String(env.payload.gate_type ?? ''),
       summary: String(env.payload.summary ?? ''),
       paths: Array.isArray(env.payload.paths) ? env.payload.paths.map((p) => String(p)) : [],
+      findings: rawFindings.map((raw) => {
+        const finding = raw as Record<string, unknown>;
+        const rawLocations = Array.isArray(finding.locations) ? finding.locations : [];
+        return {
+          id: String(finding.id ?? ''),
+          kind: String(finding.kind ?? ''),
+          description: String(finding.description ?? ''),
+          reportedBy: String(finding.reported_by ?? ''),
+          // Flattened to `path:line` here rather than in the panel: the gate
+          // only ever shows them, and a string list keeps GateData cheap to
+          // cache and replay on a webview reload.
+          locations: rawLocations.map((rawLocation) => {
+            const location = rawLocation as Record<string, unknown>;
+            const path = String(location.path ?? '');
+            return typeof location.first_line === 'number' ? `${path}:${location.first_line}` : path;
+          }),
+        };
+      }),
     };
     this.post({ type: 'approval_request', ...this.gate });
   }
@@ -54,6 +73,12 @@ export class PromptGateManager {
         // engine anchors the finding it mints from their feedback to it, so the
         // author knows which file to revisit; empty means "about the set".
         artifact_path: String(msg.artifactPath ?? '') || null,
+        // Findings the user ticked off as done. The engine validates every id
+        // against what is actually outstanding, so this is a request, not a
+        // command.
+        resolved_finding_ids: Array.isArray(msg.resolvedFindingIds)
+          ? msg.resolvedFindingIds.map((id) => String(id))
+          : [],
       }),
     );
     this.gate = null;

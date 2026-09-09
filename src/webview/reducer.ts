@@ -661,6 +661,7 @@ export function reducer(state: State, action: Action): State {
           gateType: action.gateType,
           summary: action.summary,
           paths: action.paths,
+          findings: action.findings ?? [],
         },
         streaming: false,
       };

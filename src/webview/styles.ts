@@ -734,6 +734,31 @@ export const styles = {
   securityRuleAddedIcon: {
     flexShrink: 0,
   },
+  // Outstanding findings offered at the approval gate for individual
+  // resolution. Sits between the file list and the actions, because it is part
+  // of composing the response rather than a record of it.
+  gateFindings: {
+    borderTop: '1px solid var(--vscode-panel-border)',
+    padding: '6px 0 2px',
+    marginTop: '4px',
+    fontSize: '12px',
+  },
+  gateFindingRow: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '6px',
+    padding: '2px 0',
+    cursor: 'pointer',
+  },
+  gateFindingDone: {
+    textDecoration: 'line-through',
+    opacity: 0.6,
+  },
+  gateFindingWhere: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+  },
   // Review findings table (kodo doc/GUIDED_DEV_MODE.md) — the user-only view
   // of a work product's backlog after one review round. Deliberately shaped
   // like the tool-call box rather than a gate card: it is a record of what

@@ -7,8 +7,14 @@ interface ApprovalGateProps {
   gate: GateData;
   /** `artifactPath` names the member file the user had selected when they
    *  responded, so a rejection can be anchored to it; empty for a decision
-   *  about the set as a whole. */
-  onRespond: (action: string, feedback: string, artifactPath: string) => void;
+   *  about the set as a whole. `resolvedFindingIds` are the outstanding
+   *  findings they ticked off as done. */
+  onRespond: (
+    action: string,
+    feedback: string,
+    artifactPath: string,
+    resolvedFindingIds: string[],
+  ) => void;
 }
 
 /** The last path segment — what identifies a file at a glance in a list where
@@ -23,19 +29,27 @@ export function ApprovalGate({ gate, onRespond }: ApprovalGateProps) {
   // Which member the feedback is about. Null means the set as a whole, which
   // is the right default: most objections are not about one file.
   const [selected, setSelected] = useState<string | null>(null);
+  // Findings the user has ticked off as done. Note this is orthogonal to the
+  // accept/reject decision: its whole point is a *rejection* that still settles
+  // the earlier objections it does not repeat.
+  const [resolved, setResolved] = useState<string[]>([]);
   const multi = gate.paths.length > 1;
+
+  function toggleResolved(id: string) {
+    setResolved((ids) => (ids.includes(id) ? ids.filter((i) => i !== id) : [...ids, id]));
+  }
 
   function handleAgree() {
     // One decision settles every file. Accepting them one at a time would
     // permit exactly the half-accepted, unbuildable state a work product
     // exists to prevent.
-    onRespond('agree', '', '');
+    onRespond('agree', '', '', resolved);
   }
 
   function handleFeedback() {
     const text = feedbackRef.current?.value.trim() ?? '';
     if (!text) return;
-    onRespond('feedback', text, selected ?? '');
+    onRespond('feedback', text, selected ?? '', resolved);
     if (feedbackRef.current) feedbackRef.current.value = '';
   }
 
@@ -88,12 +102,38 @@ export function ApprovalGate({ gate, onRespond }: ApprovalGateProps) {
           })}
         </div>
       )}
+      {gate.findings.length > 0 && (
+        <div style={styles.gateFindings}>
+          <div style={styles.gateFilesHint}>
+            Still open from your earlier feedback. Tick anything you now consider
+            done — otherwise it stays on the author's list until you accept.
+          </div>
+          {gate.findings.map((finding) => {
+            const isResolved = resolved.includes(finding.id);
+            return (
+              <label key={finding.id} style={styles.gateFindingRow}>
+                <input
+                  type="checkbox"
+                  checked={isResolved}
+                  onChange={() => toggleResolved(finding.id)}
+                />
+                <span style={isResolved ? styles.gateFindingDone : undefined}>
+                  {finding.description}
+                  {finding.locations.length > 0 && (
+                    <span style={styles.gateFindingWhere}> ({finding.locations.join(', ')})</span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
       <div style={styles.gateActions}>
         <div style={styles.gateTopRow}>
           <button style={styles.agreeBtn} onClick={handleAgree}>
             {multi ? `✓ Accept all ${gate.paths.length}` : '✓ Agree'}
           </button>
-          <button style={styles.stopBtn} onClick={() => onRespond('stop', '', '')}>
+          <button style={styles.stopBtn} onClick={() => onRespond('stop', '', '', resolved)}>
             ◼ Stop
           </button>
         </div>

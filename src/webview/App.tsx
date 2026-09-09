@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
-import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart, SessionEntry } from './types';
+import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart, SessionEntry, GateFinding } from './types';
 import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset, coerceAutoScrollMode } from './types';
 import type { SamplingParamSpec } from '../llm-registry-types';
 import { coerceThinkingFamily, parseSamplingValues } from '../llm-registry-types';
@@ -316,6 +316,9 @@ export function App() {
             gateType: String(msg.gateType ?? ''),
             summary: String(msg.summary ?? ''),
             paths: Array.isArray(msg.paths) ? msg.paths.map((p) => String(p)) : [],
+            // Already normalized by PromptGateManager.handleApproval; the
+            // extension host is the one boundary that reshapes wire payloads.
+            findings: Array.isArray(msg.findings) ? (msg.findings as GateFinding[]) : [],
           });
           break;
         case 'question_request': {
@@ -716,13 +719,14 @@ export function App() {
       ) : state.pendingGate !== null ? (
         <ApprovalGate
           gate={state.pendingGate}
-          onRespond={(action, feedback, artifactPath) => {
+          onRespond={(action, feedback, artifactPath, resolvedFindingIds) => {
             vscode.postMessage({
               type: 'approval_respond',
               gateId: state.pendingGate!.gateId,
               action,
               feedback,
               artifactPath,
+              resolvedFindingIds,
             });
             dispatch({ type: 'approval_cleared' });
           }}

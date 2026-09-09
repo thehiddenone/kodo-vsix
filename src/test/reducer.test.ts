@@ -328,3 +328,48 @@ suite('reducer — review findings table', () => {
     assert.strictEqual(blocks[0].kind, 'entry');
   });
 });
+
+// Per-finding resolution at the approval gate: the gate carries the work
+// product's outstanding findings so a rejection can settle the earlier
+// objections it does not repeat.
+suite('reducer — approval gate findings', () => {
+  const findings = [
+    {
+      id: 'proj_narrative_author_narrative_md_4',
+      kind: 'user_feedback',
+      description: 'the North Star is too vague',
+      reportedBy: 'user',
+      locations: ['proj/specs/narrative.md:4'],
+    },
+  ];
+
+  test('the gate carries the findings the user may tick off', () => {
+    const next = reducer(initial, {
+      type: 'approval_request',
+      gateId: 'g1',
+      gateType: 'document_review',
+      summary: 'Review 2 files',
+      paths: ['proj/specs/narrative.md', 'proj/specs/tech_stack.md'],
+      findings,
+    });
+
+    assert.ok(next.pendingGate);
+    assert.strictEqual(next.pendingGate.findings.length, 1);
+    assert.strictEqual(next.pendingGate.findings[0].id, findings[0].id);
+    assert.deepStrictEqual(next.pendingGate.paths.length, 2);
+  });
+
+  test('a gate with an empty backlog offers nothing to resolve', () => {
+    const next = reducer(initial, {
+      type: 'approval_request',
+      gateId: 'g2',
+      gateType: 'document_review',
+      summary: 'Review 1 file',
+      paths: ['proj/specs/architecture.md'],
+      findings: [],
+    });
+
+    assert.ok(next.pendingGate);
+    assert.deepStrictEqual(next.pendingGate.findings, []);
+  });
+});

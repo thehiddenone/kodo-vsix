@@ -92,6 +92,17 @@ export interface FileEventData {
   kind: string;
 }
 
+/** One outstanding finding the approval gate offers for individual resolution
+ *  — see the identical shape in `src/session/types.ts`. */
+export interface GateFinding {
+  id: string;
+  kind: string;
+  description: string;
+  reportedBy: string;
+  /** `path:line` per location; empty for an unanchored finding. */
+  locations: string[];
+}
+
 export interface GateData {
   gateId: string;
   gateType: string;
@@ -100,6 +111,10 @@ export interface GateData {
    *  `src/session/types.ts`. Accepting settles the whole set at once; per-file
    *  acceptance would permit a half-accepted, unbuildable change. */
   paths: string[];
+  /** Findings still outstanding against this work product, which the user may
+   *  tick off as done while responding. Empty unless the user is its only
+   *  reviewer — with a critic the gate fires on an empty backlog. */
+  findings: GateFinding[];
 }
 
 /** One question in an ask_user batch. `options` are plain answer strings, the
@@ -722,7 +737,7 @@ export type Action =
   | { type: 'restore_prompt'; text: string }
   | { type: 'usage'; cumulativeInputTokens: number; cumulativeInputTokensUncached: number; cumulativeOutputTokens: number; lastCallTokens: LastCallTokens | null; durationSeconds: number }
   | { type: 'file_change'; path: string; kind: string }
-  | { type: 'approval_request'; gateId: string; gateType: string; summary: string; paths: string[] }
+  | { type: 'approval_request'; gateId: string; gateType: string; summary: string; paths: string[]; findings: GateFinding[] }
   | { type: 'approval_cleared' }
   | { type: 'question_request'; requestId: string; toolCallId: string; questions: AskUserQuestion[] }
   | { type: 'question_answered'; toolCallId: string; answers: AskUserAnswer[] }
