@@ -249,3 +249,82 @@ suite('reducer + groupSessionEntries -- Stop mid-subsession', () => {
     assert.strictEqual(last.entry.type, 'user_message');
   });
 });
+
+// The user-only findings table (kodo doc/GUIDED_DEV_MODE.md) -- the live event
+// and the replayed history entry must produce the identical session entry, or
+// a reload would render a different table from the one the round produced.
+suite('reducer — review findings table', () => {
+  const finding = {
+    id: 'proj_architect_architecture_md_12',
+    kind: 'gap',
+    description: 'no requirement covers logout',
+    state: 'outstanding',
+    reportedBy: 'architect_critic',
+    locations: [
+      { path: 'proj/specs/architecture.md', firstLine: 12, lastLine: null, excerpt: '## Auth' },
+      { path: 'proj/specs/design/AUTH.md', firstLine: 3, lastLine: null, excerpt: '' },
+    ],
+  };
+
+  const payload = {
+    workProductId: 'proj/architect',
+    agent: 'architect',
+    reviewerName: 'architect_critic',
+    iteration: 2,
+    maxRounds: 5,
+    paths: ['proj/specs/architecture.md'],
+    findings: [finding],
+  };
+
+  test('a live table is appended with its counter and locations intact', () => {
+    const next = reducer(initial, { type: 'review_findings', ...payload });
+
+    assert.strictEqual(next.session.length, 1);
+    const entry = next.session[0];
+    assert.ok(entry.type === 'review_findings');
+    assert.strictEqual(entry.iteration, 2);
+    assert.strictEqual(entry.maxRounds, 5);
+    assert.strictEqual(entry.workProductId, 'proj/architect');
+    // One row per finding: a two-location defect stays a single item.
+    assert.strictEqual(entry.findings.length, 1);
+    assert.strictEqual(entry.findings[0].locations.length, 2);
+    assert.strictEqual(entry.findings[0].locations[0].firstLine, 12);
+    // Never fed back to a model.
+    assert.strictEqual(entry.exclude_from_context, true);
+  });
+
+  test('a replayed table is identical to the live one', () => {
+    const live = reducer(initial, { type: 'review_findings', ...payload }).session[0];
+    const replayed = reducer(initial, {
+      type: 'session_history',
+      entries: [{ type: 'review_findings', ...payload }],
+      subsessions: {},
+    }).session[0];
+
+    assert.deepStrictEqual(replayed, live);
+  });
+
+  test('each round leaves its own table, so the backlog can be read as progress', () => {
+    const first = reducer(initial, { type: 'review_findings', ...payload });
+    const next = reducer(first, {
+      type: 'review_findings',
+      ...payload,
+      iteration: 3,
+      findings: [{ ...finding, state: 'fixed' }],
+    });
+
+    const tables = next.session.filter((e) => e.type === 'review_findings');
+    assert.strictEqual(tables.length, 2);
+    assert.ok(tables[1].type === 'review_findings');
+    assert.strictEqual(tables[1].iteration, 3);
+    assert.strictEqual(tables[1].findings[0].state, 'fixed');
+  });
+
+  test('a table groups as a plain feed block, never inside a subsession', () => {
+    const state = reducer(initial, { type: 'review_findings', ...payload });
+    const blocks = groupSessionEntries(state.session);
+
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].kind, 'entry');
+  });
+});

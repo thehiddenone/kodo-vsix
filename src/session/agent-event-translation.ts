@@ -107,6 +107,49 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     return true;
   }
 
+  // The user-only findings table for one review round (kodo's
+  // `doc/GUIDED_DEV_MODE.md`). Findings arrive already sorted for display —
+  // outstanding first, then by path and line — so this only reshapes the wire's
+  // snake_case into the camelCase the webview uses everywhere; `session.history`
+  // replays the same shape, which is what lets the reducer treat live and
+  // reloaded tables identically.
+  //
+  // Nothing here is ever fed back to a model: the server persists it as a
+  // marker, and markers never enter the LLM message history.
+  if (env.kind === 'event' && evtType === 'review.findings') {
+    const rawFindings = Array.isArray(env.payload.findings) ? env.payload.findings : [];
+    post({
+      type: 'review_findings',
+      workProductId: String(env.payload.work_product_id ?? ''),
+      agent: String(env.payload.agent ?? ''),
+      reviewerName: String(env.payload.reviewer_name ?? ''),
+      iteration: Number(env.payload.iteration ?? 0),
+      maxRounds: Number(env.payload.max_rounds ?? 0),
+      paths: (Array.isArray(env.payload.paths) ? env.payload.paths : []).map(String),
+      findings: rawFindings.map((raw) => {
+        const finding = raw as Record<string, unknown>;
+        const rawLocations = Array.isArray(finding.locations) ? finding.locations : [];
+        return {
+          id: String(finding.id ?? ''),
+          kind: String(finding.kind ?? ''),
+          description: String(finding.description ?? ''),
+          state: String(finding.state ?? ''),
+          reportedBy: String(finding.reported_by ?? ''),
+          locations: rawLocations.map((rawLocation) => {
+            const location = rawLocation as Record<string, unknown>;
+            return {
+              path: String(location.path ?? ''),
+              firstLine: typeof location.first_line === 'number' ? location.first_line : null,
+              lastLine: typeof location.last_line === 'number' ? location.last_line : null,
+              excerpt: String(location.excerpt ?? ''),
+            };
+          }),
+        };
+      }),
+    });
+    return true;
+  }
+
   if (env.kind === 'event' && evtType === 'agent.tool_call_detail') {
     const rawDiff = env.payload.diff as Record<string, unknown> | null | undefined;
     const diff =

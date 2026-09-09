@@ -193,6 +193,32 @@ export interface StuckAlertData {
   reasons: string[];
 }
 
+/** One place a finding points at. A finding carries a *list* of these: a
+ *  cross-file defect ("the signature in a.py does not match the call in b.py")
+ *  is one finding with two locations, not two unlinked ones. */
+export interface ReviewFindingLocation {
+  path: string;
+  /** Null for a document-wide finding, and for the user's own feedback. */
+  firstLine: number | null;
+  lastLine: number | null;
+  excerpt: string;
+}
+
+/** One defect a reviewer raised against a Guided-mode work product. */
+export interface ReviewFinding {
+  /** Stable identity, minted from the first location — it reads like a
+   *  location but is only a name; `locations` is the current answer to
+   *  "where". */
+  id: string;
+  kind: string;
+  description: string;
+  /** 'outstanding' (still to fix) or 'fixed'. */
+  state: string;
+  /** The critic that raised it, or 'user' for the user's own rejection. */
+  reportedBy: string;
+  locations: ReviewFindingLocation[];
+}
+
 /** `create_file` writes a brand-new file (no diff, just the proposed
  *  content); `edit_file` is a genuine modification of an existing one
  *  (rendered as a diff of old vs. new). */
@@ -466,7 +492,36 @@ export type SessionEntry =
   // first renders. Persisted as a "greeting" marker and replayed via
   // session_history on reload — the coding agent itself never sees it
   // (kodo/doc/WS_PROTOCOL.md §5.9i).
-  | { type: 'greeting'; text: string; exclude_from_context: true };
+  | { type: 'greeting'; text: string; exclude_from_context: true }
+  // The user-only findings table for one review round of a Guided-mode work
+  // product (kodo `doc/GUIDED_DEV_MODE.md`). Emitted after every round that
+  // could change the backlog — each critic round, and each trip through the
+  // user approval gate — and the only place the user is told what is actually
+  // wrong with a work product rather than just how many things are.
+  //
+  // No LLM ever sees it: the server persists it as a marker, and markers are
+  // never rebuilt into the model's message history. Findings arrive
+  // pre-sorted (outstanding first, then by path and line) — render in the
+  // given order rather than re-sorting, so the client and the server cannot
+  // disagree about it. Persisted as a "review_findings" marker and replayed
+  // via session_history on reload.
+  | {
+      type: 'review_findings';
+      /** `<project>/<agent>[/<responsibility>]` — the reviewed set's identity. */
+      workProductId: string;
+      /** The **author** that owns the work product, not the reviewer. */
+      agent: string;
+      /** The critic that ran this round, or 'user' for the approval gate. */
+      reviewerName: string;
+      /** 1-based round number within the current loop. */
+      iteration: number;
+      /** The loop's round budget, so the counter reads "2 of 5". */
+      maxRounds: number;
+      /** The work product's member files. */
+      paths: string[];
+      findings: ReviewFinding[];
+      exclude_from_context: true;
+    };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -737,5 +792,18 @@ export type Action =
   | { type: 'interrupted' }
   | { type: 'runtime_error'; message: string; recoverable: boolean }
   | { type: 'greeting'; text: string }
+  // The user-only findings table for one review round. Same field shape as the
+  // `review_findings` session entry, so one reader in the reducer converts both
+  // this and the replayed history entry.
+  | {
+      type: 'review_findings';
+      workProductId: string;
+      agent: string;
+      reviewerName: string;
+      iteration: number;
+      maxRounds: number;
+      paths: string[];
+      findings: ReviewFinding[];
+    }
   | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer }
   | ({ type: 'ui_settings' } & UiSettings);

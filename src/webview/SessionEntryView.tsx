@@ -1,3 +1,4 @@
+import { ReviewFindingsTable } from './ReviewFindingsTable';
 import { styles } from './styles';
 import { vscode } from './vscode';
 import type { SessionEntry, DiffLinkData, CheckpointData, UiSettings } from './types';
@@ -436,5 +437,10 @@ export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
       // since it's meant to read as Kodo speaking, just with no timestamp
       // line (it isn't a real conversational turn).
       return <div style={styles.agentTokens}><Markdown content={entry.text} /></div>;
+    case 'review_findings':
+      // The user-only findings table for one review round (kodo
+      // doc/GUIDED_DEV_MODE.md). Lands after the critic's collapsed subsession
+      // block, so each round leaves its own table in the feed.
+      return <ReviewFindingsTable entry={entry} />;
   }
 }

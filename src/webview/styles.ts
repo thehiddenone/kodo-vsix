@@ -734,6 +734,92 @@ export const styles = {
   securityRuleAddedIcon: {
     flexShrink: 0,
   },
+  // Review findings table (kodo doc/GUIDED_DEV_MODE.md) — the user-only view
+  // of a work product's backlog after one review round. Deliberately shaped
+  // like the tool-call box rather than a gate card: it is a record of what
+  // happened, not something waiting on the user, and a gate card's focus
+  // border would say otherwise.
+  reviewFindings: {
+    border: '1px solid var(--vscode-widget-border, rgba(128,128,128,0.25))',
+    borderRadius: '6px',
+    marginTop: '4px',
+    marginBottom: '8px',
+    marginLeft: '4px',
+    background:
+      'var(--vscode-editorWidget-background, var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,0.08)))',
+  },
+  reviewFindingsHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+    padding: '6px 8px',
+    fontSize: '12px',
+    cursor: 'pointer',
+    userSelect: 'none' as const,
+  },
+  reviewFindingsTitle: {
+    fontWeight: 700,
+  },
+  // The iteration counter and the outstanding/fixed split — the two things
+  // that make the table readable as progress rather than a snapshot.
+  reviewFindingsCounter: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+    marginLeft: 'auto',
+    whiteSpace: 'nowrap' as const,
+  },
+  reviewFindingsBody: {
+    // Wide rows scroll inside the table; the page body never scrolls sideways.
+    overflowX: 'auto' as const,
+    padding: '0 8px 6px',
+  },
+  reviewFindingsTable: {
+    width: '100%',
+    borderCollapse: 'collapse' as const,
+    fontSize: '11px',
+  },
+  reviewFindingsHeadCell: {
+    textAlign: 'left' as const,
+    color: 'var(--vscode-descriptionForeground)',
+    fontWeight: 600,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.05em',
+    padding: '2px 8px 4px 0',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+    whiteSpace: 'nowrap' as const,
+  },
+  reviewFindingsCell: {
+    verticalAlign: 'top' as const,
+    padding: '3px 8px 3px 0',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+  },
+  // A fixed row is history, not work: dimmed and struck so the outstanding
+  // rows above it read as the list to act on.
+  reviewFindingsRowFixed: {
+    opacity: 0.55,
+  },
+  reviewFindingsLocation: {
+    fontFamily: 'monospace',
+    whiteSpace: 'nowrap' as const,
+  },
+  reviewFindingsExtraLocation: {
+    fontFamily: 'monospace',
+    color: 'var(--vscode-descriptionForeground)',
+    whiteSpace: 'nowrap' as const,
+    display: 'block',
+  },
+  reviewFindingsBadge: {
+    background: 'var(--vscode-badge-background)',
+    color: 'var(--vscode-badge-foreground)',
+    borderRadius: '3px',
+    padding: '1px 4px',
+    fontSize: '10px',
+    whiteSpace: 'nowrap' as const,
+  },
+  reviewFindingsReporter: {
+    color: 'var(--vscode-descriptionForeground)',
+    whiteSpace: 'nowrap' as const,
+  },
   // Any watchdog nudge (doc/STUCK_DETECTION.md §2.5) now renders via the
   // Markdown renderer's <kodo_warn> callout (markdown.tsx) — a yellow
   // warning box with its own styling — rather than a dedicated style here.

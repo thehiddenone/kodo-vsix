@@ -253,7 +253,52 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
     // again instead of losing it.
     return { type: 'greeting', text: String(e.text ?? ''), exclude_from_context: true };
   }
+  if (type === 'review_findings') {
+    // Replay of the server's persisted "review_findings" marker. The server
+    // projects it into exactly the shape the live event carries, so this is a
+    // read rather than a second conversion — and the findings are already in
+    // display order, which is why nothing here sorts.
+    return { type: 'review_findings', ...readReviewFindings(e), exclude_from_context: true };
+  }
   return null;
+}
+
+/** The fields a findings table carries, from either a live action or a
+ *  replayed history entry — the two arrive in the same camelCase shape, so
+ *  one reader serves both and they cannot drift apart. */
+function readReviewFindings(e: Record<string, unknown>): Omit<
+  Extract<SessionEntry, { type: 'review_findings' }>,
+  'type' | 'exclude_from_context'
+> {
+  const rawFindings = Array.isArray(e.findings) ? e.findings : [];
+  return {
+    workProductId: String(e.workProductId ?? ''),
+    agent: String(e.agent ?? ''),
+    reviewerName: String(e.reviewerName ?? ''),
+    iteration: typeof e.iteration === 'number' ? e.iteration : 0,
+    maxRounds: typeof e.maxRounds === 'number' ? e.maxRounds : 0,
+    paths: (Array.isArray(e.paths) ? e.paths : []).map(String),
+    findings: rawFindings.map((raw) => {
+      const finding = raw as Record<string, unknown>;
+      const rawLocations = Array.isArray(finding.locations) ? finding.locations : [];
+      return {
+        id: String(finding.id ?? ''),
+        kind: String(finding.kind ?? ''),
+        description: String(finding.description ?? ''),
+        state: String(finding.state ?? ''),
+        reportedBy: String(finding.reportedBy ?? ''),
+        locations: rawLocations.map((rawLocation) => {
+          const location = rawLocation as Record<string, unknown>;
+          return {
+            path: String(location.path ?? ''),
+            firstLine: typeof location.firstLine === 'number' ? location.firstLine : null,
+            lastLine: typeof location.lastLine === 'number' ? location.lastLine : null,
+            excerpt: String(location.excerpt ?? ''),
+          };
+        }),
+      };
+    }),
+  };
 }
 
 export function commitStreaming(state: State): SessionEntry[] {
@@ -894,6 +939,18 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         session: [...state.session, { type: 'greeting', text: action.text, exclude_from_context: true }],
+      };
+    case 'review_findings':
+      // The user-only findings table for one review round. A plain append: it
+      // lands after the critic's collapsed subsession block, so each round
+      // leaves its own table in the feed and the reader can watch the backlog
+      // shrink across rounds rather than seeing only the latest state.
+      return {
+        ...state,
+        session: [
+          ...state.session,
+          { type: 'review_findings', ...readReviewFindings(action), exclude_from_context: true },
+        ],
       };
     case 'agent_stuck_critical':
       // The watchdog gave up after one failed nudge (doc/STUCK_DETECTION.md)
