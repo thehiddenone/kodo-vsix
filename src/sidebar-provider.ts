@@ -1,6 +1,27 @@
 import * as vscode from 'vscode';
-import type { CloudRegistry, LocalLaunchWarning, LocalRegistryEntry } from './llm-registry-types';
+import type {
+  BedrockModelInfo,
+  CloudRegistry,
+  CloudUniformEntry,
+  EffortLevel,
+  LocalLaunchWarning,
+  LocalRegistryEntry,
+  OpenRouterModelInfo,
+} from './llm-registry-types';
 import { localLaunchWarnings } from './llm-registry-types';
+
+/**
+ * One row of the cloud footer's search-as-you-type model picker, normalised
+ * from whichever fetched-catalog vendor is active. Mirrors the interface of
+ * the same name in `settings-webview/CloudVendorSection.tsx` — the two
+ * surfaces offer the same catalogs, so they normalise them identically.
+ */
+export interface CloudPickerOption {
+  id: string;
+  name: string;
+  /** Optional trailing note on the row, e.g. Bedrock's provider name. */
+  hint?: string;
+}
 
 export interface SidebarState {
   connected: boolean;
@@ -32,6 +53,30 @@ export interface SidebarState {
   pinnedLocalModels: string[];
   /** Same as `pinnedLocalModels` but for cloud vendor keys. */
   pinnedCloudVendors: string[];
+  /** `models.cloud` from settings.json — vendor -> effort tier -> model id
+   *  (kodo/doc/LLM_REGISTRY.md §2). Backs the cloud footer's four per-tier
+   *  pickers. This is the very same map the Kōdo Settings Cloud AI tab edits;
+   *  both surfaces are refreshed from `pushCloudAiSettingsState`
+   *  (extension/cloud-ai-settings.ts) so they can never drift apart. */
+  cloudModels: Record<string, Record<string, string>>;
+  /** `models.cloud_uniform` — vendor -> its "use the same LLM for all agents"
+   *  shortcut (kodo/doc/LLM_REGISTRY.md §3c). Enabling it does NOT overwrite
+   *  `cloudModels`, so unchecking restores the per-tier picks untouched. */
+  cloudUniform: Record<string, CloudUniformEntry>;
+  /** OpenRouter's account-wide Auto mode (§3a). Mutually exclusive with the
+   *  uniform shortcut at the UI layer, so the footer locks itself while it's
+   *  on — same rule `OpenRouterVendorPanel` enforces in Kōdo Settings. */
+  openRouterAutoMode: boolean;
+  /** The two aggregator vendors' runtime-fetched catalogs (§3a/§3b) — neither
+   *  has a compiled-in `cloudRegistry` entry. Held here but deliberately NOT
+   *  put on the wire whole: `_post` narrows them to the active vendor's rows.
+   */
+  openRouterCatalog: OpenRouterModelInfo[];
+  bedrockCatalog: BedrockModelInfo[];
+  /** vendor -> whether it has at least one API key configured. Only used for
+   *  the catalog picker's empty-state copy: without a key the catalog can
+   *  never populate, so "API key is required" beats "Loading…". */
+  cloudHasKey: Record<string, boolean>;
 }
 
 export type SidebarMessage =
@@ -42,6 +87,9 @@ export type SidebarMessage =
   | { type: 'set_active_profile'; name: string; profile_id: string }
   | { type: 'configure_local_model'; name: string }
   | { type: 'set_cloud_vendor'; vendor: string }
+  | { type: 'set_cloud_model'; vendor: string; effort: EffortLevel; model_id: string }
+  | { type: 'set_cloud_uniform_enabled'; vendor: string; enabled: boolean }
+  | { type: 'set_cloud_uniform_model'; vendor: string; model_id: string }
   | { type: 'toggle_pin_local_model'; name: string }
   | { type: 'toggle_pin_cloud_vendor'; vendor: string }
   | { type: 'open_local_inference_settings' }
@@ -88,7 +136,38 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private _post(state: SidebarState): void {
-    this._view?.webview.postMessage({ type: 'update', ...state, localWarnings: this._computeLocalWarnings(state) });
+    const payload: Record<string, unknown> = { type: 'update', ...state };
+    // The aggregator catalogs are hundreds of entries each and would
+    // otherwise ride along on every unrelated sidebar update (connection
+    // blips, llama.cpp status, session stage…). Only the active vendor's
+    // rows can ever be rendered, and only the three fields the picker shows,
+    // so they are narrowed here instead — same "derive it host-side" reason
+    // as `_computeLocalWarnings` below.
+    delete payload.openRouterCatalog;
+    delete payload.bedrockCatalog;
+    payload.cloudCatalogOptions = this._cloudCatalogOptions(state);
+    payload.localWarnings = this._computeLocalWarnings(state);
+    this._view?.webview.postMessage(payload);
+  }
+
+  // The active vendor's fetched catalog as picker rows, or `[]` for the seven
+  // compiled-in vendors (whose short model lists already travel inside
+  // `cloudRegistry` and render as a plain <select> instead). Normalises each
+  // catalog exactly as `CloudVendorSection.tsx`'s `pickerOptions` memos do —
+  // notably labelling Bedrock's cross-region inference profiles, which are
+  // how most Bedrock models must actually be invoked.
+  private _cloudCatalogOptions(state: SidebarState): CloudPickerOption[] {
+    if (state.activeCloudVendor === 'openrouter') {
+      return state.openRouterCatalog.map((m) => ({ id: m.id, name: m.name }));
+    }
+    if (state.activeCloudVendor === 'bedrock') {
+      return state.bedrockCatalog.map((m) => ({
+        id: m.id,
+        name: m.inference_profile ? `${m.name} (cross-region profile)` : m.name,
+        hint: m.provider,
+      }));
+    }
+    return [];
   }
 
   // Outstanding memory/llama.cpp-version warnings per local LLM, keyed by
@@ -125,13 +204,65 @@ function buildHtml(): string {
         content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
   <title>Kōdo</title>
   <style nonce="${nonce}">
+    /* Three fixed bands: a header that never scrolls, one scrolling middle
+       (the LLM / provider cards), and a bottom-anchored footer. Before this
+       the sidebar was one long scrolling document, so a user with many
+       installed local LLMs pushed the status line and the session buttons
+       clean out of view. */
     body {
-      padding: 8px 12px;
+      padding: 0;
       margin: 0;
       color: var(--vscode-foreground);
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      box-sizing: border-box;
     }
+    /* Full height whenever it fits, which is the normal case. It shrinks (and
+       scrolls internally) only after #scroll-area has given up everything —
+       see the flex-basis note below — because a sidebar sharing its column
+       with several other views can be shorter than header + footer, and
+       nothing may ever become unreachable. */
+    #header {
+      flex: 0 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 8px 12px 0;
+    }
+    /* \`flex: 1 1 0\` is doing something subtle and load-bearing. The \`0\`
+       basis is what orders the degradation: flexbox shares a shortfall out in
+       proportion to each item's basis, so a zero-basis item absorbs none of
+       it and the header would be squeezed alongside this band on any sidebar
+       too short for both — even a comfortably sized one. With basis 0 this
+       band instead simply takes whatever space is left over (flex-grow), and
+       the header only starts shrinking once there is none left. \`min-height:
+       0\` is separately required: without it the band grows to fit every card
+       and nothing ever scrolls, which was the original bug. */
+    #scroll-area {
+      flex: 1 1 0;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0 12px 8px;
+    }
+    /* Painted above #scroll-area so the model picker's dropdown — which opens
+       *upward*, there being no room below a bottom-anchored section — is
+       never drawn under a provider card. \`:empty\` keeps local mode, which
+       has no footer, pixel-identical to before. */
+    /* Never shrinks and never scrolls internally: it is the band the user
+       asked to have anchored, and an \`overflow\` here would clip the model
+       picker's dropdown (which deliberately overflows upward out of this
+       box). Degradation order is therefore card list, then header, never
+       this. */
+    #footer-section {
+      flex: 0 0 auto;
+      padding: 0 12px 8px;
+      position: relative;
+      z-index: 2;
+    }
+    #footer-section:empty { display: none; }
     .status-row {
       display: flex;
       align-items: center;
@@ -367,10 +498,120 @@ function buildHtml(): string {
     }
     .card.disabled .card-name { cursor: default; }
     .card.disabled label { cursor: default; }
+    /* --- Cloud footer: per-vendor model selection ------------------------ */
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.9em;
+      margin-bottom: 6px;
+    }
+    input[type="checkbox"] {
+      accent-color: var(--vscode-button-background);
+      cursor: pointer;
+      margin: 0;
+      flex-shrink: 0;
+    }
+    input[type="checkbox"]:disabled { cursor: default; }
+    select.model-select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 3px 5px;
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: 0.9em;
+    }
+    /* Compact per-tier row: a small caption over a full-width picker. The
+       effort tiers' "example workload" blurbs from Kōdo Settings are
+       deliberately omitted — there is no room for them at sidebar width. */
+    .tier-row { margin-bottom: 6px; }
+    .tier-label {
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: 2px;
+    }
+    .model-note {
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+      line-height: 1.4;
+      margin-bottom: 6px;
+    }
+    /* Search-as-you-type combobox for the two aggregator vendors, whose
+       catalogs (~400 OpenRouter models, Bedrock's whole region) are far too
+       long for a <select>. Styling mirrors the Kōdo Settings webview's
+       \`.model-picker*\` rules (settings-webview/styles.css). */
+    .model-picker { position: relative; }
+    .model-picker-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 3px 5px;
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: 0.9em;
+    }
+    .model-picker-input:disabled { opacity: 0.5; cursor: default; }
+    /* Opens upward (\`bottom\`, not \`top\`): this lives in the bottom-anchored
+       footer, so a downward dropdown would be clipped by \`body\`'s hidden
+       overflow. The Kōdo Settings copy opens downward for the same reason
+       reversed — it has a whole page below it. */
+    .model-picker-dropdown {
+      position: absolute;
+      z-index: 10;
+      bottom: calc(100% + 2px);
+      left: 0;
+      right: 0;
+      max-height: 240px;
+      overflow-y: auto;
+      background: var(--vscode-dropdown-background);
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+    .model-picker-option {
+      padding: 5px 8px;
+      cursor: pointer;
+      font-size: 0.88em;
+    }
+    .model-picker-option:hover { background: var(--vscode-list-hoverBackground); }
+    .model-picker-option-id {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 0.92em;
+      overflow-wrap: anywhere;
+    }
+    .model-picker-option-name {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+      overflow-wrap: anywhere;
+    }
+    .model-picker-empty {
+      padding: 6px 8px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.88em;
+    }
+    .model-picker-current {
+      margin-top: 4px;
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+      overflow-wrap: anywhere;
+    }
+    .model-picker-current .value-code { color: var(--vscode-foreground); }
   </style>
 </head>
 <body>
-  <div id="main-controls">
+  <!-- Band 1: never scrolls. Everything a user must always be able to reach -
+       connection status, the session buttons, the local/cloud switch - plus
+       whichever mode-specific controls that mode pins (#mode-fixed): the
+       llama.cpp start/stop pair in local mode, the cloud disclaimer and the
+       Cloud AI settings button in cloud mode. -->
+  <div id="header">
     <div class="status-row">
       <div class="status">
         <span id="conn-dot" class="conn-dot off"></span>
@@ -393,9 +634,18 @@ function buildHtml(): string {
       </label>
     </div>
     <hr>
+    <div id="mode-fixed"></div>
+  </div>
 
+  <!-- Band 2: the only scrolling region - local LLM cards, or cloud provider
+       cards. However many are installed, band 1 stays put. -->
+  <div id="scroll-area">
     <div id="cards-section"></div>
   </div>
+
+  <!-- Band 3: bottom-anchored, cloud mode only - the active vendor's model
+       selection. Empty (and display:none) in local mode. -->
+  <div id="footer-section"></div>
 
   <script nonce="${nonce}">
     const vsc = acquireVsCodeApi();
@@ -444,6 +694,13 @@ function buildHtml(): string {
       pinnedLocalModels: [],
       pinnedCloudVendors: [],
       localWarnings: {},
+      cloudModels: {},
+      cloudUniform: {},
+      openRouterAutoMode: false,
+      // Already narrowed to the active vendor by SidebarProvider._post —
+      // never the whole catalog, and empty for the seven compiled-in vendors.
+      cloudCatalogOptions: [],
+      cloudHasKey: {},
     };
 
     // Sorts \`items\` so entries named in \`pinned\` (pin order — oldest pin
@@ -564,6 +821,10 @@ function buildHtml(): string {
           + (_state.llamaRunning && _state.llamaRunningModel ? '  ·  running: ' + runningLabel : '');
         section.appendChild(ver);
       }
+
+      // Closes the fixed band, so the scrolling card list below reads as its
+      // own area rather than running straight into these controls.
+      section.appendChild(document.createElement('hr'));
     }
 
     // Mirrors llm-registry-types.ts's llamaArgsContextSize/resolveContextSize,
@@ -764,6 +1025,9 @@ function buildHtml(): string {
       section.appendChild(banner);
     }
 
+    // The always-visible half of cloud mode: the disclaimer and the settings
+    // button are pinned in the fixed band, so scrolling a long provider list
+    // can never hide either.
     function renderCloudControls(section) {
       renderCloudDisclaimer(section);
 
@@ -777,9 +1041,11 @@ function buildHtml(): string {
       });
       section.appendChild(settingsBtn);
 
-      const hr = document.createElement('hr');
-      section.appendChild(hr);
+      section.appendChild(document.createElement('hr'));
+    }
 
+    // The scrolling half: the provider cards themselves.
+    function renderCloudVendorCards(section) {
       const heading = document.createElement('div');
       heading.className = 'provider-heading';
       heading.textContent = 'Select LLM provider';
@@ -855,15 +1121,283 @@ function buildHtml(): string {
       });
     }
 
+    // ----------------------------------------------------------------
+    // Cloud mode: the active vendor's model selection (bottom-anchored)
+    // ----------------------------------------------------------------
+    // The four agent capability tiers, exactly as kodo resolves them
+    // (kodo/doc/LLM_REGISTRY.md §2). Their "example workload" blurbs from the
+    // Kōdo Settings tab are deliberately dropped here — sidebar width has no
+    // room for them, and the tier name alone is the part users navigate by.
+    const EFFORT_LEVELS = ['low', 'medium', 'high', 'max'];
+    const EFFORT_LABELS = {
+      low: 'Low effort',
+      medium: 'Medium effort',
+      high: 'High effort',
+      max: 'Max effort',
+    };
+
+    const MAX_MODEL_PICKER_RESULTS = 40;
+
+    // Transient UI state for the search combobox below, deliberately kept
+    // OUTSIDE the DOM: renderCards() rebuilds the whole footer on every state
+    // push (a session's stage ticking over, llama.cpp status, a reconnect…),
+    // and a half-typed query must survive one that lands mid-search. \`key\`
+    // scopes it to one picker — 'openrouter|uniform', 'bedrock|high', … — so
+    // switching vendors or tiers always starts clean.
+    let _pickerUi = { key: '', query: '', open: false };
+
+    // Plain <select> over a compiled-in vendor's short model list. Mirrors
+    // EffortSection/UniformModelSelect in CloudVendorSection.tsx, including
+    // its fallback to the first model when the stored id isn't in the list.
+    function makeModelSelect(options, modelId, onSelect) {
+      const select = document.createElement('select');
+      select.className = 'model-select';
+      options.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name;
+        select.appendChild(opt);
+      });
+      const known = options.some(m => m.id === modelId);
+      select.value = known ? modelId : (options.length ? options[0].id : '');
+      select.addEventListener('change', () => { onSelect(select.value); });
+      return select;
+    }
+
+    // Search-as-you-type combobox over a fetched catalog — the sidebar twin of
+    // CatalogModelPicker in CloudVendorSection.tsx, for the two aggregator
+    // vendors whose catalogs (~400 OpenRouter models, Bedrock's whole region)
+    // are pushed whole and filtered client-side. A several-hundred-option
+    // <select> is unusable at any width, let alone this one.
+    function makeCatalogPicker(key, modelId, options, placeholderNoun, hasKey, onSelect) {
+      const wrap = document.createElement('div');
+      wrap.className = 'model-picker';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'model-picker-input';
+      // Read back by renderCards() to restore focus across a re-render.
+      input.dataset.pickerKey = key;
+      input.placeholder = options.length
+        ? 'Search ' + options.length + ' ' + placeholderNoun + '…'
+        // Without a key the catalog can never populate, so don't pretend it
+        // is still loading.
+        : (hasKey ? 'Loading model list…' : 'API key is required to load model list');
+      input.value = _pickerUi.key === key ? _pickerUi.query : '';
+
+      const dropdown = document.createElement('div');
+      dropdown.className = 'model-picker-dropdown';
+
+      const current = document.createElement('div');
+      current.className = 'model-picker-current';
+      if (modelId) {
+        current.appendChild(document.createTextNode('Currently: '));
+        const code = document.createElement('span');
+        code.className = 'value-code';
+        code.textContent = modelId;
+        current.appendChild(code);
+        const match = options.find(m => m.id === modelId);
+        if (match && match.name !== modelId) {
+          current.appendChild(document.createTextNode(' — ' + match.name));
+        }
+      }
+
+      function refresh() {
+        const open = _pickerUi.key === key && _pickerUi.open;
+        dropdown.style.display = open ? '' : 'none';
+        current.style.display = open || !modelId ? 'none' : '';
+        if (!open) { return; }
+        const q = (_pickerUi.query || '').trim().toLowerCase();
+        const matches = (q
+          ? options.filter(m =>
+              m.id.toLowerCase().includes(q)
+              || m.name.toLowerCase().includes(q)
+              || (m.hint || '').toLowerCase().includes(q))
+          : options
+        ).slice(0, MAX_MODEL_PICKER_RESULTS);
+
+        dropdown.innerHTML = '';
+        if (matches.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'model-picker-empty';
+          empty.textContent = 'No matching models.';
+          dropdown.appendChild(empty);
+          return;
+        }
+        matches.forEach(m => {
+          const row = document.createElement('div');
+          row.className = 'model-picker-option';
+
+          const idEl = document.createElement('div');
+          idEl.className = 'model-picker-option-id';
+          idEl.textContent = m.id;
+          row.appendChild(idEl);
+
+          const nameEl = document.createElement('div');
+          nameEl.className = 'model-picker-option-name';
+          nameEl.textContent = m.hint ? m.hint + ' — ' + m.name : m.name;
+          row.appendChild(nameEl);
+
+          // mousedown, not click: the input's blur would otherwise close the
+          // dropdown before a click ever landed on the row.
+          row.addEventListener('mousedown', e => {
+            e.preventDefault();
+            _pickerUi = { key: '', query: '', open: false };
+            onSelect(m.id);
+          });
+          dropdown.appendChild(row);
+        });
+      }
+
+      input.addEventListener('input', () => {
+        _pickerUi = { key, query: input.value, open: true };
+        refresh();
+      });
+      input.addEventListener('focus', () => {
+        _pickerUi = { key, query: input.value, open: true };
+        refresh();
+      });
+      input.addEventListener('blur', () => {
+        // Deferred so a pick (mousedown above) is committed first.
+        window.setTimeout(() => {
+          if (_pickerUi.key === key) { _pickerUi.open = false; }
+          refresh();
+        }, 150);
+      });
+
+      wrap.appendChild(input);
+      wrap.appendChild(dropdown);
+      wrap.appendChild(current);
+      refresh();
+      return wrap;
+    }
+
+    // "Use the same LLM for all agents" (kodo/doc/LLM_REGISTRY.md §3c) plus
+    // either its single picker or the four per-tier ones — the sidebar
+    // equivalent of the Kōdo Settings Cloud AI tab's UniformModelSection +
+    // EffortSection stack, writing the same \`models.cloud_uniform\` /
+    // \`models.cloud\` settings through the same host-side setters. Rendered
+    // into the bottom-anchored band so it stays reachable no matter how far
+    // the provider list above is scrolled.
+    function renderCloudModelSection(footer) {
+      const vendor = _state.activeCloudVendor;
+      if (!vendor) { return; }
+      // The aggregators have no compiled-in registry entry, so their models
+      // come from the fetched catalog instead; a vendor that is in neither is
+      // a not-yet-supported one with nothing to pick.
+      const isCatalogVendor = Boolean(CATALOG_VENDOR_DISPLAY_NAMES[vendor]);
+      const info = _state.cloudRegistry[vendor];
+      if (!isCatalogVendor && !info) { return; }
+
+      footer.appendChild(document.createElement('hr'));
+
+      const heading = document.createElement('div');
+      heading.className = 'provider-heading';
+      heading.textContent = 'Select LLM model';
+      footer.appendChild(heading);
+
+      const uniform = _state.cloudUniform[vendor] || { enabled: false, modelId: null };
+      // OpenRouter's Auto mode hands model choice to OpenRouter's own router
+      // for every tier, so nothing here is editable while it is on — the same
+      // mutual exclusion OpenRouterVendorPanel enforces in Kōdo Settings
+      // (kodo/doc/LLM_REGISTRY.md §3a/§3c).
+      const autoMode = vendor === 'openrouter' && _state.openRouterAutoMode;
+
+      const label = document.createElement('label');
+      label.className = 'checkbox-row';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = uniform.enabled;
+      box.disabled = autoMode;
+      box.addEventListener('change', () => {
+        vsc.postMessage({ type: 'set_cloud_uniform_enabled', vendor, enabled: box.checked });
+      });
+      label.appendChild(box);
+      label.appendChild(document.createTextNode('Use the same LLM for all agents'));
+      footer.appendChild(label);
+
+      if (autoMode) {
+        const note = document.createElement('div');
+        note.className = 'model-note';
+        note.textContent =
+          'OpenRouter Auto mode is picking a model for every request. '
+          + 'Turn it off in Cloud AI settings to choose models here.';
+        footer.appendChild(note);
+        return;
+      }
+
+      const options = isCatalogVendor
+        ? _state.cloudCatalogOptions
+        : (info.models || []).map(m => ({ id: m.model_id, name: m.name }));
+      const placeholderNoun = vendor === 'bedrock' ? 'models and inference profiles' : 'models';
+      const hasKey = Boolean(_state.cloudHasKey[vendor]);
+      const perTier = _state.cloudModels[vendor] || {};
+
+      function makePicker(slot, modelId, onSelect) {
+        return isCatalogVendor
+          ? makeCatalogPicker(vendor + '|' + slot, modelId || '', options, placeholderNoun, hasKey, onSelect)
+          : makeModelSelect(options, modelId || '', onSelect);
+      }
+
+      if (uniform.enabled) {
+        footer.appendChild(makePicker('uniform', uniform.modelId, model_id => {
+          vsc.postMessage({ type: 'set_cloud_uniform_model', vendor, model_id });
+        }));
+        return;
+      }
+
+      EFFORT_LEVELS.forEach(effort => {
+        const row = document.createElement('div');
+        row.className = 'tier-row';
+
+        const tierLabel = document.createElement('div');
+        tierLabel.className = 'tier-label';
+        tierLabel.textContent = EFFORT_LABELS[effort];
+        row.appendChild(tierLabel);
+
+        row.appendChild(makePicker(effort, perTier[effort], model_id => {
+          vsc.postMessage({ type: 'set_cloud_model', vendor, effort, model_id });
+        }));
+        footer.appendChild(row);
+      });
+    }
+
     function renderCards() {
+      const fixed = document.getElementById('mode-fixed');
+      const scrollArea = document.getElementById('scroll-area');
       const section = document.getElementById('cards-section');
+      const footer = document.getElementById('footer-section');
+
+      // Every state push rebuilds all three bands, so anything the user was
+      // in the middle of has to be carried across by hand: how far they had
+      // scrolled the card list, and which model search box they were typing
+      // in (its text lives in _pickerUi). Without this, an unrelated update —
+      // a session's stage changing, say — would yank the list back to the top
+      // mid-scroll.
+      const scrollTop = scrollArea.scrollTop;
+      const active = document.activeElement;
+      const focusedPicker = active && active.dataset ? (active.dataset.pickerKey || '') : '';
+
+      fixed.innerHTML = '';
       section.innerHTML = '';
+      footer.innerHTML = '';
 
       if (_state.mode === 'local') {
-        renderLlamaControls(section);
+        renderLlamaControls(fixed);
         renderLocalCards(section);
       } else {
-        renderCloudControls(section);
+        renderCloudControls(fixed);
+        renderCloudVendorCards(section);
+        renderCloudModelSection(footer);
+      }
+
+      scrollArea.scrollTop = scrollTop;
+      if (focusedPicker) {
+        const input = footer.querySelector('[data-picker-key="' + focusedPicker + '"]');
+        if (input) {
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
       }
     }
 
@@ -905,6 +1439,11 @@ function buildHtml(): string {
       if (Array.isArray(data.pinnedLocalModels)) { _state.pinnedLocalModels = data.pinnedLocalModels; }
       if (Array.isArray(data.pinnedCloudVendors)) { _state.pinnedCloudVendors = data.pinnedCloudVendors; }
       if (data.localWarnings && typeof data.localWarnings === 'object') { _state.localWarnings = data.localWarnings; }
+      if (data.cloudModels && typeof data.cloudModels === 'object') { _state.cloudModels = data.cloudModels; }
+      if (data.cloudUniform && typeof data.cloudUniform === 'object') { _state.cloudUniform = data.cloudUniform; }
+      if (data.openRouterAutoMode !== undefined) { _state.openRouterAutoMode = Boolean(data.openRouterAutoMode); }
+      if (Array.isArray(data.cloudCatalogOptions)) { _state.cloudCatalogOptions = data.cloudCatalogOptions; }
+      if (data.cloudHasKey && typeof data.cloudHasKey === 'object') { _state.cloudHasKey = data.cloudHasKey; }
 
       renderCards();
     });

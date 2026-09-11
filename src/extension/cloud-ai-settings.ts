@@ -10,6 +10,7 @@ import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { CloudRegistry, CloudUniformEntry, EffortLevel } from '../llm-registry-types';
+import type { SidebarState } from '../sidebar-provider';
 import { sendControl, sendControlAwait } from './control-send';
 import {
   readBedrockRegion,
@@ -23,6 +24,55 @@ import {
 import { state } from './state';
 import { broadcastThinkingContext } from './thinking-context';
 
+/** Every vendor that can hold credentials -> its stored API keys.
+ *
+ *  The two aggregators are special-cased in: neither has a
+ *  `cloudRegistryState` entry (kodo has no compiled-in model tuple for
+ *  either — kodo/doc/LLM_REGISTRY.md §3a/§3b), yet both are real vendors an
+ *  API key can be added for, so both must always come back with a
+ *  (possibly empty) list rather than `undefined`. */
+function cloudKeysByVendor(): Record<string, cloudCredentials.ApiKeyEntry[]> {
+  const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
+  for (const vendor of Object.keys(state.cloudRegistryState)) {
+    keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
+  }
+  for (const vendor of ['openrouter', 'bedrock']) {
+    if (!(vendor in keysByVendor)) {
+      keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
+    }
+  }
+  return keysByVendor;
+}
+
+/** The cloud model-selection slice of {@link SidebarState} — what the
+ *  sidebar's bottom-anchored "Select LLM model" section renders from.
+ *
+ *  It edits exactly the same two settings maps as the Kōdo Settings Cloud AI
+ *  tab (`models.cloud`, `models.cloud_uniform`) through exactly the same
+ *  setters below, which is why both surfaces are refreshed together from
+ *  {@link pushCloudAiSettingsState}: a model picked in one must never
+ *  silently disagree with what the other is showing.
+ *
+ *  The two fetched catalogs are handed over whole; `SidebarProvider._post`
+ *  narrows them to the active vendor before they reach the webview. */
+export function cloudModelStateForSidebar(): Pick<
+  SidebarState,
+  'cloudModels' | 'cloudUniform' | 'openRouterAutoMode' | 'openRouterCatalog' | 'bedrockCatalog' | 'cloudHasKey'
+> {
+  const cloudHasKey: Record<string, boolean> = {};
+  for (const [vendor, keys] of Object.entries(cloudKeysByVendor())) {
+    cloudHasKey[vendor] = keys.length > 0;
+  }
+  return {
+    cloudModels: readCloudModels(),
+    cloudUniform: readCloudUniform(),
+    openRouterAutoMode: readOpenRouterAutoMode(),
+    openRouterCatalog: state.openRouterCatalogState,
+    bedrockCatalog: state.bedrockCatalogState,
+    cloudHasKey,
+  };
+}
+
 /** One entry per vendor in `cloudRegistryState`, keyed by vendor. */
 export function cloudAiStateForPanel(): {
   cloudRegistry: CloudRegistry;
@@ -35,26 +85,10 @@ export function cloudAiStateForPanel(): {
   bedrockRegion: string;
   cloudUniform: Record<string, CloudUniformEntry>;
 } {
-  const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
-  for (const vendor of Object.keys(state.cloudRegistryState)) {
-    keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
-  }
-  // OpenRouter has no cloudRegistryState entry (kodo has no compiled-in model
-  // tuple for it) but is still a real vendor an API key can be added for —
-  // make sure it always has a (possibly empty) key list.
-  if (!('openrouter' in keysByVendor)) {
-    keysByVendor.openrouter = cloudCredentials.listKeys('openrouter');
-  }
-  // Same for Bedrock — no cloudRegistryState entry (its catalog is fetched,
-  // not compiled in), but a real vendor whose credentials live in the same
-  // named-multi-key store as everyone else's.
-  if (!('bedrock' in keysByVendor)) {
-    keysByVendor.bedrock = cloudCredentials.listKeys('bedrock');
-  }
   return {
     cloudRegistry: state.cloudRegistryState,
     modelsByVendor: readCloudModels(),
-    keysByVendor,
+    keysByVendor: cloudKeysByVendor(),
     metaContributorTier: readMetaContributorTier(),
     openRouterCatalog: state.openRouterCatalogState,
     openRouterAutoMode: readOpenRouterAutoMode(),
@@ -66,9 +100,17 @@ export function cloudAiStateForPanel(): {
 
 /** Push the cloud vendor tabs' fields into the Kōdo Settings panel — a no-op
  * if the panel isn't open, same pattern as `pushLocalInferenceState` in
- * local-llm-registry.ts. */
+ * local-llm-registry.ts — **and** the same model selection into the sidebar's
+ * own "Select LLM model" section.
+ *
+ * Both surfaces are refreshed from this one function on purpose. Every setter
+ * in this file already called it, so wiring the sidebar in here (rather than
+ * at each call site) is what guarantees a model picked in either place, a
+ * refreshed catalog, or a key that was added/forgotten/pruned shows up in
+ * both without anyone having to remember a second push. */
 export function pushCloudAiSettingsState(): void {
   KodoSettingsPanel.instance?.update(cloudAiStateForPanel());
+  state.sidebarProvider?.update(cloudModelStateForSidebar());
 }
 
 export function setActiveCloudVendor(vendor: string): void {

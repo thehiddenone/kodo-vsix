@@ -36,7 +36,13 @@ import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
 
-import { setActiveCloudVendor } from './extension/cloud-ai-settings';
+import {
+  cloudModelStateForSidebar,
+  setActiveCloudVendor,
+  setCloudModel,
+  setCloudUniformEnabled,
+  setCloudUniformModel,
+} from './extension/cloud-ai-settings';
 import { handleControlEnvelope } from './extension/control-channel';
 import { sendControl, sendControlHello } from './extension/control-send';
 import { createProject } from './extension/create-project';
@@ -177,6 +183,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       isMac: process.platform === 'darwin',
       pinnedLocalModels: initialUiSettings.pinnedLocalModels,
       pinnedCloudVendors: initialUiSettings.pinnedCloudVendors,
+      // The sidebar's "Select LLM model" section reads the same settings the
+      // Kōdo Settings Cloud AI tab writes; from here on both are kept in step
+      // by `pushCloudAiSettingsState`.
+      ...cloudModelStateForSidebar(),
     },
     (msg) => {
       if (msg.type === 'list_sessions') {
@@ -196,6 +206,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void openKodoSettings('local-inference', msg.name);
       } else if (msg.type === 'set_cloud_vendor') {
         setActiveCloudVendor(msg.vendor);
+      } else if (msg.type === 'set_cloud_model') {
+        // Same three setters the Kōdo Settings Cloud AI tab drives — the
+        // sidebar section is a second view onto one setting, not a copy.
+        setCloudModel(msg.vendor, msg.effort, msg.model_id);
+      } else if (msg.type === 'set_cloud_uniform_enabled') {
+        setCloudUniformEnabled(msg.vendor, msg.enabled);
+      } else if (msg.type === 'set_cloud_uniform_model') {
+        setCloudUniformModel(msg.vendor, msg.model_id);
       } else if (msg.type === 'toggle_pin_local_model') {
         const { pinnedLocalModels } = togglePinnedLocalModel(msg.name);
         state.sidebarProvider?.update({ pinnedLocalModels });
