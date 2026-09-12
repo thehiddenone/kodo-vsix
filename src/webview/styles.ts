@@ -845,6 +845,118 @@ export const styles = {
     color: 'var(--vscode-descriptionForeground)',
     whiteSpace: 'nowrap' as const,
   },
+  // The session's work-plan widget (kodo doc/PLANNING.md). Deliberately the same
+  // card shell as the findings table above — both are "here is the state of
+  // something the agent is working through", and two different frames for that
+  // would read as two unrelated mechanisms.
+  plan: {
+    border: '1px solid var(--vscode-widget-border, rgba(128,128,128,0.25))',
+    borderRadius: '6px',
+    marginTop: '4px',
+    marginBottom: '8px',
+    marginLeft: '4px',
+    background:
+      'var(--vscode-editorWidget-background, var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,0.08)))',
+  },
+  planHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+    padding: '6px 8px',
+    fontSize: '12px',
+    cursor: 'pointer',
+  },
+  planTitle: {
+    fontWeight: 700,
+  },
+  // "2 of 4 done" — the counter is what makes the widget readable at a glance
+  // when it is collapsed.
+  planCounter: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+    marginLeft: 'auto',
+    whiteSpace: 'nowrap' as const,
+  },
+  planBody: {
+    padding: '0 8px 6px',
+  },
+  // A shortfall between what the planner reported and what the engine could use.
+  // Warning-coloured because it means the plan may not cover the work.
+  planIssue: {
+    color: 'var(--vscode-editorWarning-foreground, #cca700)',
+    fontSize: '11px',
+    paddingBottom: '4px',
+  },
+  // Why a plan was closed unfinished. Reads as a note, not a failure — the plan
+  // was dropped deliberately, and the task rows below still say how far it got.
+  planAbandonReason: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+    fontStyle: 'italic' as const,
+    paddingBottom: '4px',
+  },
+  planTaskList: {
+    listStyle: 'none' as const,
+    margin: 0,
+    padding: 0,
+    fontSize: '12px',
+  },
+  planTaskRow: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '6px',
+    padding: '2px 0',
+  },
+  // Fixed-width so every title starts at the same column regardless of status —
+  // a ragged left edge makes an ordered list much harder to scan.
+  planTaskMarker: {
+    flex: '0 0 auto',
+    width: '1.2em',
+    textAlign: 'center' as const,
+  },
+  planTaskIndex: {
+    flex: '0 0 auto',
+    color: 'var(--vscode-descriptionForeground)',
+    fontVariantNumeric: 'tabular-nums' as const,
+  },
+  planTaskTitle: {
+    flex: '1 1 auto',
+    minWidth: 0,
+  },
+  // A finished task is a record, not work: dimmed and struck so the live task
+  // and what is still ahead of it are what the eye lands on.
+  planTaskTitleDone: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    opacity: 0.55,
+    textDecoration: 'line-through' as const,
+  },
+  planTaskTitleCurrent: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    fontWeight: 700,
+  },
+  // The planner's development context. Collapsed by default and rendered small:
+  // it is reference material the user may want once, not part of the progress
+  // read, and it can run to several paragraphs.
+  planContextToggle: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--vscode-textLink-foreground)',
+    cursor: 'pointer',
+    fontSize: '11px',
+    padding: '4px 0 0',
+    textAlign: 'left' as const,
+  },
+  planContext: {
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+    marginTop: '2px',
+    whiteSpace: 'pre-wrap' as const,
+    // A long briefing scrolls inside the card rather than stretching the feed.
+    maxHeight: '16em',
+    overflowY: 'auto' as const,
+  },
   // Any watchdog nudge (doc/STUCK_DETECTION.md §2.5) now renders via the
   // Markdown renderer's <kodo_warn> callout (markdown.tsx) — a yellow
   // warning box with its own styling — rather than a dedicated style here.

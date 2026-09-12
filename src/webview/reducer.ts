@@ -260,7 +260,52 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
     // display order, which is why nothing here sorts.
     return { type: 'review_findings', ...readReviewFindings(e), exclude_from_context: true };
   }
+  if (type === 'plan_state') {
+    // Replay of the server's persisted "plan_state" marker. The server projects
+    // it into exactly the shape the live event carries, so this is a read rather
+    // than a second conversion — and the statuses are the ones the widget was
+    // emitted with, deliberately not restamped with the plan's state today.
+    return { type: 'plan_state', ...readPlanState(e), exclude_from_context: true };
+  }
+  if (type === 'plan_conflict_critical') {
+    // Replay of the server's persisted "plan_conflict_critical" marker (see
+    // EngineEmitters.emit_plan_conflict_critical) — the same red callout the
+    // live action renders, so a reload still says why the session stopped.
+    return {
+      type: 'plan_conflict_critical',
+      message: String(e.message ?? ''),
+      exclude_from_context: true,
+    };
+  }
   return null;
+}
+
+/** The fields a plan widget carries, from either a live action or a replayed
+ *  history entry — the two arrive in the same camelCase shape, so one reader
+ *  serves both and they cannot drift apart. */
+function readPlanState(e: Record<string, unknown>): Omit<
+  Extract<SessionEntry, { type: 'plan_state' }>,
+  'type' | 'exclude_from_context'
+> {
+  const rawTasks = Array.isArray(e.tasks) ? e.tasks : [];
+  return {
+    reason: String(e.reason ?? ''),
+    issue: String(e.issue ?? ''),
+    createdBy: String(e.createdBy ?? ''),
+    context: String(e.context ?? ''),
+    tasks: rawTasks.map((raw) => {
+      const task = raw as Record<string, unknown>;
+      return {
+        id: typeof task.id === 'number' ? task.id : 0,
+        title: String(task.title ?? ''),
+        status: String(task.status ?? ''),
+      };
+    }),
+    currentTask: typeof e.currentTask === 'number' ? e.currentTask : null,
+    complete: e.complete === true,
+    abandoned: e.abandoned === true,
+    abandonReason: String(e.abandonReason ?? ''),
+  };
 }
 
 /** The fields a findings table carries, from either a live action or a
@@ -951,6 +996,29 @@ export function reducer(state: State, action: Action): State {
         session: [
           ...state.session,
           { type: 'review_findings', ...readReviewFindings(action), exclude_from_context: true },
+        ],
+      };
+    case 'plan_state':
+      // The session's work-plan widget. A plain append, like the findings table:
+      // each creation/read/step leaves its own snapshot in the feed, so the
+      // reader can watch the plan advance in place rather than seeing only its
+      // latest state with no record of how it got there.
+      return {
+        ...state,
+        session: [
+          ...state.session,
+          { type: 'plan_state', ...readPlanState(action), exclude_from_context: true },
+        ],
+      };
+    case 'plan_conflict_critical':
+      // A planner re-planned over an unfinished plan, so the session is stopping
+      // (kodo doc/PLANNING.md §4). A plain append, mirroring
+      // 'agent_stuck_critical': the phase change arrives as its own state event.
+      return {
+        ...state,
+        session: [
+          ...state.session,
+          { type: 'plan_conflict_critical', message: action.message, exclude_from_context: true },
         ],
       };
     case 'agent_stuck_critical':

@@ -329,6 +329,168 @@ suite('reducer — review findings table', () => {
   });
 });
 
+// The session's work-plan widget (kodo doc/PLANNING.md) -- same live-vs-replayed
+// contract as the findings table above: a reload must render the plan exactly as
+// each step produced it, not restamped with the plan's state today.
+suite('reducer — plan widget', () => {
+  const payload = {
+    reason: 'step',
+    issue: '',
+    createdBy: 'planner',
+    context: 'the parser lives in src/parse.py',
+    tasks: [
+      { id: 1, title: 'Extract the parser', status: 'done' },
+      { id: 2, title: 'Rewire the CLI', status: 'in_progress' },
+      { id: 3, title: 'Migrate the config loader', status: 'not_started' },
+    ],
+    currentTask: 2,
+    complete: false,
+    abandoned: false,
+    abandonReason: '',
+  };
+
+  test('a live plan is appended with its derived statuses intact', () => {
+    const next = reducer(initial, { type: 'plan_state', ...payload });
+
+    assert.strictEqual(next.session.length, 1);
+    const entry = next.session[0];
+    assert.ok(entry.type === 'plan_state');
+    assert.deepStrictEqual(
+      entry.tasks.map((t) => t.status),
+      ['done', 'in_progress', 'not_started'],
+    );
+    assert.strictEqual(entry.currentTask, 2);
+    assert.strictEqual(entry.complete, false);
+    assert.strictEqual(entry.createdBy, 'planner');
+    // The widget is user-only: the model got the same state from its own tool
+    // result, so this must never be fed back as context.
+    assert.strictEqual(entry.exclude_from_context, true);
+  });
+
+  test('a replayed plan is identical to the live one', () => {
+    const live = reducer(initial, { type: 'plan_state', ...payload }).session[0];
+    const replayed = reducer(initial, {
+      type: 'session_history',
+      entries: [{ type: 'plan_state', ...payload }],
+      subsessions: {},
+    }).session[0];
+
+    assert.deepStrictEqual(replayed, live);
+  });
+
+  test('each call leaves its own snapshot, so the plan reads as progress', () => {
+    const first = reducer(initial, { type: 'plan_state', ...payload });
+    const next = reducer(first, {
+      type: 'plan_state',
+      ...payload,
+      tasks: payload.tasks.map((t) => ({ ...t, status: 'done' })),
+      currentTask: null,
+      complete: true,
+    });
+
+    const widgets = next.session.filter((e) => e.type === 'plan_state');
+    assert.strictEqual(widgets.length, 2);
+    assert.ok(widgets[1].type === 'plan_state');
+    assert.strictEqual(widgets[1].complete, true);
+    assert.strictEqual(widgets[1].currentTask, null);
+  });
+
+  test('a plan before its first step has nothing in progress and is not complete', () => {
+    // The two "no current task" states are distinct: not begun vs. finished.
+    // Only `complete` tells them apart, so a reader must never infer one.
+    const next = reducer(initial, {
+      type: 'plan_state',
+      ...payload,
+      reason: 'created',
+      tasks: payload.tasks.map((t) => ({ ...t, status: 'not_started' })),
+      currentTask: null,
+      complete: false,
+    });
+
+    const entry = next.session[0];
+    assert.ok(entry.type === 'plan_state');
+    assert.strictEqual(entry.currentTask, null);
+    assert.strictEqual(entry.complete, false);
+  });
+
+  test('a plan widget groups as a plain feed block, never inside a subsession', () => {
+    const state = reducer(initial, { type: 'plan_state', ...payload });
+    const blocks = groupSessionEntries(state.session);
+
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].kind, 'entry');
+  });
+
+  test('an abandoned plan keeps its unfinished statuses and is not complete', () => {
+    // Abandoning CLOSES a plan; it never rewrites a status. The widget must show
+    // how far the work actually got, so the leftovers stay as they were.
+    const next = reducer(initial, {
+      type: 'plan_state',
+      ...payload,
+      reason: 'abandoned',
+      abandoned: true,
+      abandonReason: 'user redirected to the import bug',
+    });
+
+    const entry = next.session[0];
+    assert.ok(entry.type === 'plan_state');
+    assert.strictEqual(entry.abandoned, true);
+    assert.strictEqual(entry.complete, false);
+    assert.strictEqual(entry.abandonReason, 'user redirected to the import bug');
+    assert.deepStrictEqual(
+      entry.tasks.map((t) => t.status),
+      ['done', 'in_progress', 'not_started'],
+    );
+  });
+
+  test('a creation carries the issue when the planner reported unusable tasks', () => {
+    const next = reducer(initial, {
+      type: 'plan_state',
+      ...payload,
+      reason: 'created',
+      issue: 'planner reported 5 task(s) but only 2 were usable',
+    });
+
+    const entry = next.session[0];
+    assert.ok(entry.type === 'plan_state');
+    assert.strictEqual(entry.issue, 'planner reported 5 task(s) but only 2 were usable');
+  });
+
+  test('abandon and issue survive a replay identically', () => {
+    const action = {
+      type: 'plan_state' as const,
+      ...payload,
+      reason: 'abandoned',
+      issue: 'a shortfall worth remembering',
+      abandoned: true,
+      abandonReason: 'the design changed',
+    };
+    const live = reducer(initial, action).session[0];
+    const replayed = reducer(initial, {
+      type: 'session_history',
+      entries: [{ ...action }],
+      subsessions: {},
+    }).session[0];
+
+    assert.deepStrictEqual(replayed, live);
+  });
+
+  test('a plan conflict is appended as a critical notice and replays the same', () => {
+    const action = { type: 'plan_conflict_critical' as const, message: 'planner re-planned' };
+    const live = reducer(initial, action).session[0];
+    assert.ok(live.type === 'plan_conflict_critical');
+    assert.strictEqual(live.message, 'planner re-planned');
+    assert.strictEqual(live.exclude_from_context, true);
+
+    const replayed = reducer(initial, {
+      type: 'session_history',
+      entries: [{ type: 'plan_conflict_critical', message: 'planner re-planned' }],
+      subsessions: {},
+    }).session[0];
+    assert.deepStrictEqual(replayed, live);
+  });
+});
+
 // Per-finding resolution at the approval gate: the gate carries the work
 // product's outstanding findings so a rejection can settle the earlier
 // objections it does not repeat.

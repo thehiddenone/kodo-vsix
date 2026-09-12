@@ -150,6 +150,49 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     return true;
   }
 
+  // The session's work-plan widget (kodo's `doc/PLANNING.md`). Statuses arrive
+  // already derived server-side from the plan log, so this only reshapes the
+  // wire's snake_case into the camelCase the webview uses everywhere; never
+  // recompute a status here. `session.history` replays the same shape, which is
+  // what lets the reducer treat live and reloaded widgets identically.
+  //
+  // The model is told the same state by its own plan tool's JSON result, so
+  // nothing here is the model's only copy — and nothing here reaches it either:
+  // the server persists this as a marker, and markers never enter the LLM
+  // message history.
+  if (env.kind === 'event' && evtType === 'plan.state') {
+    const rawTasks = Array.isArray(env.payload.tasks) ? env.payload.tasks : [];
+    const currentTask = env.payload.current_task;
+    post({
+      type: 'plan_state',
+      reason: String(env.payload.reason ?? ''),
+      issue: String(env.payload.issue ?? ''),
+      createdBy: String(env.payload.created_by ?? ''),
+      context: String(env.payload.context ?? ''),
+      tasks: rawTasks.map((raw) => {
+        const task = raw as Record<string, unknown>;
+        return {
+          id: typeof task.id === 'number' ? task.id : 0,
+          title: String(task.title ?? ''),
+          status: String(task.status ?? ''),
+        };
+      }),
+      currentTask: typeof currentTask === 'number' ? currentTask : null,
+      complete: env.payload.complete === true,
+      abandoned: env.payload.abandoned === true,
+      abandonReason: String(env.payload.abandon_reason ?? ''),
+    });
+    return true;
+  }
+
+  // A planner re-planned over an unfinished plan — the one hard failure in the
+  // planning feature. The session is stopping; this is the red callout saying
+  // why (kodo's `doc/PLANNING.md` §4).
+  if (env.kind === 'event' && evtType === 'plan.conflict_critical') {
+    post({ type: 'plan_conflict_critical', message: String(env.payload.message ?? '') });
+    return true;
+  }
+
   if (env.kind === 'event' && evtType === 'agent.tool_call_detail') {
     const rawDiff = env.payload.diff as Record<string, unknown> | null | undefined;
     const diff =

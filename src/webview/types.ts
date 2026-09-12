@@ -234,6 +234,27 @@ export interface ReviewFinding {
   locations: ReviewFindingLocation[];
 }
 
+/** One task in the session's work plan (kodo `doc/PLANNING.md`).
+ *
+ *  There is deliberately no 'failed' status: a plan only ever moves forward, and
+ *  work that turns out to be misjudged is handled by replacing the whole plan
+ *  once it is finished rather than by marking a task failed. Render exactly
+ *  these three and nothing else. */
+export type PlanTaskStatus = 'not_started' | 'in_progress' | 'done';
+
+/** One row of the plan widget. */
+export interface PlanTask {
+  /** 1-based position, and the task's only identity — tasks are never
+   *  inserted, removed or reordered once the plan exists. */
+  id: number;
+  title: string;
+  status: string;
+}
+
+/** What produced the plan view being rendered. Server-side vocabulary; it never
+ *  reaches a model, and exists only so the widget can title itself. */
+export type PlanStateReason = 'created' | 'read' | 'step' | 'abandoned';
+
 /** `create_file` writes a brand-new file (no diff, just the proposed
  *  content); `edit_file` is a genuine modification of an existing one
  *  (rendered as a diff of old vs. new). */
@@ -536,7 +557,57 @@ export type SessionEntry =
       paths: string[];
       findings: ReviewFinding[];
       exclude_from_context: true;
-    };
+    }
+  // The session's work-plan widget (kodo `doc/PLANNING.md`). Emitted when a
+  // planner sub-agent's result creates the plan, and on every `get_plan` /
+  // `plan_step_forward` call — so the feed carries a running record of the plan
+  // as it advanced, not just its latest state.
+  //
+  // Unlike `review_findings` the *information* here is not user-only; the
+  // **rendering** is. The model was handed the identical state as that tool
+  // call's JSON result, so this widget adds nothing to its context. The marker
+  // carries no `role`, so it is never rebuilt into any message history.
+  //
+  // Statuses arrive already derived server-side from the plan log — render them
+  // as given and never recompute one from a step count here. Persisted as a
+  // "plan_state" marker and replayed via session_history on reload, which is
+  // why each entry keeps the statuses it was emitted with rather than being
+  // restamped with the plan's state today.
+  | {
+      type: 'plan_state';
+      /** 'created' | 'read' | 'step' | 'abandoned' — what produced this view. */
+      reason: string;
+      /** A warning to show on this card, or ''. Set only on a creation whose
+       *  planner reported tasks the engine could not use, so the shortfall lands
+       *  on the very widget that is missing them. Not a property of the plan —
+       *  it describes the event that made it, so it never repeats on later
+       *  reads. */
+      issue: string;
+      /** The planner sub-agent whose result this plan came from. */
+      createdBy: string;
+      /** The development context the planner established alongside the tasks. */
+      context: string;
+      tasks: PlanTask[];
+      /** Id of the one in-progress task, or null — which is the case both
+       *  before the first step and after the last. Read `complete` to tell
+       *  those apart; never infer "finished" from a missing current task. */
+      currentTask: number | null;
+      complete: boolean;
+      /** True when the plan was closed without being finished. Its unfinished
+       *  tasks KEEP their statuses — abandoning closes a plan, it never pretends
+       *  the work happened — so render them as they are. */
+      abandoned: boolean;
+      /** Why it was abandoned, or ''. */
+      abandonReason: string;
+      exclude_from_context: true;
+    }
+  // A planner returned a new plan while the live one still had unfinished tasks
+  // — the one hard failure in the planning feature (kodo `doc/PLANNING.md` §4).
+  // The session phase goes to 'stopped' in the same breath. Rendered like the
+  // other criticals: a red <kodo_crit> callout. Persisted as a
+  // "plan_conflict_critical" marker and replayed on reload, so the record of
+  // why the session ended survives.
+  | { type: 'plan_conflict_critical'; message: string; exclude_from_context: true };
 export interface State {
   connected: boolean;
   hasWorkspace: boolean;
@@ -820,5 +891,21 @@ export type Action =
       paths: string[];
       findings: ReviewFinding[];
     }
+  // The session's work-plan widget. Same field shape as the `plan_state` session
+  // entry, so one reader in the reducer converts both this and the replayed
+  // history entry.
+  | {
+      type: 'plan_state';
+      reason: string;
+      issue: string;
+      createdBy: string;
+      context: string;
+      tasks: PlanTask[];
+      currentTask: number | null;
+      complete: boolean;
+      abandoned: boolean;
+      abandonReason: string;
+    }
+  | { type: 'plan_conflict_critical'; message: string }
   | { type: 'security_rule_added'; scope: 'session' | 'global'; offer: RuleOffer }
   | ({ type: 'ui_settings' } & UiSettings);

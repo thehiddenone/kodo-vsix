@@ -1,3 +1,4 @@
+import { PlanView } from './PlanView';
 import { ReviewFindingsTable } from './ReviewFindingsTable';
 import { styles } from './styles';
 import { vscode } from './vscode';
@@ -442,5 +443,14 @@ export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
       // doc/GUIDED_DEV_MODE.md). Lands after the critic's collapsed subsession
       // block, so each round leaves its own table in the feed.
       return <ReviewFindingsTable entry={entry} />;
+    case 'plan_state':
+      // The session's work-plan widget (kodo doc/PLANNING.md). Lands right after
+      // the `get_plan`/`plan_step_forward` tool-call card that produced it, and
+      // after the planner's subsession block when the plan was just created.
+      return <PlanView entry={entry} />;
+    case 'plan_conflict_critical':
+      // A planner re-planned over an unfinished plan, so the session stopped
+      // (kodo doc/PLANNING.md §4). Rendered like the other criticals.
+      return <Markdown content={`<kodo_crit>${entry.message}</kodo_crit>`} />;
   }
 }
