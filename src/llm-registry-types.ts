@@ -574,11 +574,6 @@ export interface ThinkingFamilyInfo {
  * absent from this map has no thinking-tier control. */
 export type ThinkingFamilies = Record<string, ThinkingFamilyInfo>;
 
-/** Tier slugs are already display-ready words ("minimal" -> "Minimal"). */
-export function tierLabel(tier: string): string {
-  return tier.charAt(0).toUpperCase() + tier.slice(1);
-}
-
 /**
  * The thinking-tier shape a session's Thinking Level toggle (ModeControls.tsx)
  * needs, derived window-wide from `activeLocalModelState`/`modeState`/

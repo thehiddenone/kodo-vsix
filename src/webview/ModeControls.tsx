@@ -1,6 +1,5 @@
 import { useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import { tierLabel } from '../llm-registry-types';
 import type { ThinkingFamily } from '../llm-registry-types';
 import { styles } from './styles';
 import { vscode } from './vscode';
@@ -214,6 +213,29 @@ const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
   bedrock_effort: _BEDROCK_THINKING_DESC,
 };
 
+/** The short display label for a tier, as the Thinking button shows it
+ *  ("Thinking: High") — taken from the *head* of that family's tooltip in
+ *  {@link _THINKING_DESC}, everything up to its first full stop, so the button
+ *  and its tooltip can never disagree.
+ *
+ *  It has to be read off the table rather than title-cased from the slug,
+ *  because several vendors' slugs are not their own ladder's names: a tier
+ *  Kōdo calls `xhigh` is the *top* of Qwen3.8-Flash-Next's three-tier ladder
+ *  and reads "Thinking: High", and DeepSeek's `high`/`max` present as
+ *  "Medium"/"High". Hence the family argument — the same slug labels
+ *  differently per family.
+ *
+ *  Falls back to title-casing the slug for a tier (or family) this build's
+ *  table doesn't know; see `_thinkingTierDesc` on why that shouldn't happen. */
+export function tierLabel(family: ThinkingFamily | null, tier: string): string {
+  const desc = family === null ? undefined : _THINKING_DESC[family][tier];
+  if (desc !== undefined) {
+    const dot = desc.indexOf('.');
+    return dot === -1 ? desc : desc.slice(0, dot);
+  }
+  return `Thinking: ${tier.charAt(0).toUpperCase() + tier.slice(1)}`;
+}
+
 /** Tooltip for a tier, keyed by family — a full table per family rather than a
  *  default one, since the same tier slug carries a genuinely different meaning
  *  in each: "high" is a token budget on a local Qwen, Claude's own default, and
@@ -222,7 +244,7 @@ const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
  *  the server's `thinking_families` payload, and a family that has arrived
  *  before this build knew about it is coerced to null upstream). */
 function _thinkingTierDesc(family: ThinkingFamily, tier: string): string {
-  const desc = _THINKING_DESC[family][tier] ?? `Thinking: ${tierLabel(tier)}.`;
+  const desc = _THINKING_DESC[family][tier] ?? `${tierLabel(family, tier)}.`;
   return desc + (_THINKING_CAVEAT[family] ?? '');
 }
 
@@ -390,7 +412,8 @@ export function ModeControls({
     _COMMAND_NAME.permissive,
   );
   const thinkingDisabled = !connected || thinkingFamily === null;
-  const thinkingLabel = thinkingFamily === null ? '💭 Thinking: N/A' : `💭 Thinking: ${tierLabel(thinkingLevel)}`;
+  const thinkingLabel =
+    thinkingFamily === null ? '💭 Thinking: N/A' : `💭 ${tierLabel(thinkingFamily, thinkingLevel)}`;
   const thinkingTip =
     thinkingFamily === null
       ? 'This LLM does not have thinking mode.'
