@@ -16,7 +16,6 @@ export const styles = {
     color: '#c8a400',
     border: '1px solid #c8a400',
     borderRadius: '2px',
-    width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
     fontWeight: 'bold',
@@ -27,27 +26,37 @@ export const styles = {
     color: '#c8a400',
     border: '1px solid #c8a400',
     borderRadius: '2px',
-    width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
     flexShrink: 0,
   },
+  // The single attachment row under the textarea in the composer's centre
+  // column. Its height is reserved whether or not anything is attached, so
+  // the textarea doesn't jump when the first chip lands. One row only: chips
+  // shrink (names ellipsize) instead of wrapping, so every attachment stays
+  // on screen. `overflowX: auto` is the last resort for a centre column too
+  // narrow even for the squeezed chips — scrolling beats clipping an
+  // attachment out of reach of its 🗑.
   attachArea: {
-    flex: 1,
+    flex: '0 0 auto',
     minWidth: 0,
-    alignSelf: 'stretch',
+    height: '22px',
+    marginTop: '6px',
     display: 'flex',
-    flexWrap: 'wrap' as const,
-    alignContent: 'flex-start',
-    alignItems: 'flex-start',
+    flexWrap: 'nowrap' as const,
+    alignItems: 'center',
     gap: '4px',
-    overflowY: 'auto' as const,
-    paddingRight: '8px',
+    overflowX: 'auto' as const,
+    overflowY: 'hidden' as const,
   },
   attachChip: {
     display: 'flex',
     alignItems: 'center',
     gap: '4px',
+    // Shrinkable: 140px when there is room, squeezed (name ellipsized by
+    // attachChipName) when the row holds more chips than it can fit.
+    flex: '0 1 auto',
+    minWidth: '28px',
     maxWidth: '140px',
     boxSizing: 'border-box' as const,
     padding: '2px 6px',
@@ -75,7 +84,6 @@ export const styles = {
     color: 'var(--vscode-errorForeground)',
     border: '1px solid var(--vscode-errorForeground)',
     borderRadius: '2px',
-    width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
     flexShrink: 0,
@@ -85,7 +93,6 @@ export const styles = {
     color: 'var(--vscode-errorForeground)',
     border: '1px solid var(--vscode-errorForeground)',
     borderRadius: '2px',
-    width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
     flexShrink: 0,
@@ -196,29 +203,52 @@ export const styles = {
     opacity: 0.6,
     flexShrink: 0,
   },
+  // Left column of the composer (composerRow): the five toggles stacked one
+  // per row.
   modeControls: {
+    // COMPOSER_SIDE_WIDTH: the same `0 0 240px` composerRight carries — neither
+    // grows nor shrinks, so the two outer columns are exactly the same width
+    // at every panel size and only the centre column responds to width
+    // changes. 240px leaves ~223px of button width, comfortably more than the
+    // longest label ("🔓 Tool Control: Permissive", ~213px with padding and the
+    // ⓘ). Bottom-anchored by composerRow's `alignItems: flex-end`, so a
+    // growing textarea never moves it.
+    flex: '0 0 240px',
+    // border-box + paddingRight, so the gap between the ⓘ markers and the
+    // textarea matches the gap on the other side (composerRow's 10px gap plus
+    // composerRight's 16px inset = 26px) while the column itself stays exactly
+    // 240px wide — a margin would widen its footprint past the right column's.
+    // It costs the toggle buttons 16px: ~207px of label width, still clear of
+    // the ~195px the longest label needs.
+    boxSizing: 'border-box' as const,
+    paddingRight: '16px',
     display: 'flex',
-    flexWrap: 'wrap' as const,
+    flexDirection: 'column' as const,
+    // MODE_ROW_GAP: mirrored by composerRight's row gap so the button rows sit
+    // at the same vertical coordinates as the bottom three toggle rows.
     gap: '6px',
-    marginTop: '6px',
-    marginBottom: '8px',
   },
-  // Toggle cell — the flex item that shares the row evenly, holding the button
-  // (which fills it) plus the trailing ⓘ marker.
+  // One toggle row — the full-width cycling button plus its trailing ⓘ marker.
   modeBtnWrap: {
-    flex: 1,
-    minWidth: '150px',
     display: 'flex',
     alignItems: 'center',
-    // Fixed gap between the button and its trailing ⓘ marker (the button no
-    // longer stretches, so this is the actual visible spacing).
+    // Fixed gap between the button and its trailing ⓘ marker.
     gap: '1px',
   },
   modeBtn: {
-    // Size to content so the ⓘ sits a fixed gap away instead of being pushed
-    // to the far edge of the (stretched) cell.
+    // Fills the column width so the five stacked buttons share one left and
+    // one right edge; labels are left-aligned for the same reason (centring
+    // five labels of very different lengths reads as ragged).
+    flex: '1 1 auto',
     minWidth: 0,
-    padding: '4px 8px',
+    textAlign: 'left' as const,
+    // MODE_ROW_HEIGHT: pinned (rather than left to the button's font metrics,
+    // which differ per platform) because composerRight's grid rows are the
+    // same height — that is what makes the button rows line up with the
+    // toggle rows. Change it in both places or the alignment breaks.
+    height: '26px',
+    boxSizing: 'border-box' as const,
+    padding: '0 8px',
     fontSize: '14px',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -271,13 +301,6 @@ export const styles = {
     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.35)',
     zIndex: 1000,
     pointerEvents: 'none' as const,
-  },
-  // Override applied to the leftmost toggle's tooltip so it opens rightward
-  // (anchored to the ⓘ's left edge) instead of leftward — otherwise the 230px
-  // box runs off the WebView's left edge and gets clipped.
-  tooltipBoxLeft: {
-    right: 'auto' as const,
-    left: 0,
   },
   stream: {
     flex: 1,
@@ -1558,7 +1581,6 @@ export const styles = {
     color: 'var(--vscode-descriptionForeground)',
     border: '1px solid var(--vscode-descriptionForeground)',
     borderRadius: '2px',
-    width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
     flexShrink: 0,
@@ -1650,10 +1672,68 @@ export const styles = {
     color: 'var(--vscode-descriptionForeground)',
     fontStyle: 'italic',
   },
-  // Prompt input
-  inputArea: {
+  // Prompt composer — three columns: the fixed-width toggle stack
+  // (modeControls), the responsive centre (composerCenter: textarea +
+  // attachment row), and the fixed button grid (composerRight). `flex-end`
+  // keeps the two fixed columns pinned to the bottom of the WebView while
+  // only the textarea in the middle grows upward.
+  composerRow: {
     display: 'flex',
-    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: '10px',
+    paddingTop: '6px',
+    // Never squeezed by the transcript above it, however long that grows.
+    flexShrink: 0,
+  },
+  // Centre column. `alignSelf: stretch` makes it match the row's height —
+  // which at rest is set by the taller toggle stack — so the textarea inside
+  // fills that height instead of leaving a gap above itself.
+  composerCenter: {
+    flex: '1 1 auto',
+    // The only column that absorbs width changes, in both directions: the two
+    // fixed columns never shrink, so this one must be free to (`minWidth: 0`,
+    // overriding the textarea's content-based minimum).
+    minWidth: 0,
+    alignSelf: 'stretch',
+    display: 'flex',
+    flexDirection: 'column' as const,
+  },
+  // Right column: exactly as wide as the toggle column (the same
+  // COMPOSER_SIDE_WIDTH `0 0 240px`), holding a 3×3 grid of 64px × 32px cells
+  // inset from the centre column by 16px.
+  // Each button is explicitly placed (gridColumn/gridRow on its own style) so
+  // a hidden conditional button leaves its cell empty rather than shifting the
+  // others. Column 3 holds only the reconnect button and stays
+  // reserved-but-empty while the session's workspace is open.
+  //
+  // Cell size and gaps are the button grid's own (64×32px cells, 8px rows,
+  // 16px columns) and deliberately do NOT mirror the toggle rows any more;
+  // only the two columns' total height is still kept equal, by paddingBottom.
+  composerRight: {
+    flex: '0 0 240px',
+    // border-box so the padding below eats *into* the 240px basis instead of
+    // adding to it — the two outer columns must stay exactly the same width.
+    // The grid is 3*64 + 2*16 = 224px, which with the 16px inset fills the
+    // 240px exactly; anything more for either and the buttons overflow.
+    boxSizing: 'border-box' as const,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 64px)',
+    gridTemplateRows: 'repeat(3, 32px)',
+    // row gap, column gap
+    gap: '8px 16px',
+    justifyContent: 'start' as const,
+    // Pads the grid out to the toggle column's exact height: that column is
+    // 5 × MODE_ROW_HEIGHT + 4 × MODE_ROW_GAP = 154px, this grid is
+    // 3 × 32 + 2 × 8 = 112px, so 42px. All of it at the BOTTOM — both columns
+    // are bottom-anchored, so bottom padding is what lifts the buttons to the
+    // top of the block (send/attach level with the workflow toggle, stop/delete
+    // with Edit Control). Keep it written as the subtraction: it stays correct
+    // when either column's geometry changes.
+    paddingBottom: 'calc((5 * 26px + 4 * 6px) - (3 * 32px + 2 * 8px))',
+    // Insets the buttons from the centre column so they don't hug the
+    // textarea. 16px is all there is: the 224px grid leaves exactly that much
+    // of the 240px column.
+    paddingLeft: '16px',
   },
   input: {
     width: '100%',
@@ -1668,8 +1748,13 @@ export const styles = {
     fontFamily: 'inherit',
     fontSize: 'inherit',
     resize: 'none',
+    // `flex: 1` lets it fill the centre column at rest (the column is as tall
+    // as the toggle stack beside it); the inline height App.tsx's handleInput
+    // sets from scrollHeight is the flex basis, so typing past that fill
+    // height is what actually grows the composer.
+    flex: '1 1 auto',
     minHeight: '56px',
-    maxHeight: '180px',
+    maxHeight: '250px',
     overflowY: 'auto',
     boxSizing: 'border-box',
   },
@@ -1679,24 +1764,22 @@ export const styles = {
   inputActive: {
     border: '1px solid #c8a400',
   },
-  inputFooter: {
-    display: 'flex',
-    alignItems: 'center',
-    height: '50px',
-    paddingTop: '6px',
-  },
-  footerButtons: {
-    display: 'flex',
-    gap: '10px',
-    alignSelf: 'stretch',
-    alignItems: 'stretch',
+  // Opens the Kōdo Settings panel (the `kodo.openSettings` command, run by
+  // the host). Neutral-toned like samplingBtn — both are "open a settings
+  // surface", neither acts on the session.
+  kodoSettingsBtn: {
+    background: 'transparent',
+    color: 'var(--vscode-descriptionForeground)',
+    border: '1px solid var(--vscode-descriptionForeground)',
+    borderRadius: '2px',
+    cursor: 'pointer',
+    fontSize: '16px',
   },
   sendBtn: {
     background: 'transparent',
     color: '#2ea043',
     border: '1px solid #2ea043',
     borderRadius: '2px',
-    width: '40px',
     cursor: 'pointer',
     fontSize: '16px',
   },

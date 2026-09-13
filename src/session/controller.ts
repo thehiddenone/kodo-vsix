@@ -297,6 +297,12 @@ export class SessionController {
       case 'delete_session':
         void this._confirmAndDelete();
         break;
+      case 'open_kodo_settings':
+        // The composer's ⚙ button. Routed through the registered command
+        // rather than `openKodoSettings()` directly, so the session view has
+        // no dependency on the settings panel's module.
+        void vscode.commands.executeCommand('kodo.openSettings');
+        break;
       case 'reconnect_workspace':
         void this._confirmAndReconnectWorkspace();
         break;

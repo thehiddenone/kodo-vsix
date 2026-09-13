@@ -542,6 +542,12 @@ export function App() {
     vscode.postMessage({ type: 'reconnect_workspace' });
   }
 
+  function handleOpenKodoSettings() {
+    // The panel is a host-owned WebView (`kodo.openSettings`), not part of
+    // this session view — the host runs the command.
+    vscode.postMessage({ type: 'open_kodo_settings' });
+  }
+
   function handleAttach() {
     // The open dialog, validation, and file reading all live in the host; it
     // posts back `attachment_added` for each accepted file.
@@ -732,22 +738,8 @@ export function App() {
           }}
         />
       ) : (
-        <div style={styles.inputArea}>
-          <textarea
-            ref={inputRef}
-            style={inputDisabled ? styles.input : { ...styles.input, ...styles.inputActive }}
-            placeholder={
-              state.pendingQuestion !== null
-                ? 'Answer the questions above, then Confirm and Send…'
-                : state.uiSettings.enterSubmits
-                  ? 'Type a prompt and press Enter…'
-                  : 'Type a prompt and press Shift+Enter…'
-            }
-            disabled={inputDisabled}
-            onKeyDown={handleKeyDown}
-            onInput={handleInput}
-          />
-          {/* Per-session mode toggles (apply to the next prompt) */}
+        <div style={styles.composerRow}>
+          {/* Left column: the five per-session mode toggles, stacked. */}
           <ModeControls
             autonomous={state.autonomous}
             effectiveAutonomous={state.effectiveAutonomous}
@@ -762,62 +754,95 @@ export function App() {
             connected={state.connected}
             running={state.running}
           />
-          <div style={styles.inputFooter}>
+          {/* Centre column: the prompt box (the only part that grows) over a
+              single reserved row of attachment chips. */}
+          <div style={styles.composerCenter}>
+            <textarea
+              ref={inputRef}
+              style={inputDisabled ? styles.input : { ...styles.input, ...styles.inputActive }}
+              placeholder={
+                state.pendingQuestion !== null
+                  ? 'Answer the questions above, then Confirm and Send…'
+                  : state.uiSettings.enterSubmits
+                    ? 'Type a prompt and press Enter…'
+                    : 'Type a prompt and press Shift+Enter…'
+              }
+              disabled={inputDisabled}
+              onKeyDown={handleKeyDown}
+              onInput={handleInput}
+            />
             <AttachedFilesArea files={state.attachedFiles} onRemove={removeAttachment} />
-            <div style={styles.footerButtons}>
-              {!state.workspaceConnected && (
-                <FooterButton
-                  style={styles.reconnectBtn}
-                  onClick={handleReconnectWorkspace}
-                  disabled={!state.connected}
-                  title="Open workspace associated with this session."
-                >
-                  {'📂'}
-                </FooterButton>
-              )}
+          </div>
+          {/* Right column: 3×3 button grid. Every button is placed explicitly
+              rather than flowing, so the one conditional button (reconnect,
+              which exists only while the session's workspace is closed)
+              leaves its cell empty instead of reflowing the others. */}
+          <div style={styles.composerRight}>
+            <FooterButton
+              style={{ ...styles.sendBtn, gridColumn: 1, gridRow: 1 }}
+              onClick={sendPrompt}
+              disabled={inputDisabled}
+              title={state.uiSettings.enterSubmits ? 'Send prompt (Enter)' : 'Send prompt (Shift+Enter)'}
+            >
+              {isRunning ? '…' : '↑'}
+            </FooterButton>
+            <FooterButton
+              style={{ ...styles.attachBtn, gridColumn: 2, gridRow: 1 }}
+              onClick={handleAttach}
+              disabled={!state.connected || state.attachedFiles.length >= 9}
+              title="Attach text files to the next prompt"
+            >
+              +
+            </FooterButton>
+            {!state.workspaceConnected && (
               <FooterButton
-                style={styles.sendBtn}
-                onClick={sendPrompt}
-                disabled={inputDisabled}
-                title={state.uiSettings.enterSubmits ? 'Send prompt (Enter)' : 'Send prompt (Shift+Enter)'}
-              >
-                {isRunning ? '…' : '↑'}
-              </FooterButton>
-              <FooterButton
-                style={styles.attachBtn}
-                onClick={handleAttach}
-                disabled={!state.connected || state.attachedFiles.length >= 9}
-                title="Attach text files to the next prompt"
-              >
-                +
-              </FooterButton>
-              {state.samplingModel !== '' && (
-                <FooterButton
-                  style={styles.samplingBtn}
-                  onClick={() => dispatch({ type: 'sampling_modal_open', open: true })}
-                  disabled={!state.connected}
-                  title={`Sampling parameters for ${state.samplingModel}`}
-                >
-                  {'🎛'}
-                </FooterButton>
-              )}
-              <FooterButton
-                style={styles.globalStopBtn}
-                onClick={handleStop}
-                disabled={!state.connected || !isRunning}
-                title="Stop all running agent work"
-              >
-                {'🛑'}
-              </FooterButton>
-              <FooterButton
-                style={styles.deleteBtn}
-                onClick={handleDelete}
+                style={{ ...styles.reconnectBtn, gridColumn: 3, gridRow: 1 }}
+                onClick={handleReconnectWorkspace}
                 disabled={!state.connected}
-                title="Delete this session (permanently removes all its history)"
+                title="Open workspace associated with this session."
               >
-                {'🗑'}
+                {'📂'}
               </FooterButton>
-            </div>
+            )}
+            {/* Always occupies its cell — disabled (rather than hidden) when
+                the active model exposes no sampling parameters, so the grid
+                never changes shape as models come and go. */}
+            <FooterButton
+              style={{ ...styles.samplingBtn, gridColumn: 1, gridRow: 2 }}
+              onClick={() => dispatch({ type: 'sampling_modal_open', open: true })}
+              disabled={!state.connected || state.samplingModel === ''}
+              title={
+                state.samplingModel === ''
+                  ? 'Sampling parameters — unavailable for the active model'
+                  : `Sampling parameters for ${state.samplingModel}`
+              }
+            >
+              {'🎛'}
+            </FooterButton>
+            <FooterButton
+              style={{ ...styles.kodoSettingsBtn, gridColumn: 2, gridRow: 2 }}
+              onClick={handleOpenKodoSettings}
+              disabled={false}
+              title="Open Kōdo Settings"
+            >
+              {'⚙'}
+            </FooterButton>
+            <FooterButton
+              style={{ ...styles.globalStopBtn, gridColumn: 1, gridRow: 3 }}
+              onClick={handleStop}
+              disabled={!state.connected || !isRunning}
+              title="Stop all running agent work"
+            >
+              {'🛑'}
+            </FooterButton>
+            <FooterButton
+              style={{ ...styles.deleteBtn, gridColumn: 2, gridRow: 3 }}
+              onClick={handleDelete}
+              disabled={!state.connected}
+              title="Delete this session (permanently removes all its history)"
+            >
+              {'🗑'}
+            </FooterButton>
           </div>
         </div>
       )}

@@ -11,11 +11,12 @@ interface FooterButtonProps {
 }
 
 /**
- * One of the four bottom-bar buttons (send prompt, attach, stop, delete
- * session). Plain inline styles give VS Code webviews no `:active` pseudo-
- * class to lean on, so click feedback is faked here: the glyph inside the
- * button (not the button itself, which would shift layout) is nudged down
- * and to the side for as long as the pointer/touch is held down.
+ * One button of the composer's right-hand grid (send prompt, attach, reopen
+ * workspace, sampling parameters, Kōdo Settings, stop, delete session). Plain
+ * inline styles give VS Code webviews no `:active` pseudo-class to lean on, so
+ * click feedback is faked here: the glyph inside the button (not the button
+ * itself, which would shift layout) is nudged down and to the side for as long
+ * as the pointer/touch is held down.
  */
 export function FooterButton({ style, onClick, disabled, title, children }: FooterButtonProps) {
   const [pressed, setPressed] = useState(false);

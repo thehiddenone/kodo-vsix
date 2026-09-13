@@ -10,10 +10,10 @@ import type { EditControl, CommandControl } from './types';
 // Autonomous") is appended on its own line at render time by the
 // build*Tooltip helpers.
 const _MODE_DESC = {
-  interactive: 'Interactive — agents work alongside you, asking questions before key decisions.',
-  autonomous: 'Autonomous — agents work on their own, making reasonable assumptions instead of pausing.',
-  problem_solving: 'Problem Solving — one generalist agent tackles your request end to end.',
-  guided: 'Guided Development — Kōdo walks through design, tests and implementation phases.',
+  interactive: 'Mode: Interactive — agents work alongside you, asking questions before key decisions.',
+  autonomous: 'Mode: Autonomous — agents work on their own, making reasonable assumptions instead of pausing.',
+  problem_solving: 'Agent: Problem Solver — one generalist agent tackles your request end to end.',
+  guided: 'Agent: Guide — one coordinating agent drives specialists through design, tests and implementation.',
 };
 
 /** Status-free description of Edit Control, one per posture. */
@@ -266,23 +266,20 @@ function buildLockTooltip(desc: string, locked: boolean, lockedName: string): st
  * Custom hover tooltip. Native `title` is unreliable in VS Code webviews (no
  * tooltip on disabled buttons, inconsistent timing), so the ⓘ marker renders
  * its own positioned bubble. Shown above the trigger to avoid clipping at the
- * panel footer where the mode bar lives.
+ * bottom of the WebView, where the composer's toggle column lives.
  */
 function Tooltip({
   text,
-  align = 'right',
   children,
 }: {
   text: string;
-  /** Side the bubble opens toward: 'right' (default) anchors it to the ⓘ's
-   *  right edge and grows leftward; 'left' anchors left and grows rightward so
-   *  the leftmost toggle's bubble stays inside the WebView. */
-  align?: 'left' | 'right';
   children: ComponentChildren;
 }) {
   const [show, setShow] = useState(false);
-  const boxStyle =
-    align === 'left' ? { ...styles.tooltipBox, ...styles.tooltipBoxLeft } : styles.tooltipBox;
+  // Always anchored to the ⓘ's right edge, opening leftward: since the
+  // toggles are a fixed-width left column, every ⓘ sits at the same x and the
+  // bubble is narrower than the column is far from the WebView's left edge.
+  const boxStyle = styles.tooltipBox;
   return (
     <span
       style={styles.tooltipWrap}
@@ -309,14 +306,11 @@ function ModeButton({
   tip,
   disabled,
   onClick,
-  tipAlign,
 }: {
   label: string;
   tip: string;
   disabled: boolean;
   onClick: () => void;
-  /** Direction the tooltip opens; pass 'left' for the leftmost toggle. */
-  tipAlign?: 'left' | 'right';
 }) {
   return (
     <span style={styles.modeBtnWrap}>
@@ -327,7 +321,7 @@ function ModeButton({
       >
         {label}
       </button>
-      <Tooltip text={tip} align={tipAlign}>
+      <Tooltip text={tip}>
         <span style={styles.modeInfo} role="img" aria-label="info">
           ⓘ
         </span>
@@ -374,7 +368,7 @@ export function ModeControls({
 
   const wfTip = buildModeTooltip(
     isPS ? _MODE_DESC.problem_solving : _MODE_DESC.guided,
-    effectiveWorkflowMode === 'problem_solving' ? 'Problem Solving' : 'Guided Development',
+    effectiveWorkflowMode === 'problem_solving' ? 'Problem Solver' : 'Guide',
     running && workflowMode !== effectiveWorkflowMode,
   );
   const autoTip = buildModeTooltip(
@@ -398,14 +392,13 @@ export function ModeControls({
   return (
     <div style={styles.modeControls}>
       <ModeButton
-        label={isPS ? '💡 Problem Solving' : '🧩 Guided Development'}
+        label={isPS ? '💡 Agent: Problem Solver' : '🧩 Agent: Guide'}
         tip={wfTip}
-        tipAlign="left"
         disabled={!connected}
         onClick={() => vscode.postMessage({ type: 'workflow_set', mode: isPS ? 'guided' : 'problem_solving' })}
       />
       <ModeButton
-        label={autonomous ? '⚡ Autonomous' : '💬 Interactive'}
+        label={autonomous ? '⚡ Mode: Autonomous' : '💬 Mode: Interactive'}
         tip={autoTip}
         disabled={!connected}
         onClick={() => vscode.postMessage({ type: 'mode_set', autonomous: !autonomous })}
