@@ -86,6 +86,12 @@ interface WindowState {
   // Kōdo Settings panel's "Llama.cpp" section has fetched `llamacpp.version_info`
   // at least once (not part of `hello.ack`); `null` until then or on fetch failure.
   llamaLatestVersionState: string | null;
+  // True while a `llamacpp.version_info` round-trip is in flight. The server
+  // resolves "latest" by scanning GitHub Releases, which can take seconds, so
+  // the fetch is never awaited before the Kōdo Settings panel opens — the
+  // panel renders "checking…" for the latest build and disables the
+  // install/update button off this flag until the answer lands.
+  llamaLatestCheckingState: boolean;
   llamaInstallingState: boolean;
   llamaRunningState: boolean;
   llamaRunningModelState: string;
@@ -182,6 +188,7 @@ export const state: WindowState = {
   llamaInstalledState: false,
   llamaVersionState: '',
   llamaLatestVersionState: null,
+  llamaLatestCheckingState: false,
   llamaInstallingState: false,
   llamaRunningState: false,
   llamaRunningModelState: '',

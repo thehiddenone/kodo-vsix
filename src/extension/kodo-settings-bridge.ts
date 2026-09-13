@@ -27,9 +27,10 @@ import {
 } from './cloud-ai-settings';
 import { sendControl, sendControlAwait } from './control-send';
 import {
-  fetchLlamaCppVersionInfo,
   installLlamaCpp,
+  llamaCppInfoForPanel,
   promptInstallLlamaCppVersion,
+  refreshLlamaCppVersionInfo,
   uninstallLlamaCpp,
   updateLlamaCppToLatest,
 } from './llamacpp';
@@ -125,8 +126,9 @@ function parseSkillsResponse(resp: Record<string, unknown>): SkillsState {
 }
 
 /** Open (or reveal) the Kōdo Settings panel, seeded with the current global
- * rules, stuck-detection settings, and llama.cpp version info fetched
- * up-front. Pass `selectSection` (e.g. `'local-inference'`, or a cloud vendor
+ * rules, stuck-detection settings, sessions and skills fetched up-front (the
+ * llama.cpp latest-build check is the one thing that is NOT awaited — see
+ * below). Pass `selectSection` (e.g. `'local-inference'`, or a cloud vendor
  * key like `'anthropic'`) to force the left nav to a specific tab — used by
  * `openLocalInferenceSettings`/`openCloudAiSettings` above; omitted, the
  * panel opens on whatever tab it last showed (or "General" for a brand-new
@@ -141,19 +143,34 @@ function parseSkillsResponse(resp: Record<string, unknown>): SkillsState {
  * row is produced by the webview's `render()`, which only ran on receipt of
  * an `update`). Fetching first makes the initial data ride the reliable
  * `ready`→`update` handshake instead — `selectSection` rides that same
- * handshake (see `KodoSettingsPanel.createOrShow`/`selectSection`). */
+ * handshake (see `KodoSettingsPanel.createOrShow`/`selectSection`).
+ *
+ * The async llama.cpp refresh below is not a relapse into that bug: it lands
+ * through `panel.update()`, which folds the patch into `KodoSettingsPanel`'s
+ * own `state` before posting, so a push that beats the webview's load is
+ * re-sent whole by the `ready` handler. What must not go async is state the
+ * panel has no stand-in to render meanwhile — `llamaCpp` has one
+ * (`latestChecking`, rendered as "checking…"). */
 export async function openKodoSettings(
   selectSection?: string,
   configureEntry?: string,
 ): Promise<void> {
-  const [rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, skills] = await Promise.all([
+  const [rules, stuckDetection, housekeeperLlm, sessions, skills] = await Promise.all([
     fetchGlobalRules(),
     fetchStuckDetection(),
     fetchHousekeeperLlm(),
-    fetchLlamaCppVersionInfo(),
     fetchSessionsForPanel(),
     fetchSkillsForPanel(),
   ]);
+  // The one deliberate exception to "fetch before opening": the llama.cpp
+  // version check is started here but never awaited — awaiting it delayed the
+  // whole panel by however long the server's GitHub Releases scan took
+  // (seconds). It is kicked off BEFORE the panel is seeded so the seed already
+  // carries `latestChecking`, and pushes its own `llamaCpp` update when the
+  // answer lands. Every read below is a fresh `llamaCppInfoForPanel()` rather
+  // than one hoisted variable, so a check that finishes mid-open is never
+  // clobbered by a stale seed.
+  void refreshLlamaCppVersionInfo();
   // Unlike the four above, ui-settings.json is a local file kodo-vsix alone
   // owns — no server round trip — and the "Local Inference" tab's fields are
   // already continuously maintained in module state (see
@@ -180,7 +197,8 @@ export async function openKodoSettings(
   const panel = KodoSettingsPanel.createOrShow(
     state.extensionContext!.extensionUri,
     {
-      rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, sessionRules: null, skills,
+      rules, stuckDetection, housekeeperLlm, sessions, sessionRules: null, skills,
+      llamaCpp: llamaCppInfoForPanel(),
       skillScan: null, skillInstall: null,
       uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
     },
@@ -195,7 +213,8 @@ export async function openKodoSettings(
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
   panel.update({
-    rules, stuckDetection, housekeeperLlm, llamaCpp, sessions, skills, uiSettings,
+    rules, stuckDetection, housekeeperLlm, sessions, skills, uiSettings,
+    llamaCpp: llamaCppInfoForPanel(),
     hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
   });
 }

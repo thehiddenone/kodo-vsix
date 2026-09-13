@@ -11,7 +11,7 @@ export const initial: KodoSettingsState = {
     auto_unstuck_interactive: false,
   },
   housekeeperLlm: { selected: '', options: [] },
-  llamaCpp: { installedVersion: null, latestVersion: null, busy: false },
+  llamaCpp: { installedVersion: null, latestVersion: null, latestChecking: false, busy: false },
   sessions: [],
   sessionRules: null,
   skills: { root: '', skills: [] },

@@ -7,6 +7,7 @@ const LLAMACPP_RELEASES_URL = 'https://github.com/ggml-org/llama.cpp/releases';
 export function LlamaCppSection({ llamaCpp }: { llamaCpp: LlamaCppInfo }) {
   const installed = Boolean(llamaCpp.installedVersion);
   const busy = llamaCpp.busy;
+  const checking = llamaCpp.latestChecking;
   // Already on (or ahead of) the latest build: the server would answer
   // `llamacpp.update` with a single "already up to date" frame and change
   // nothing, so offering the button only invites a click that appears to do
@@ -27,7 +28,9 @@ export function LlamaCppSection({ llamaCpp }: { llamaCpp: LlamaCppInfo }) {
       </p>
       <p className="value-line">
         Latest version available at GitHub:{' '}
-        {llamaCpp.latestVersion ? (
+        {checking ? (
+          <span className="value-code">checking…</span>
+        ) : llamaCpp.latestVersion ? (
           <a href={LLAMACPP_RELEASES_URL} className="value-code">{llamaCpp.latestVersion}</a>
         ) : (
           <span className="value-code">unknown</span>
@@ -37,9 +40,20 @@ export function LlamaCppSection({ llamaCpp }: { llamaCpp: LlamaCppInfo }) {
         <p className="value-line">llama.cpp is up to date — there is nothing newer to install.</p>
       )}
       <div className="btn-row">
+        {/* `checking`: the latest-build lookup is a server-side GitHub
+            Releases scan that runs after the panel opens (see
+            `refreshLlamaCppVersionInfo` in extension/llamacpp.ts). Until it
+            lands there is no way to tell an update from a no-op reinstall, so
+            the button waits rather than acting on a version we don't have. */}
         <button
-          disabled={busy || upToDate}
-          title={upToDate ? `llama.cpp ${llamaCpp.installedVersion} is already the latest build.` : undefined}
+          disabled={busy || upToDate || checking}
+          title={
+            checking
+              ? 'Checking GitHub for the latest llama.cpp build…'
+              : upToDate
+                ? `llama.cpp ${llamaCpp.installedVersion} is already the latest build.`
+                : undefined
+          }
           onClick={() => vscode.postMessage({ type: installed ? 'update_llamacpp' : 'install_llamacpp' })}
         >
           {installed ? 'Update llama.cpp' : 'Install llama.cpp'}

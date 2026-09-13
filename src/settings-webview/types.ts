@@ -139,6 +139,12 @@ export interface HousekeeperLlmSettings {
 export interface LlamaCppInfo {
   installedVersion: string | null;
   latestVersion: string | null;
+  /** True while the extension host is asking the server for the latest
+   *  published build (a multi-second GitHub Releases scan, so it runs after
+   *  the panel opens rather than blocking it). The section renders
+   *  "checking…" in place of the latest build and disables its
+   *  install/update button while this is set. */
+  latestChecking: boolean;
   busy: boolean;
 }
 

@@ -22,6 +22,7 @@ export function llamaCppInfoForPanel(): LlamaCppInfo {
   return {
     installedVersion: state.llamaInstalledState && state.llamaVersionState ? state.llamaVersionState : null,
     latestVersion: state.llamaLatestVersionState,
+    latestChecking: state.llamaLatestCheckingState,
     busy: state.llamaInstallingState,
   };
 }
@@ -223,6 +224,12 @@ export async function uninstallLlamaCpp(): Promise<void> {
   }
 }
 
+/** The in-flight `refreshLlamaCppVersionInfo` round-trip, if any — so two
+ * overlapping triggers (opening the panel twice, or an install finishing
+ * while an open panel is still checking) share one server request instead of
+ * queueing a second multi-second GitHub scan. */
+let versionInfoInFlight: Promise<LlamaCppInfo> | null = null;
+
 /** Fetch `llamacpp.version_info` (kodo/doc/WS_PROTOCOL.md §7.6) and fold its
  * `installed_version`/`latest_version` into module state — this is the only
  * place `llamaLatestVersionState` is ever set, and it re-confirms
@@ -230,18 +237,44 @@ export async function uninstallLlamaCpp(): Promise<void> {
  * did. Returns the documented "unknown" shape (and shows a toast) only on a
  * true WS-unreachable failure — a GitHub-fetch failure is instead reported
  * server-side via the response's own `error` field, which just leaves
- * `latestVersion` `null` here without erroring. */
-export async function fetchLlamaCppVersionInfo(): Promise<LlamaCppInfo> {
-  try {
-    const resp = await sendControlAwait('llamacpp.version_info');
-    state.llamaInstalledState = typeof resp.installed_version === 'string';
-    state.llamaVersionState = typeof resp.installed_version === 'string' ? resp.installed_version : '';
-    state.llamaLatestVersionState = typeof resp.latest_version === 'string' ? resp.latest_version : null;
-    return llamaCppInfoForPanel();
-  } catch {
-    vscode.window.showErrorMessage('Kōdo: could not reach the server to check llama.cpp versions.');
-    return llamaCppInfoForPanel();
+ * `latestVersion` `null` here without erroring.
+ *
+ * NEVER await this on a UI-opening path: resolving "latest" makes the server
+ * page through GitHub Releases looking for the newest build that has this
+ * platform's assets (kodo `llamacpp/_install.py`'s `fetch_latest_build_number`),
+ * which takes seconds. Callers fire it off and let the two panel pushes below
+ * — one when the check starts, one when it lands — drive the UI: while
+ * `latestChecking` is set the "Llama.cpp" section shows "checking…" and
+ * disables its install/update button, then both settle from the answer. The
+ * sidebar's installed-version line is refreshed here too, since this call is
+ * also the authoritative post-install read of what is actually on disk. */
+export function refreshLlamaCppVersionInfo(): Promise<LlamaCppInfo> {
+  if (versionInfoInFlight) {
+    return versionInfoInFlight;
   }
+  state.llamaLatestCheckingState = true;
+  KodoSettingsPanel.instance?.update({ llamaCpp: llamaCppInfoForPanel() });
+  versionInfoInFlight = (async () => {
+    try {
+      const resp = await sendControlAwait('llamacpp.version_info');
+      state.llamaInstalledState = typeof resp.installed_version === 'string';
+      state.llamaVersionState = typeof resp.installed_version === 'string' ? resp.installed_version : '';
+      state.llamaLatestVersionState = typeof resp.latest_version === 'string' ? resp.latest_version : null;
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to check llama.cpp versions.');
+    } finally {
+      state.llamaLatestCheckingState = false;
+      versionInfoInFlight = null;
+    }
+    const llamaCpp = llamaCppInfoForPanel();
+    state.sidebarProvider?.update({
+      llamaInstalled: state.llamaInstalledState,
+      llamaVersion: state.llamaVersionState,
+    });
+    KodoSettingsPanel.instance?.update({ llamaCpp });
+    return llamaCpp;
+  })();
+  return versionInfoInFlight;
 }
 
 export function onLlamaProgress(pct: number, msg: string, upToDate: boolean): void {
@@ -263,11 +296,10 @@ export function onLlamaProgress(pct: number, msg: string, upToDate: boolean): vo
     }
     // Re-query for the authoritative build number (install/update only know
     // it completed, not which build "latest" resolved to) and refresh the
-    // panel's "latest available" line at the same time.
-    void fetchLlamaCppVersionInfo().then((llamaCpp) => {
-      state.sidebarProvider?.update({ llamaVersion: state.llamaVersionState });
-      KodoSettingsPanel.instance?.update({ llamaCpp });
-    });
+    // panel's "latest available" line at the same time. Fire-and-forget: the
+    // refresh pushes both the sidebar and the panel itself once it lands, and
+    // marks the panel "checking…" meanwhile.
+    void refreshLlamaCppVersionInfo();
     setTimeout(() => {
       state.llamaProgressResolve?.();
       state.llamaProgressReporter = null;
