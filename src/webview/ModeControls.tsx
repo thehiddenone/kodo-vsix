@@ -84,7 +84,7 @@ const _QWEN_THINKING_DESC: Record<string, string> = {
   low: 'Thinking: Low. A small reasoning budget — quick replies with a bit of deliberation.',
   medium: 'Thinking: Medium. A moderate reasoning budget — balances speed and depth for everyday tasks.',
   high: 'Thinking: High. A large reasoning budget — more careful deliberation on demanding problems, at the cost of speed.',
-  huge: 'Thinking: Huge. A very large reasoning budget — reserved for the hardest problems, where speed matters least.',
+  huge: 'Thinking: Extra high. A very large reasoning budget — reserved for the hardest problems, where speed matters least.',
   unlimited: 'Thinking: Unlimited. No cap on reasoning — Kōdo thinks for as long as it judges necessary.',
 };
 
@@ -92,6 +92,12 @@ const _GPT_OSS_THINKING_DESC: Record<string, string> = {
   low: 'Thinking: Low. Minimal reasoning effort — fastest replies.',
   medium: "Thinking: Medium. The model's default reasoning effort — balances speed and depth.",
   high: 'Thinking: High. Maximum reasoning effort — the most careful deliberation, at the cost of speed.',
+};
+
+const _QWEN4EXP_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. Brief, focused reasoning that moves straight to the conclusion — fastest replies.',
+  medium: 'Thinking: Medium. A moderate reasoning effort — balances speed and depth for everyday tasks.',
+  xhigh: "Thinking: High. Qwen3.8-Flash-Next's own default — careful reasoning that validates assumptions and weighs alternatives, at the cost of speed.",
 };
 
 const _OPENROUTER_THINKING_DESC: Record<string, string> = {
@@ -135,19 +141,19 @@ const _GOOGLE_THINKING_DESC: Record<string, string> = {
 const _ALIBABA_THINKING_DESC: Record<string, string> = {
   low: 'Thinking: Low. A small reasoning effort — fastest and cheapest replies.',
   medium: 'Thinking: Medium. A moderate reasoning effort — balances speed and depth for everyday tasks.',
-  xhigh: "Thinking: Extra high. Qwen's own default — thorough analysis for demanding problems, at the cost of speed and tokens.",
+  xhigh: "Thinking: High. Qwen's own default — thorough analysis for demanding problems, at the cost of speed and tokens.",
 };
 
 const _DEEPSEEK_THINKING_DESC: Record<string, string> = {
   low: 'Thinking: Low. A small reasoning effort — fastest and cheapest replies.',
-  high: "Thinking: High. DeepSeek's own default reasoning effort — thorough deliberation on demanding problems.",
-  max: 'Thinking: Max. A distinct extended thinking mode, not just more of the same — DeepSeek recommends it for demanding agent work, at a real cost in tokens.',
+  high: "Thinking: Medium. DeepSeek's own default reasoning effort — thorough deliberation on demanding problems.",
+  max: 'Thinking: High. A distinct extended thinking mode, not just more of the same — DeepSeek recommends it for demanding agent work, at a real cost in tokens.',
 };
 
 const _KIMI_THINKING_DESC: Record<string, string> = {
   low: 'Thinking: Low. A small reasoning effort — the one to pick when K3 is reasoning for too long.',
-  high: 'Thinking: High. A large reasoning effort — careful deliberation on demanding problems, at the cost of speed.',
-  max: "Thinking: Max. Kimi's own default — the deepest reasoning, for the hardest problems.",
+  high: 'Thinking: Medium. A large reasoning effort — careful deliberation on demanding problems, at the cost of speed.',
+  max: "Thinking: High. Kimi's own default — the deepest reasoning, for the hardest problems.",
 };
 
 const _BEDROCK_THINKING_DESC: Record<string, string> = {
@@ -196,6 +202,7 @@ const _THINKING_CAVEAT: Partial<Record<ThinkingFamily, string>> = {
 const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
   qwen_reasoning_budget: _QWEN_THINKING_DESC,
   gpt_oss_reasoning_effort: _GPT_OSS_THINKING_DESC,
+  qwen4exp_reasoning_effort: _QWEN4EXP_THINKING_DESC,
   anthropic_effort: _ANTHROPIC_THINKING_DESC,
   openai_reasoning_effort: _OPENAI_THINKING_DESC,
   meta_reasoning_effort: _META_THINKING_DESC,
