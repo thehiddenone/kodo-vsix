@@ -393,6 +393,76 @@ export function App() {
           });
           break;
         }
+        case 'review_findings': {
+          // The user-only findings table for one review round (kodo
+          // doc/GUIDED_DEV_MODE.md). The extension host already reshaped the
+          // wire payload into this action's camelCase shape (see
+          // session/agent-event-translation.ts), so this only re-asserts the
+          // types across the `postMessage` boundary, which is untyped.
+          const rawFindings = Array.isArray(msg.findings) ? msg.findings : [];
+          dispatch({
+            type: 'review_findings',
+            workProductId: String(msg.workProductId ?? ''),
+            agent: String(msg.agent ?? ''),
+            reviewerName: String(msg.reviewerName ?? ''),
+            iteration: Number(msg.iteration ?? 0),
+            maxRounds: Number(msg.maxRounds ?? 0),
+            paths: (Array.isArray(msg.paths) ? msg.paths : []).map((path) => String(path)),
+            findings: rawFindings.map((raw) => {
+              const finding = raw as Record<string, unknown>;
+              const rawLocations = Array.isArray(finding.locations) ? finding.locations : [];
+              return {
+                id: String(finding.id ?? ''),
+                kind: String(finding.kind ?? ''),
+                description: String(finding.description ?? ''),
+                state: String(finding.state ?? ''),
+                reportedBy: String(finding.reportedBy ?? ''),
+                locations: rawLocations.map((rawLocation) => {
+                  const location = rawLocation as Record<string, unknown>;
+                  return {
+                    path: String(location.path ?? ''),
+                    firstLine: typeof location.firstLine === 'number' ? location.firstLine : null,
+                    lastLine: typeof location.lastLine === 'number' ? location.lastLine : null,
+                    excerpt: String(location.excerpt ?? ''),
+                  };
+                }),
+              };
+            }),
+          });
+          break;
+        }
+        case 'plan_state': {
+          // The session's work-plan widget (kodo doc/PLANNING.md), pushed when a
+          // planner creates the plan and on every `get_plan` /
+          // `plan_step_forward` call — which is what makes the plan's progress
+          // visible while the work happens, not only after a reload replays the
+          // markers. Statuses are derived server-side from the plan log; never
+          // recompute one here.
+          const rawTasks = Array.isArray(msg.tasks) ? msg.tasks : [];
+          dispatch({
+            type: 'plan_state',
+            reason: String(msg.reason ?? ''),
+            issue: String(msg.issue ?? ''),
+            createdBy: String(msg.createdBy ?? ''),
+            context: String(msg.context ?? ''),
+            tasks: rawTasks.map((raw) => {
+              const task = raw as Record<string, unknown>;
+              return {
+                id: typeof task.id === 'number' ? task.id : 0,
+                title: String(task.title ?? ''),
+                status: String(task.status ?? ''),
+              };
+            }),
+            currentTask: typeof msg.currentTask === 'number' ? msg.currentTask : null,
+            complete: msg.complete === true,
+            abandoned: msg.abandoned === true,
+            abandonReason: String(msg.abandonReason ?? ''),
+          });
+          break;
+        }
+        case 'plan_conflict_critical':
+          dispatch({ type: 'plan_conflict_critical', message: String(msg.message ?? '') });
+          break;
         case 'agent_stuck_critical':
           dispatch({ type: 'agent_stuck_critical', message: String(msg.message ?? '') });
           break;
@@ -425,6 +495,14 @@ export function App() {
             oldContent: String(msg.oldContent ?? ''),
             newContent: String(msg.newContent ?? ''),
           });
+          break;
+        case 'file_review_cleared':
+          // The host answered this session's pending edit review for us — the
+          // user closed the diff tab, which counts as a rejection
+          // (session/review-gate-controller.ts). Only the host can see that
+          // happen, so without this the panel would sit there offering buttons
+          // for a request that has already been answered.
+          dispatch({ type: 'file_review_cleared' });
           break;
         case 'file_review_selection':
           dispatch({
