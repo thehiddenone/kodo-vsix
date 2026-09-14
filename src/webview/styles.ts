@@ -203,104 +203,217 @@ export const styles = {
     opacity: 0.6,
     flexShrink: 0,
   },
-  // Left column of the composer (composerRow): the five toggles stacked one
-  // per row.
-  modeControls: {
+  // Left column of the composer (composerRow): a single "Session" button that
+  // opens the session-menu popup (ModeControls.tsx), which holds the five
+  // per-session controls that used to be a stack of five cycling toggles.
+  sessionCol: {
     // COMPOSER_SIDE_WIDTH: the same `0 0 240px` composerRight carries — neither
-    // grows nor shrinks, so the two outer columns are exactly the same width
-    // at every panel size and only the centre column responds to width
-    // changes. 240px leaves ~223px of button width, comfortably more than the
-    // longest label ("🔓 Tool Control: Permissive", ~213px with padding and the
-    // ⓘ). Bottom-anchored by composerRow's `alignItems: flex-end`, so a
-    // growing textarea never moves it.
+    // grows nor shrinks, so the two outer columns are exactly the same width at
+    // every panel size and only the centre column responds to width changes.
     flex: '0 0 240px',
-    // border-box + paddingRight, so the gap between the ⓘ markers and the
-    // textarea matches the gap on the other side (composerRow's 10px gap plus
-    // composerRight's 16px inset = 26px) while the column itself stays exactly
-    // 240px wide — a margin would widen its footprint past the right column's.
-    // It costs the toggle buttons 16px: ~207px of label width, still clear of
-    // the ~195px the longest label needs.
     boxSizing: 'border-box' as const,
-    paddingRight: '16px',
+    // COMPOSER_GRID_HEIGHT: deliberately the same height as composerRight's
+    // button grid (3 rows of 32px + 2 gaps of 8px = 112px), written as the same
+    // arithmetic so it survives a change to either. Both outer columns are
+    // bottom-anchored by composerRow's `alignItems: flex-end`, so pinning this
+    // height is what keeps the Session button level with the ↑ / + / 📂 row —
+    // and, crucially, what stops it moving when the textarea grows upward. A
+    // column sized by its content would ride the row's top edge instead.
+    height: 'calc(3 * 32px + 2 * 8px)',
     display: 'flex',
     flexDirection: 'column' as const,
-    // MODE_ROW_GAP: mirrored by composerRight's row gap so the button rows sit
-    // at the same vertical coordinates as the bottom three toggle rows.
-    gap: '6px',
+    // The three buttons — Session Parameters, Sampling Parameters, Kōdo
+    // Settings — are 32px tall with an 8px gap, i.e. exactly composerRight's
+    // row track and row gap, so 3 × 32 + 2 × 8 fills this 112px box precisely
+    // and each left button sits level with the grid row beside it. There is no
+    // paddingRight (the old toggle column had one to line its ⓘ markers up with
+    // the right column's inset): the 192px buttons are centred in the 240px
+    // column, leaving 24px of slack either side, which is exactly the inset
+    // composerRight uses — that symmetry is the point.
+    justifyContent: 'flex-start' as const,
+    alignItems: 'center' as const,
+    gap: '8px',
   },
-  // One toggle row — the full-width cycling button plus its trailing ⓘ marker.
-  modeBtnWrap: {
-    display: 'flex',
-    alignItems: 'center',
-    // Fixed gap between the button and its trailing ⓘ marker.
-    gap: '1px',
+  // Wraps only the button, and is the popup's positioning context: the popup is
+  // absolutely placed against *this* box, so its bottom-left corner meets the
+  // button's top-left corner whatever the column around it does.
+  sessionBtnWrap: {
+    position: 'relative' as const,
+    // SESSION_BTN_WIDTH — must equal `sessionBtn`'s own width (this element
+    // wraps one of them) and composerRight's total grid width, which is the
+    // left/right symmetry the layout is built around. Wide enough for
+    // "Session Parameters" on one line at 14px (~126px of text plus the
+    // button's 16px of padding), with room to spare. It must stay under the
+    // column's 240px — `sessionCol` centres it, and the popup's maxWidth below
+    // is derived from the slack either side.
+    width: '192px',
+    flex: 'none' as const,
   },
-  modeBtn: {
-    // Fills the column width so the five stacked buttons share one left and
-    // one right edge; labels are left-aligned for the same reason (centring
-    // five labels of very different lengths reads as ragged).
-    flex: '1 1 auto',
-    minWidth: 0,
-    textAlign: 'left' as const,
-    // MODE_ROW_HEIGHT: pinned (rather than left to the button's font metrics,
-    // which differ per platform) because composerRight's grid rows are the
-    // same height — that is what makes the button rows line up with the
-    // toggle rows. Change it in both places or the alignment breaks.
-    height: '26px',
+  sessionBtn: {
+    // SESSION_BTN_WIDTH, stated outright rather than as `100%`: two of the
+    // three buttons that use this style sit directly in `sessionCol` (a 240px
+    // flex column), where `100%` would stretch them to 240px. Only the Session
+    // Parameters button is wrapped in a 192px `sessionBtnWrap`.
+    width: '192px',
+    // Matches composerRight's 32px grid row, so the three left buttons line up
+    // with the three button rows across the textarea.
+    height: '32px',
     boxSizing: 'border-box' as const,
     padding: '0 8px',
+    // 14px: the right-hand grid's 16px is tuned for a lone glyph, these buttons
+    // carry words.
     fontSize: '14px',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'nowrap' as const,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    border: 'none',
-    borderRadius: '3px',
     cursor: 'pointer',
-    background: 'var(--vscode-button-secondaryBackground, var(--vscode-button-background))',
-    color: 'var(--vscode-button-secondaryForeground, var(--vscode-button-foreground))',
+    // The neutral, grey-bordered treatment the ⚙ and 🎛 buttons used to carry in
+    // the right-hand grid, inherited when those two moved into this column as
+    // "Kōdo Settings" and "Sampling Parameters": transparent ground,
+    // descriptionForeground for both text and border. It reads as "opens a
+    // surface" rather than "acts on the session", which is what all three of
+    // these buttons do — and it sets them apart from the coloured, session-
+    // acting buttons on the right (green send, yellow attach, red stop/delete).
+    // This is now the only definition of that palette; `samplingBtn` and
+    // `kodoSettingsBtn` were deleted with the buttons that used them.
+    background: 'transparent',
+    color: 'var(--vscode-descriptionForeground)',
+    border: '1px solid var(--vscode-descriptionForeground)',
+    borderRadius: '2px',
   },
-  // Greyed-out look applied when a toggle is disabled — most notably when Edit/
-  // Tool Control are auto-locked to their forced posture under Autonomous —
-  // so the user gets a visual cue that the state is fixed and not clickable.
-  modeBtnDisabled: {
+  // Greyed-out look while the session is disconnected — the popup's contents
+  // would all be unactionable, so the button itself refuses to open.
+  sessionBtnDisabled: {
     opacity: 0.5,
     cursor: 'not-allowed' as const,
   },
-  // The ⓘ marker, rendered one step larger than the button text (+2px) and
-  // dimmed; it is the sole tooltip trigger for each toggle.
-  modeInfo: {
-    fontSize: '16px',
-    lineHeight: 1,
-    cursor: 'help',
-    opacity: 0.7,
-    flex: 'none' as const,
-  },
-  // Tooltip wrapper — wraps only the ⓘ marker, anchoring its bubble.
-  tooltipWrap: {
-    position: 'relative' as const,
-    display: 'inline-flex',
-  },
-  tooltipBox: {
+  // The popup itself. `bottom: 100%` + `left: 0` put its bottom-left edge flush
+  // against the button's top-left edge (the requested anchoring), and it opens
+  // upward because the composer sits at the bottom of the WebView. `maxHeight`
+  // is NOT set here: ModeControls measures the space actually available above
+  // the button on open and applies it inline, so a short panel scrolls the menu
+  // instead of letting it escape off the top of the view.
+  sessionMenu: {
     position: 'absolute' as const,
-    bottom: 'calc(100% + 6px)',
-    right: 0,
-    width: '230px',
-    maxWidth: '90vw',
+    bottom: '100%',
+    left: 0,
+    // 960px — three times the original 320px, at the user's request, so the
+    // option descriptions get a comfortable measure instead of wrapping every
+    // few words.
+    width: '960px',
+    // The popup's left edge sits at the button's left edge, which is 36px into
+    // the viewport (12px of `root` padding + 24px of slack left of the 192px
+    // button inside the 240px column). So cap on that offset plus a 12px right
+    // margin, not on a blanket `90vw` — which would overhang the right edge of
+    // a narrow panel. Re-derive this if the button's width changes.
+    maxWidth: 'calc(100vw - 48px)',
     boxSizing: 'border-box' as const,
-    padding: '6px 9px',
-    fontSize: '12px',
-    lineHeight: 1.4,
-    // pre-line (not normal) so the status line's embedded '\n' always starts
-    // on its own line, while ordinary spaces still wrap normally.
-    whiteSpace: 'pre-line' as const,
+    overflowY: 'auto' as const,
+    padding: '6px 0',
     textAlign: 'left' as const,
-    background: 'var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background))',
-    color: 'var(--vscode-editorHoverWidget-foreground, var(--vscode-editorWidget-foreground))',
-    border: '1px solid var(--vscode-editorHoverWidget-border, var(--vscode-widget-border))',
+    fontSize: '13px',
+    background: 'var(--vscode-menu-background, var(--vscode-editorWidget-background))',
+    color: 'var(--vscode-menu-foreground, var(--vscode-editorWidget-foreground))',
+    border: '1px solid var(--vscode-menu-border, var(--vscode-widget-border))',
     borderRadius: '4px',
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.35)',
+    boxShadow: '0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35))',
     zIndex: 1000,
-    pointerEvents: 'none' as const,
+  },
+  // "## Agent", "## Mode", … — one row per single-choice group heading, holding
+  // the title and, to its right on the SAME line, the group's status/lock note.
+  //
+  // The note sharing this line is the whole point of the row: it appears and
+  // disappears as session state changes (a turn starts, Autonomous is toggled,
+  // the model changes), and on its own line that would add and remove height,
+  // making the menu jump under the pointer. `lineHeight` is pinned here and
+  // inherited by both children so the row is exactly one line tall whether or
+  // not a note is present.
+  sessionGroupHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '10px',
+    padding: '4px 12px 2px',
+    fontSize: '11px',
+    lineHeight: '15px',
+    opacity: 0.75,
+  },
+  // The title itself. The uppercase/letter-spacing treatment lives here rather
+  // than on the row, so the note beside it is NOT uppercased.
+  sessionGroupTitle: {
+    flex: 'none' as const,
+    fontWeight: 600,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.05em',
+  },
+  // The status/lock note: "Queued for the next prompt — currently X.",
+  // "Locked to Allow All while Autonomous mode is in effect.", "This LLM does
+  // not have thinking mode." Rendered only when there is something to say.
+  //
+  // `nowrap` + ellipsis (with `minWidth: 0` to let the flex item actually
+  // shrink) is the guard that keeps the no-jump promise: a note too long for
+  // the row truncates instead of wrapping onto a second line. At the popup's
+  // 960px there is ~800px spare, so no current note comes close.
+  sessionGroupNote: {
+    flex: '0 1 auto' as const,
+    minWidth: 0,
+    fontStyle: 'italic' as const,
+    whiteSpace: 'nowrap' as const,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  // Separator between two groups, matching the `---` rules in the design.
+  sessionGroupDivider: {
+    border: 'none',
+    borderTop: '1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border))',
+    margin: '5px 0',
+  },
+  // One radio row: the ◉/○ marker, then the option name over its description.
+  // A <button>, so it is clickable and focusable without any extra handling.
+  sessionOption: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '8px',
+    width: '100%',
+    boxSizing: 'border-box' as const,
+    padding: '4px 12px 5px',
+    border: 'none',
+    borderRadius: 0,
+    background: 'transparent',
+    color: 'inherit',
+    font: 'inherit',
+    textAlign: 'left' as const,
+    cursor: 'pointer',
+  },
+  // Hover highlight. VS Code webviews give inline styles no `:hover` to lean
+  // on, so ModeControls tracks it per row in state — the same trick
+  // FooterButton uses for `:active`.
+  sessionOptionHover: {
+    background: 'var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground))',
+    color: 'var(--vscode-menu-selectionForeground, inherit)',
+  },
+  // A row in a group that cannot currently be changed (Edit/Tool Control under
+  // Autonomous, Thinking on a model with no tiers, anything while
+  // disconnected). Still shows which option is selected — the group note says
+  // why it is fixed.
+  sessionOptionDisabled: {
+    opacity: 0.5,
+    cursor: 'default' as const,
+  },
+  sessionRadio: {
+    flex: 'none' as const,
+    width: '12px',
+    fontSize: '11px',
+    lineHeight: '17px',
+  },
+  sessionOptionLabel: {
+    fontSize: '13px',
+    lineHeight: '17px',
+  },
+  sessionOptionDesc: {
+    marginTop: '1px',
+    fontSize: '11px',
+    lineHeight: 1.35,
+    opacity: 0.75,
   },
   stream: {
     flex: 1,
@@ -1572,19 +1685,6 @@ export const styles = {
     cursor: 'pointer',
     fontSize: '11px',
   },
-  // Neutral grey, unlike its yellow/green/red neighbours: opening the sampling
-  // modal is an inspect-and-tune action, not a state change, and the yellow it
-  // used to share with the attach button is now reserved in this feature for
-  // the out-of-recommended-range ⚠ (`samplingWarn`).
-  samplingBtn: {
-    background: 'transparent',
-    color: 'var(--vscode-descriptionForeground)',
-    border: '1px solid var(--vscode-descriptionForeground)',
-    borderRadius: '2px',
-    cursor: 'pointer',
-    fontSize: '16px',
-    flexShrink: 0,
-  },
   // ask_user question panel (in-feed, interactive until confirmed)
   askUserPanel: {
     border: '1px solid var(--vscode-focusBorder)',
@@ -1672,8 +1772,8 @@ export const styles = {
     color: 'var(--vscode-descriptionForeground)',
     fontStyle: 'italic',
   },
-  // Prompt composer — three columns: the fixed-width toggle stack
-  // (modeControls), the responsive centre (composerCenter: textarea +
+  // Prompt composer — three columns: the fixed-width Session button column
+  // (sessionCol), the responsive centre (composerCenter: textarea +
   // attachment row), and the fixed button grid (composerRight). `flex-end`
   // keeps the two fixed columns pinned to the bottom of the WebView while
   // only the textarea in the middle grows upward.
@@ -1686,8 +1786,11 @@ export const styles = {
     flexShrink: 0,
   },
   // Centre column. `alignSelf: stretch` makes it match the row's height —
-  // which at rest is set by the taller toggle stack — so the textarea inside
-  // fills that height instead of leaving a gap above itself.
+  // which at rest is the 112px both fixed columns now share — so the textarea
+  // inside fills that height instead of leaving a gap above itself. (That is
+  // 42px shorter than when a five-toggle stack set the row height; the extra
+  // room went to the transcript, by explicit choice. Don't reintroduce a
+  // minHeight to "restore" the old prompt box.)
   composerCenter: {
     flex: '1 1 auto',
     // The only column that absorbs width changes, in both directions: the two
@@ -1698,42 +1801,54 @@ export const styles = {
     display: 'flex',
     flexDirection: 'column' as const,
   },
-  // Right column: exactly as wide as the toggle column (the same
-  // COMPOSER_SIDE_WIDTH `0 0 240px`), holding a 3×3 grid of 64px × 32px cells
-  // inset from the centre column by 16px.
-  // Each button is explicitly placed (gridColumn/gridRow on its own style) so
-  // a hidden conditional button leaves its cell empty rather than shifting the
-  // others. Column 3 holds only the reconnect button and stays
-  // reserved-but-empty while the session's workspace is open.
+  // Right column: exactly as wide as the Session button column (the same
+  // COMPOSER_SIDE_WIDTH `0 0 240px`), holding a 2×3 grid of 56px × 32px cells
+  // inset from the centre column by 24px. Each button is explicitly placed
+  // (gridColumn/gridRow on its own style) rather than flowed.
   //
-  // Cell size and gaps are the button grid's own (64×32px cells, 8px rows,
-  // 16px columns) and deliberately do NOT mirror the toggle rows any more;
-  // only the two columns' total height is still kept equal, by paddingBottom.
+  // Column 1 is the send button, spanning every row that reconnect does not
+  // need; column 2 stacks attach / stop / delete. There is **no third column**:
+  // reconnect, the one conditional button, now shares column 1 with send —
+  // taking its bottom row and shortening send from a 3-row span to a 2-row one
+  // while the session's workspace is closed. That keeps the grid's footprint
+  // identical either way, which is what a reserved-but-empty third column used
+  // to buy at the cost of a column's width.
+  //
+  // Its 3 × 32 + 2 × 8 = 112px height is the whole composer's at-rest height,
+  // and `sessionCol` mirrors it (COMPOSER_GRID_HEIGHT) so each left-hand button
+  // lands on a grid row. There is no bottom padding: the old
+  // `calc((5 * 26px + 4 * 6px) - …)` existed only to stretch this grid to a
+  // five-toggle stack that no longer exists.
+  //
+  // **What is symmetric here is the 24px inset, not the total width.** The grid
+  // measures 2 × 56 + 1 × 12 = 124px, well short of the left column's 192px of
+  // buttons, and the remaining ~92px is slack at the far right edge of the
+  // panel — where there is nothing to align against, so it costs nothing. The
+  // inset is what matters: it mirrors the 24px of slack left of the left
+  // column's buttons, so the textarea is flanked by two identical 34px gutters
+  // (24px + composerRow's 10px gap). **That is the symmetry to preserve.**
+  //
+  // The buttons were briefly widened (90px cells, three-column 56px before
+  // that) to make the grid's total width literally equal SESSION_BTN_WIDTH.
+  // They looked oversized and were reverted; the options then were to spread
+  // them with an 80px column gap or to narrow the whole column and give the
+  // space to the textarea, and the user chose neither. So: **don't re-derive
+  // the cell width from 192px** — size the cells for the buttons and keep the
+  // inset at 24px.
   composerRight: {
     flex: '0 0 240px',
     // border-box so the padding below eats *into* the 240px basis instead of
     // adding to it — the two outer columns must stay exactly the same width.
-    // The grid is 3*64 + 2*16 = 224px, which with the 16px inset fills the
-    // 240px exactly; anything more for either and the buttons overflow.
     boxSizing: 'border-box' as const,
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, 64px)',
+    gridTemplateColumns: 'repeat(2, 56px)',
     gridTemplateRows: 'repeat(3, 32px)',
     // row gap, column gap
-    gap: '8px 16px',
+    gap: '8px 12px',
     justifyContent: 'start' as const,
-    // Pads the grid out to the toggle column's exact height: that column is
-    // 5 × MODE_ROW_HEIGHT + 4 × MODE_ROW_GAP = 154px, this grid is
-    // 3 × 32 + 2 × 8 = 112px, so 42px. All of it at the BOTTOM — both columns
-    // are bottom-anchored, so bottom padding is what lifts the buttons to the
-    // top of the block (send/attach level with the workflow toggle, stop/delete
-    // with Edit Control). Keep it written as the subtraction: it stays correct
-    // when either column's geometry changes.
-    paddingBottom: 'calc((5 * 26px + 4 * 6px) - (3 * 32px + 2 * 8px))',
-    // Insets the buttons from the centre column so they don't hug the
-    // textarea. 16px is all there is: the 224px grid leaves exactly that much
-    // of the 240px column.
-    paddingLeft: '16px',
+    // Mirrors the 24px of slack left of the left column's buttons, so the
+    // textarea sits between two equal gutters.
+    paddingLeft: '24px',
   },
   input: {
     width: '100%',
@@ -1763,17 +1878,6 @@ export const styles = {
   // its plain grey vscode-input-border, unchanged.
   inputActive: {
     border: '1px solid #c8a400',
-  },
-  // Opens the Kōdo Settings panel (the `kodo.openSettings` command, run by
-  // the host). Neutral-toned like samplingBtn — both are "open a settings
-  // surface", neither acts on the session.
-  kodoSettingsBtn: {
-    background: 'transparent',
-    color: 'var(--vscode-descriptionForeground)',
-    border: '1px solid var(--vscode-descriptionForeground)',
-    borderRadius: '2px',
-    cursor: 'pointer',
-    fontSize: '16px',
   },
   sendBtn: {
     background: 'transparent',

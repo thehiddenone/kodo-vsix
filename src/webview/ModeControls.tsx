@@ -1,76 +1,55 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import type { ThinkingFamily } from '../llm-registry-types';
 import { styles } from './styles';
 import { vscode } from './vscode';
 import type { EditControl, CommandControl } from './types';
-// Base, status-free description of what each toggle controls. The dynamic
-// status line ("in effect" / "queued for the next prompt" / "locked by
-// Autonomous") is appended on its own line at render time by the
-// build*Tooltip helpers.
+
+/**
+ * Description of what each Agent/Mode choice does. These are *prefix-free*: the
+ * popup already prints the group name as a heading and the choice name as the
+ * row's label, so a string here starts straight at the explanation. (They used
+ * to read "Mode: Interactive — agents work alongside you…" because they were
+ * the whole of a toggle's tooltip, with no heading above them.)
+ */
 const _MODE_DESC = {
-  interactive: 'Mode: Interactive — agents work alongside you, asking questions before key decisions.',
-  autonomous: 'Mode: Autonomous — agents work on their own, making reasonable assumptions instead of pausing.',
-  problem_solving: 'Agent: Problem Solver — one generalist agent tackles your request end to end.',
-  guided: 'Agent: Guide — one coordinating agent drives specialists through design, tests and implementation.',
+  interactive: 'Agents work alongside you, asking questions before key decisions.',
+  autonomous: 'Agents work on their own, making reasonable assumptions instead of pausing.',
+  problem_solving: 'One generalist agent tackles your request end to end.',
+  guided: 'One coordinating agent drives specialists through design, tests and implementation.',
 };
 
-/** Status-free description of Edit Control, one per posture. */
+/** Description of each Edit Control posture (prefix-free — see {@link _MODE_DESC}). */
 const _EDIT_DESC: Record<EditControl, string> = {
-  smart: 'Edit Control — Smart. Kōdo decides per edit whether to pause for your sign-off or apply it automatically.',
-  review_all: 'Edit Control — Review All. Kōdo pauses for your sign-off on every edit.',
-  allow_all: 'Edit Control — Allow All. Kōdo applies edits without pausing.',
+  smart: 'Kōdo decides per edit whether to pause for your sign-off or apply it automatically.',
+  review_all: 'Kōdo pauses for your sign-off on every edit.',
+  allow_all: 'Kōdo applies edits without pausing.',
 };
 
-/** Status-free description of Tool Control, one per posture. */
+/** Description of each Tool Control posture (prefix-free — see {@link _MODE_DESC}). */
 const _TOOL_DESC: Record<CommandControl, string> = {
-  smart: 'Tool Control — Smart. Kōdo decides per tool action or shell command whether to ask for your approval or proceed automatically.',
-  defensive:
-    'Tool Control — Defensive. Kōdo asks you to review and approve all potentially unsafe tool actions and shell commands.',
-  permissive: 'Tool Control — Permissive. Kōdo allows tool actions and shell commands without asking.',
+  smart: 'Kōdo decides per tool action or shell command whether to ask for your approval or proceed automatically.',
+  defensive: 'Kōdo asks you to review and approve all potentially unsafe tool actions and shell commands.',
+  permissive: 'Kōdo allows tool actions and shell commands without asking.',
 };
 
-/** Button label per Edit Control posture. */
-const _EDIT_LABEL: Record<EditControl, string> = {
-  smart: '🧠 Edit Control: Smart',
-  review_all: '🔍 Edit Control: Review All',
-  allow_all: '✅ Edit Control: Allow All',
-};
-
-/** Short posture name used inside tooltips. */
+/** Display name of each Edit Control posture, as the popup rows label them. */
 const _EDIT_NAME: Record<EditControl, string> = {
   smart: 'Smart',
   review_all: 'Review All',
   allow_all: 'Allow All',
 };
 
-/** Click-cycle order, default-first: Smart → Review All → Allow All → Smart. */
-const _EDIT_NEXT: Record<EditControl, EditControl> = {
-  smart: 'review_all',
-  review_all: 'allow_all',
-  allow_all: 'smart',
-};
-
-/** Button label per Tool Control posture. */
-const _COMMAND_LABEL: Record<CommandControl, string> = {
-  smart: '🧠 Tool Control: Smart',
-  defensive: '🛡️ Tool Control: Defensive',
-  permissive: '🔓 Tool Control: Permissive',
-};
-
-/** Short posture name used inside tooltips. */
+/** Display name of each Tool Control posture, as the popup rows label them. */
 const _COMMAND_NAME: Record<CommandControl, string> = {
   smart: 'Smart',
   defensive: 'Defensive',
   permissive: 'Permissive',
 };
 
-/** Click-cycle order, default-first: Smart → Defensive → Permissive → Smart. */
-const _COMMAND_NEXT: Record<CommandControl, CommandControl> = {
-  smart: 'defensive',
-  defensive: 'permissive',
-  permissive: 'smart',
-};
+/** Row order within each single-choice group — default first, as before. */
+const _EDIT_ORDER: EditControl[] = ['smart', 'review_all', 'allow_all'];
+const _COMMAND_ORDER: CommandControl[] = ['smart', 'defensive', 'permissive'];
 
 /**
  * Per-tier tooltip text, one dictionary per thinking family (kodo/doc/
@@ -236,126 +215,150 @@ export function tierLabel(family: ThinkingFamily | null, tier: string): string {
   return `Thinking: ${tier.charAt(0).toUpperCase() + tier.slice(1)}`;
 }
 
-/** Tooltip for a tier, keyed by family — a full table per family rather than a
- *  default one, since the same tier slug carries a genuinely different meaning
- *  in each: "high" is a token budget on a local Qwen, Claude's own default, and
- *  the *top* of Gemini's ladder. Falls back to a plain label for an
- *  unrecognised tier (should not happen — the tier list comes straight from
- *  the server's `thinking_families` payload, and a family that has arrived
- *  before this build knew about it is coerced to null upstream). */
-function _thinkingTierDesc(family: ThinkingFamily, tier: string): string {
-  const desc = _THINKING_DESC[family][tier] ?? `${tierLabel(family, tier)}.`;
-  return desc + (_THINKING_CAVEAT[family] ?? '');
+/** The display name of a thinking tier as the popup's row label shows it
+ *  ("High") — {@link tierLabel} minus its "Thinking: " prefix, so the popup's
+ *  rows and the tooltip tables can never disagree about a tier's name. */
+function _tierName(family: ThinkingFamily, tier: string): string {
+  const label = tierLabel(family, tier);
+  return label.startsWith('Thinking: ') ? label.slice('Thinking: '.length) : label;
 }
 
-/** The next tier in click-cycle order, wrapping — falls back to the first
- *  tier if the current value isn't (or is no longer) one of them. */
-function _nextThinkingTier(tiers: string[], current: string): string {
-  if (tiers.length === 0) {
+/** The prefix-free description of a thinking tier, for the popup row under its
+ *  name: the family's tooltip text minus the leading "Thinking: <tier>." that
+ *  {@link tierLabel} consumes. Unlike the other four groups' description
+ *  tables (which were rewritten prefix-free), these strings stay
+ *  tooltip-shaped because their heads are also the tier *names* — so the
+ *  prefix is stripped here instead.
+ *
+ *  The per-family caveat is deliberately NOT appended: it is identical for
+ *  every tier of a family, so the popup prints it once under the Thinking
+ *  heading (see `_thinkingNote`) rather than on all four rows. */
+function _tierDesc(family: ThinkingFamily, tier: string): string {
+  const desc = _THINKING_DESC[family][tier];
+  if (desc === undefined) {
     return '';
   }
-  const idx = tiers.indexOf(current);
-  return tiers[(idx + 1 + tiers.length) % tiers.length];
+  const dot = desc.indexOf('.');
+  return dot === -1 ? desc : desc.slice(dot + 1).trim();
 }
 
 /**
- * Tooltip for the two *frozen* toggles (workflow, autonomous): the description
- * plus a status line. The effective value only changes when a new turn starts,
- * so while a turn is running and the user's selection differs from the frozen
- * effective value the toggle is "queued for the next prompt"; otherwise it is
- * "in effect". When idle a flip takes effect immediately, so it reads as in
- * effect.
+ * The note printed under the Thinking heading: the unavailability line when the
+ * group has no rows to offer, otherwise the family-wide caveat for the families
+ * whose selected tier does not reach every model the vendor serves (OpenRouter,
+ * Kimi, Bedrock). Empty string means no note.
  *
- * @param desc Status-free description of the selected position.
- * @param effectiveName Human name of the value the in-flight turn is using.
- * @param pending True when running and the selection diverges from effective.
+ * It is keyed on whether any row was actually built, not merely on
+ * `family === null`: a known family that arrives with an empty tier list would
+ * otherwise render a heading with nothing under it and no word of explanation.
  */
-function buildModeTooltip(desc: string, effectiveName: string, pending: boolean): string {
-  return pending
-    ? `${desc}\nWill be applied to the next prompt, current mode: ${effectiveName}.`
-    : `${desc}\nThis mode is in effect.`;
+function _thinkingNote(family: ThinkingFamily | null, hasTiers: boolean): string {
+  if (family === null || !hasTiers) {
+    return 'This LLM does not have thinking mode.';
+  }
+  // The caveat strings are tooltip-shaped, i.e. prefixed with the newline that
+  // separated them from the tier text; the note is its own line here.
+  return (_THINKING_CAVEAT[family] ?? '').trim();
 }
 
 /**
- * Tooltip for the two *never-frozen* toggles (Edit Control/Tool Control). They
- * are locked to a forced posture while Autonomous mode is in effect; otherwise
- * they apply immediately (no per-turn freeze).
+ * The note printed under the Agent/Mode headings. Both are frozen for the
+ * duration of a running turn: while a turn is in flight and the user's
+ * selection differs from the value that turn is actually using, the change is
+ * queued for the next prompt. Empty string when selection and effect agree (or
+ * nothing is running), which is the overwhelmingly common case.
+ */
+function _frozenNote(pending: boolean, effectiveName: string): string {
+  return pending ? `Queued for the next prompt — currently ${effectiveName}.` : '';
+}
+
+/**
+ * The note printed under the Edit Control / Tool Control headings. Neither is
+ * frozen per turn, but both are forced to a fixed posture while Autonomous is
+ * in effect — the rows still show the user's own selection (which is what
+ * comes back the moment Autonomous is cleared), so the note is what explains
+ * why that selection is not the one in force.
+ */
+function _lockedNote(locked: boolean, lockedName: string): string {
+  return locked ? `Locked to ${lockedName} while Autonomous mode is in effect.` : '';
+}
+
+/** One single-choice group: its heading, an optional status/lock note, and the
+ *  option rows. Groups are separated by a rule, drawn by the caller.
  *
- * @param desc Status-free description of the selected posture.
- * @param locked True while Autonomous mode is in effect.
- * @param lockedName The forced posture name shown when locked.
- */
-function buildLockTooltip(desc: string, locked: boolean, lockedName: string): string {
-  return locked
-    ? `${desc}\nLocked to ${lockedName} while Autonomous mode is in effect.`
-    : `${desc}\nThis setting is in effect.`;
-}
-
-/**
- * Custom hover tooltip. Native `title` is unreliable in VS Code webviews (no
- * tooltip on disabled buttons, inconsistent timing), so the ⓘ marker renders
- * its own positioned bubble. Shown above the trigger to avoid clipping at the
- * bottom of the WebView, where the composer's toggle column lives.
- */
-function Tooltip({
-  text,
+ *  The note sits to the *right of the title, on the same line*. Notes come and
+ *  go with session state — a turn starting freezes Agent/Mode, Autonomous locks
+ *  Edit/Tool Control, a model switch can withdraw Thinking — so giving one its
+ *  own line would grow and shrink the group by a line each time, shifting every
+ *  row below it while the menu is open under the user's pointer. Sharing the
+ *  heading's line makes appearing and disappearing free. */
+function MenuGroup({
+  title,
+  note,
   children,
 }: {
-  text: string;
+  title: string;
+  note: string;
   children: ComponentChildren;
 }) {
-  const [show, setShow] = useState(false);
-  // Always anchored to the ⓘ's right edge, opening leftward: since the
-  // toggles are a fixed-width left column, every ⓘ sits at the same x and the
-  // bubble is narrower than the column is far from the WebView's left edge.
-  const boxStyle = styles.tooltipBox;
   return (
-    <span
-      style={styles.tooltipWrap}
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-    >
+    <div role="group" aria-label={title}>
+      <div style={styles.sessionGroupHeader}>
+        <span style={styles.sessionGroupTitle}>{title}</span>
+        {note !== '' && <span style={styles.sessionGroupNote}>{note}</span>}
+      </div>
       {children}
-      {show && (
-        <span style={boxStyle} role="tooltip">
-          {text}
-        </span>
-      )}
-    </span>
+    </div>
   );
 }
 
 /**
- * One toggle cell: the cycling button plus a trailing ⓘ marker that owns the
- * tooltip (the button itself has none — hovering ⓘ is how you read what the
- * toggle does, which also works while the button is disabled/locked).
+ * One radio row: the ◉/○ marker, the option's name, and its description
+ * underneath. Disabled rows still render their marker, so a locked group shows
+ * what is selected while refusing to change it.
+ *
+ * Hover highlighting is tracked in state rather than left to `:hover`, because
+ * VS Code webviews style everything here inline — the same reason
+ * FooterButton fakes `:active`.
  */
-function ModeButton({
+function MenuOption({
   label,
-  tip,
+  desc,
+  selected,
   disabled,
-  onClick,
+  onSelect,
 }: {
   label: string;
-  tip: string;
+  desc: string;
+  selected: boolean;
   disabled: boolean;
-  onClick: () => void;
+  onSelect: () => void;
 }) {
+  const [hover, setHover] = useState(false);
+  const style = {
+    ...styles.sessionOption,
+    ...(disabled ? styles.sessionOptionDisabled : {}),
+    ...(hover && !disabled ? styles.sessionOptionHover : {}),
+  };
   return (
-    <span style={styles.modeBtnWrap}>
-      <button
-        style={disabled ? { ...styles.modeBtn, ...styles.modeBtnDisabled } : styles.modeBtn}
-        disabled={disabled}
-        onClick={onClick}
-      >
-        {label}
-      </button>
-      <Tooltip text={tip}>
-        <span style={styles.modeInfo} role="img" aria-label="info">
-          ⓘ
-        </span>
-      </Tooltip>
-    </span>
+    <button
+      type="button"
+      style={style}
+      role="menuitemradio"
+      aria-checked={selected}
+      disabled={disabled}
+      onClick={onSelect}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <span style={styles.sessionRadio} aria-hidden="true">
+        {selected ? '◉' : '○'}
+      </span>
+      <span>
+        <span style={styles.sessionOptionLabel}>{label}</span>
+        {desc !== '' && <div style={styles.sessionOptionDesc}>{desc}</div>}
+      </span>
+    </button>
   );
 }
 
@@ -375,10 +378,27 @@ interface ModeControlsProps {
   /** Ordered tier slugs for `thinkingFamily`; [] when `thinkingFamily` is null. */
   thinkingTiers: string[];
   connected: boolean;
-  /** True while a turn is in flight; gates the frozen toggles' "queued" status. */
+  /** True while a turn is in flight; gates the frozen groups' "queued" note. */
   running: boolean;
 }
 
+/**
+ * The "Session Parameters" button and the popup it opens, holding the five
+ * per-session single-choice groups (Agent, Mode, Edit Control, Tool Control,
+ * Thinking). It replaced a stack of five cycling toggle buttons — the
+ * groups, their values and the messages they post are unchanged, so there is no
+ * protocol change; only the way you reach them is new.
+ *
+ * Picking an option applies it immediately (exactly as clicking a toggle did)
+ * and leaves the popup open, so several settings can be changed in one visit.
+ * It closes on: a click anywhere outside it, Escape, or focus moving to another
+ * widget.
+ *
+ * This renders only the button and its popup, NOT the composer's left column:
+ * the column (`styles.sessionCol`) is App.tsx's, because the two buttons
+ * beneath this one — Sampling Parameters and Kōdo Settings — are driven by
+ * state and handlers that live there.
+ */
 export function ModeControls({
   autonomous,
   effectiveAutonomous,
@@ -393,69 +413,192 @@ export function ModeControls({
   connected,
   running,
 }: ModeControlsProps) {
-  const isPS = workflowMode === 'problem_solving';
+  const [open, setOpen] = useState(false);
+  // Space above the button, measured on open: the popup grows upward out of the
+  // bottom of the WebView, so on a short panel it must scroll internally rather
+  // than run off the top. Null until measured (the first paint of a freshly
+  // opened menu), which is also what a `null` maxHeight renders as: uncapped.
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  // Wraps button + popup; every close rule below is "did this happen outside
+  // *this* element?".
+  const wrapRef = useRef<HTMLDivElement>(null);
 
-  const wfTip = buildModeTooltip(
-    isPS ? _MODE_DESC.problem_solving : _MODE_DESC.guided,
-    effectiveWorkflowMode === 'problem_solving' ? 'Problem Solver' : 'Guide',
-    running && workflowMode !== effectiveWorkflowMode,
-  );
-  const autoTip = buildModeTooltip(
-    autonomous ? _MODE_DESC.autonomous : _MODE_DESC.interactive,
-    effectiveAutonomous ? 'Autonomous' : 'Interactive',
-    running && autonomous !== effectiveAutonomous,
-  );
-  const editTip = buildLockTooltip(_EDIT_DESC[editControl], editCommandLocked, _EDIT_NAME.allow_all);
-  const commandTip = buildLockTooltip(
-    _TOOL_DESC[commandControl],
-    editCommandLocked,
-    _COMMAND_NAME.permissive,
-  );
-  const thinkingDisabled = !connected || thinkingFamily === null;
-  const thinkingLabel =
-    thinkingFamily === null ? '💭 Thinking: N/A' : `💭 ${tierLabel(thinkingFamily, thinkingLevel)}`;
-  const thinkingTip =
-    thinkingFamily === null
-      ? 'This LLM does not have thinking mode.'
-      : _thinkingTierDesc(thinkingFamily, thinkingLevel);
+  useLayoutEffect(() => {
+    if (!open) {
+      setMaxHeight(null);
+      return;
+    }
+    const el = wrapRef.current;
+    if (el === null) {
+      return;
+    }
+    // The popup's bottom edge sits on the button's top edge, so the room it has
+    // is everything above that, less a small margin off the top of the view.
+    setMaxHeight(Math.max(120, el.getBoundingClientRect().top - 12));
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const outside = (target: EventTarget | null): boolean =>
+      wrapRef.current === null || !(target instanceof Node) || !wrapRef.current.contains(target);
+    // mousedown, not click: the menu should be gone by the time the click lands
+    // on whatever was pressed, and a press that drags out of the popup still
+    // counts as dismissing it.
+    const onMouseDown = (e: MouseEvent) => {
+      if (outside(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    // Focus moving to any other widget (the prompt textarea, a footer button,
+    // anything outside the popup) dismisses it too.
+    const onFocusIn = (e: FocusEvent) => {
+      if (outside(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('focusin', onFocusIn);
+    };
+  }, [open]);
+
+  // A disconnected session can change nothing, so the button refuses to open —
+  // and closes an open popup if the connection drops under it.
+  useEffect(() => {
+    if (!connected) {
+      setOpen(false);
+    }
+  }, [connected]);
+
+  const isPS = workflowMode === 'problem_solving';
+  // Bound to a `const` before the null check so the narrowing survives into the
+  // `.map` callback below — TypeScript drops a *parameter*'s narrowing inside a
+  // closure, since a parameter could in principle be reassigned.
+  const family: ThinkingFamily | null = thinkingFamily;
+  const thinkingRows =
+    family === null
+      ? []
+      : thinkingTiers.map((tier) => ({
+          tier,
+          label: _tierName(family, tier),
+          desc: _tierDesc(family, tier),
+        }));
+  const menuStyle =
+    maxHeight === null ? styles.sessionMenu : { ...styles.sessionMenu, maxHeight: `${maxHeight}px` };
 
   return (
-    <div style={styles.modeControls}>
-      <ModeButton
-        label={isPS ? '💡 Agent: Problem Solver' : '🧩 Agent: Guide'}
-        tip={wfTip}
+    <div style={styles.sessionBtnWrap} ref={wrapRef}>
+      <button
+        type="button"
+        style={connected ? styles.sessionBtn : { ...styles.sessionBtn, ...styles.sessionBtnDisabled }}
         disabled={!connected}
-        onClick={() => vscode.postMessage({ type: 'workflow_set', mode: isPS ? 'guided' : 'problem_solving' })}
-      />
-      <ModeButton
-        label={autonomous ? '⚡ Mode: Autonomous' : '💬 Mode: Interactive'}
-        tip={autoTip}
-        disabled={!connected}
-        onClick={() => vscode.postMessage({ type: 'mode_set', autonomous: !autonomous })}
-      />
-      <ModeButton
-        label={_EDIT_LABEL[editControl]}
-        tip={editTip}
-        disabled={!connected || editCommandLocked}
-        onClick={() => vscode.postMessage({ type: 'edit_control_set', editControl: _EDIT_NEXT[editControl] })}
-      />
-      <ModeButton
-        label={_COMMAND_LABEL[commandControl]}
-        tip={commandTip}
-        disabled={!connected || editCommandLocked}
-        onClick={() => vscode.postMessage({ type: 'command_control_set', commandControl: _COMMAND_NEXT[commandControl] })}
-      />
-      <ModeButton
-        label={thinkingLabel}
-        tip={thinkingTip}
-        disabled={thinkingDisabled}
-        onClick={() =>
-          vscode.postMessage({
-            type: 'thinking_level_set',
-            thinkingLevel: _nextThinkingTier(thinkingTiers, thinkingLevel),
-          })
-        }
-      />
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        Session Parameters
+      </button>
+      {open && (
+        <div style={menuStyle} role="menu" aria-label="Session settings">
+          <MenuGroup
+            title="Agent"
+            note={_frozenNote(
+              running && workflowMode !== effectiveWorkflowMode,
+              effectiveWorkflowMode === 'problem_solving' ? 'Problem Solver' : 'Guide',
+            )}
+          >
+            <MenuOption
+              label="Problem Solver"
+              desc={_MODE_DESC.problem_solving}
+              selected={isPS}
+              disabled={false}
+              onSelect={() => vscode.postMessage({ type: 'workflow_set', mode: 'problem_solving' })}
+            />
+            <MenuOption
+              label="Guide"
+              desc={_MODE_DESC.guided}
+              selected={!isPS}
+              disabled={false}
+              onSelect={() => vscode.postMessage({ type: 'workflow_set', mode: 'guided' })}
+            />
+          </MenuGroup>
+          <hr style={styles.sessionGroupDivider} />
+          <MenuGroup
+            title="Mode"
+            note={_frozenNote(
+              running && autonomous !== effectiveAutonomous,
+              effectiveAutonomous ? 'Autonomous' : 'Interactive',
+            )}
+          >
+            <MenuOption
+              label="Interactive"
+              desc={_MODE_DESC.interactive}
+              selected={!autonomous}
+              disabled={false}
+              onSelect={() => vscode.postMessage({ type: 'mode_set', autonomous: false })}
+            />
+            <MenuOption
+              label="Autonomous"
+              desc={_MODE_DESC.autonomous}
+              selected={autonomous}
+              disabled={false}
+              onSelect={() => vscode.postMessage({ type: 'mode_set', autonomous: true })}
+            />
+          </MenuGroup>
+          <hr style={styles.sessionGroupDivider} />
+          <MenuGroup title="Edit Control" note={_lockedNote(editCommandLocked, _EDIT_NAME.allow_all)}>
+            {_EDIT_ORDER.map((value) => (
+              <MenuOption
+                key={value}
+                label={_EDIT_NAME[value]}
+                desc={_EDIT_DESC[value]}
+                selected={editControl === value}
+                disabled={editCommandLocked}
+                onSelect={() => vscode.postMessage({ type: 'edit_control_set', editControl: value })}
+              />
+            ))}
+          </MenuGroup>
+          <hr style={styles.sessionGroupDivider} />
+          <MenuGroup title="Tool Control" note={_lockedNote(editCommandLocked, _COMMAND_NAME.permissive)}>
+            {_COMMAND_ORDER.map((value) => (
+              <MenuOption
+                key={value}
+                label={_COMMAND_NAME[value]}
+                desc={_TOOL_DESC[value]}
+                selected={commandControl === value}
+                disabled={editCommandLocked}
+                onSelect={() => vscode.postMessage({ type: 'command_control_set', commandControl: value })}
+              />
+            ))}
+          </MenuGroup>
+          <hr style={styles.sessionGroupDivider} />
+          <MenuGroup title="Thinking" note={_thinkingNote(family, thinkingRows.length > 0)}>
+            {thinkingRows.map((row) => (
+              <MenuOption
+                key={row.tier}
+                label={row.label}
+                desc={row.desc}
+                selected={thinkingLevel === row.tier}
+                disabled={false}
+                onSelect={() =>
+                  vscode.postMessage({ type: 'thinking_level_set', thinkingLevel: row.tier })
+                }
+              />
+            ))}
+          </MenuGroup>
+      </div>
+    )}
     </div>
   );
 }

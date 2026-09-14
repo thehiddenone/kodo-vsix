@@ -522,6 +522,10 @@ export function App() {
     state.pendingStuckAlert !== null ||
     state.pendingFileReview !== null;
   const inputDisabled = !state.connected || isRunning || isBlocked;
+  // The Sampling Parameters button in the composer's left column: shown always,
+  // disabled when the active model exposes nothing to tune, so the column never
+  // changes shape as models come and go.
+  const samplingDisabled = !state.connected || state.samplingModel === '';
 
   function handleStop() {
     vscode.postMessage({ type: 'stop' });
@@ -739,21 +743,56 @@ export function App() {
         />
       ) : (
         <div style={styles.composerRow}>
-          {/* Left column: the five per-session mode toggles, stacked. */}
-          <ModeControls
-            autonomous={state.autonomous}
-            effectiveAutonomous={state.effectiveAutonomous}
-            workflowMode={state.workflowMode}
-            effectiveWorkflowMode={state.effectiveWorkflowMode}
-            editControl={state.editControl}
-            commandControl={state.commandControl}
-            editCommandLocked={state.editCommandLocked}
-            thinkingLevel={state.thinkingLevel}
-            thinkingFamily={state.thinkingFamily}
-            thinkingTiers={state.thinkingTiers}
-            connected={state.connected}
-            running={state.running}
-          />
+          {/* Left column: three 192px buttons, each level with a row of the
+              right-hand grid. The first opens the session-parameters popup
+              (ModeControls owns it); the other two are the former 🎛 and ⚙
+              buttons of that grid, moved here and given their full names. The
+              column itself lives here rather than in ModeControls because
+              these two are driven by App's state and handlers. */}
+          <div style={styles.sessionCol}>
+            <ModeControls
+              autonomous={state.autonomous}
+              effectiveAutonomous={state.effectiveAutonomous}
+              workflowMode={state.workflowMode}
+              effectiveWorkflowMode={state.effectiveWorkflowMode}
+              editControl={state.editControl}
+              commandControl={state.commandControl}
+              editCommandLocked={state.editCommandLocked}
+              thinkingLevel={state.thinkingLevel}
+              thinkingFamily={state.thinkingFamily}
+              thinkingTiers={state.thinkingTiers}
+              connected={state.connected}
+              running={state.running}
+            />
+            {/* Disabled (rather than hidden) when the active model exposes no
+                sampling parameters, so the column never changes shape as
+                models come and go — the same rule its 🎛 predecessor had. */}
+            <button
+              type="button"
+              style={
+                samplingDisabled
+                  ? { ...styles.sessionBtn, ...styles.sessionBtnDisabled }
+                  : styles.sessionBtn
+              }
+              disabled={samplingDisabled}
+              onClick={() => dispatch({ type: 'sampling_modal_open', open: true })}
+              title={
+                state.samplingModel === ''
+                  ? 'Sampling parameters — unavailable for the active model'
+                  : `Sampling parameters for ${state.samplingModel}`
+              }
+            >
+              Sampling Parameters
+            </button>
+            <button
+              type="button"
+              style={styles.sessionBtn}
+              onClick={handleOpenKodoSettings}
+              title="Open Kōdo Settings"
+            >
+              Kōdo Settings
+            </button>
+          </div>
           {/* Centre column: the prompt box (the only part that grows) over a
               single reserved row of attachment chips. */}
           <div style={styles.composerCenter}>
@@ -773,13 +812,28 @@ export function App() {
             />
             <AttachedFilesArea files={state.attachedFiles} onRemove={removeAttachment} />
           </div>
-          {/* Right column: 3×3 button grid. Every button is placed explicitly
-              rather than flowing, so the one conditional button (reconnect,
-              which exists only while the session's workspace is closed)
-              leaves its cell empty instead of reflowing the others. */}
+          {/* Right column: a 2×3 grid, every button placed explicitly rather
+              than flowing. Column 2 stacks attach, stop and delete; column 1 is
+              shared between send and the one conditional button, reconnect,
+              which exists only while the session's workspace is closed:
+
+                  workspace open        workspace closed
+                  [ ↑ ][ + ]            [ ↑ ][ + ]
+                  [ ↑ ][🛑]            [ ↑ ][🛑]
+                  [ ↑ ][🗑]            [📂][🗑]
+
+              So send gives up its bottom row to reconnect rather than the grid
+              carrying a third column that is empty almost all the time. Both
+              states occupy the same 124px × 112px footprint, so nothing beside
+              the grid moves when the workspace opens or closes. */}
           <div style={styles.composerRight}>
             <FooterButton
-              style={{ ...styles.sendBtn, gridColumn: 1, gridRow: 1 }}
+              style={{
+                ...styles.sendBtn,
+                gridColumn: 1,
+                // Every row reconnect isn't using: all three, or the top two.
+                gridRow: state.workspaceConnected ? '1 / 4' : '1 / 3',
+              }}
               onClick={sendPrompt}
               disabled={inputDisabled}
               title={state.uiSettings.enterSubmits ? 'Send prompt (Enter)' : 'Send prompt (Shift+Enter)'}
@@ -796,7 +850,7 @@ export function App() {
             </FooterButton>
             {!state.workspaceConnected && (
               <FooterButton
-                style={{ ...styles.reconnectBtn, gridColumn: 3, gridRow: 1 }}
+                style={{ ...styles.reconnectBtn, gridColumn: 1, gridRow: 3 }}
                 onClick={handleReconnectWorkspace}
                 disabled={!state.connected}
                 title="Open workspace associated with this session."
@@ -804,31 +858,8 @@ export function App() {
                 {'📂'}
               </FooterButton>
             )}
-            {/* Always occupies its cell — disabled (rather than hidden) when
-                the active model exposes no sampling parameters, so the grid
-                never changes shape as models come and go. */}
             <FooterButton
-              style={{ ...styles.samplingBtn, gridColumn: 1, gridRow: 2 }}
-              onClick={() => dispatch({ type: 'sampling_modal_open', open: true })}
-              disabled={!state.connected || state.samplingModel === ''}
-              title={
-                state.samplingModel === ''
-                  ? 'Sampling parameters — unavailable for the active model'
-                  : `Sampling parameters for ${state.samplingModel}`
-              }
-            >
-              {'🎛'}
-            </FooterButton>
-            <FooterButton
-              style={{ ...styles.kodoSettingsBtn, gridColumn: 2, gridRow: 2 }}
-              onClick={handleOpenKodoSettings}
-              disabled={false}
-              title="Open Kōdo Settings"
-            >
-              {'⚙'}
-            </FooterButton>
-            <FooterButton
-              style={{ ...styles.globalStopBtn, gridColumn: 1, gridRow: 3 }}
+              style={{ ...styles.globalStopBtn, gridColumn: 2, gridRow: 2 }}
               onClick={handleStop}
               disabled={!state.connected || !isRunning}
               title="Stop all running agent work"
