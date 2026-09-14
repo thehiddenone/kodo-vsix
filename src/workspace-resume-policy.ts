@@ -138,3 +138,26 @@ export function resumeTargetMatchesCurrent(
 export function requiresWorkspaceSwitchConfirmation(locked: boolean, compatible: boolean): boolean {
   return locked && !compatible;
 }
+
+/**
+ * Which of `target`'s paths are missing on disk, in target order.
+ *
+ * `exists` is supplied by the caller (an `fs` check) — this module stays
+ * pure/no-I/O, the same split `resumeTarget`'s `codeWorkspaceFileExists`
+ * parameter already uses.
+ *
+ * A `'none'` target has nothing to check. Note that a `'file'` target is
+ * only ever produced when the `.code-workspace` file existed at
+ * `resumeTarget` time (a missing one falls back to the folder list, a
+ * deliberate product decision) — re-checking it here only catches the file
+ * disappearing in between.
+ */
+export function missingResumeTargetPaths(target: ResumeTarget, exists: (p: string) => boolean): string[] {
+  if (target.kind === 'file') {
+    return exists(target.path) ? [] : [target.path];
+  }
+  if (target.kind === 'folders') {
+    return target.entries.map(([, folderPath]) => folderPath).filter((folderPath) => !exists(folderPath));
+  }
+  return [];
+}

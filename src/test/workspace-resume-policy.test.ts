@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 
 import {
+  missingResumeTargetPaths,
   requiresWorkspaceSwitchConfirmation,
   resumeTarget,
   resumeTargetMatchesCurrent,
@@ -178,6 +179,45 @@ suite('workspace-resume-policy', () => {
 
     test('unlocked + compatible does not require confirmation', () => {
       assert.strictEqual(requiresWorkspaceSwitchConfirmation(false, true), false);
+    });
+  });
+
+  suite('missingResumeTargetPaths', () => {
+    // A session's remembered folders are never revalidated server-side, so
+    // one can be deleted/renamed/moved between runs. `ensureResumeTargetExists`
+    // (session-resume.ts) turns a non-empty result here into an error toast
+    // and refuses the reload entirely.
+    const present = (p: string) => p !== '/home/dev/gone' && p !== '/home/dev/also-gone';
+
+    test('nothing to check for a none target', () => {
+      assert.deepStrictEqual(missingResumeTargetPaths({ kind: 'none' }, () => false), []);
+    });
+
+    test('all folders present', () => {
+      const target = resumeTarget(folders, false);
+      assert.deepStrictEqual(missingResumeTargetPaths(target, present), []);
+    });
+
+    test('reports only the missing folders, in target order', () => {
+      const target = resumeTarget(
+        { ...folders, folders: { gone: '/home/dev/gone', kodo: '/home/dev/kodo', x: '/home/dev/also-gone' } },
+        false,
+      );
+      assert.deepStrictEqual(
+        missingResumeTargetPaths(target, present),
+        ['/home/dev/gone', '/home/dev/also-gone'],
+      );
+    });
+
+    test('a missing .code-workspace file is reported too', () => {
+      assert.deepStrictEqual(
+        missingResumeTargetPaths({ kind: 'file', path: '/home/dev/gone' }, present),
+        ['/home/dev/gone'],
+      );
+      assert.deepStrictEqual(
+        missingResumeTargetPaths({ kind: 'file', path: '/home/dev/kodo' }, present),
+        [],
+      );
     });
   });
 });

@@ -8,7 +8,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ResumeTarget, RememberedWorkspace } from '../workspace-resume-policy';
-import { requiresWorkspaceSwitchConfirmation, resumeTarget, resumeTargetMatchesCurrent } from '../workspace-resume-policy';
+import {
+  missingResumeTargetPaths,
+  requiresWorkspaceSwitchConfirmation,
+  resumeTarget,
+  resumeTargetMatchesCurrent,
+} from '../workspace-resume-policy';
 import { sendControlAwait } from './control-send';
 import { resolveFutureWindowKeyForCodeWorkspace } from './create-project';
 import { buildFolderMap } from './settings-io';
@@ -151,17 +156,73 @@ function describeResumeTarget(target: ResumeTarget): string {
   return 'a different workspace';
 }
 
+/** Whether `folderPath` is a directory that's actually there right now. */
+function folderExists(folderPath: string): boolean {
+  try {
+    return fs.statSync(folderPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether every path `target` wants to open still exists on disk — the
+ * guard every window-reloading resume/reconnect flow goes through
+ * (`reloadWindowIntoTarget`). A session's remembered folders are whatever
+ * was open when it last ran, and the server never revalidates them, so a
+ * folder that has since been deleted, renamed or moved (an external drive,
+ * a cleaned-up scratch clone) is entirely normal here.
+ *
+ * All-or-nothing by design: if any folder is missing, nothing is opened and
+ * nothing is reloaded. Reloading into the surviving subset would leave the
+ * window in a workspace that no longer matches the session's locked shape —
+ * i.e. reconnecting would "succeed" and still come back disconnected — and
+ * would bury the real problem under a second one. Reports the missing paths
+ * and returns `false` instead, leaving the remembered shape untouched so a
+ * later reconnect works if the folder comes back.
+ */
+export function ensureResumeTargetExists(target: ResumeTarget): boolean {
+  const missing = missingResumeTargetPaths(
+    target,
+    target.kind === 'file' ? (p: string) => fs.existsSync(p) : folderExists,
+  );
+  if (missing.length === 0) {
+    return true;
+  }
+  const what = target.kind === 'file'
+    ? 'the workspace file no longer exists'
+    : missing.length === 1
+      ? 'the folder no longer exists'
+      : 'these folders no longer exist';
+  void vscode.window.showErrorMessage(
+    `Kōdo: cannot open this session's workspace — ${what}: ${missing.join(', ')}`,
+  );
+  return false;
+}
+
 /**
  * Reload the current window into `target` and arm the pending-resume marker
  * for `sessionId` — the reload/continuity mechanics shared by
  * `resumeSessionIntoWorkspace`'s mismatch path and the manual
  * reconnect-workspace flows (`reconnectSessionWorkspace`,
- * `promptReconnectForCreateProject` in create-project.ts). Always reloads
- * unconditionally — callers are responsible for deciding a reload is
- * actually needed/wanted first (compatibility/exact-match checks, user
- * confirmation).
+ * `promptReconnectForCreateProject` in create-project.ts). Callers are
+ * responsible for deciding a reload is actually needed/wanted first
+ * (compatibility/exact-match checks, user confirmation); the only thing
+ * decided here is `ensureResumeTargetExists` — returns `false` without
+ * reloading or arming anything if the remembered workspace is gone from
+ * disk (the error is reported to the user) or if there's nothing to reload
+ * into (`'none'`).
  */
-export async function reloadWindowIntoTarget(sessionId: string, target: ResumeTarget): Promise<void> {
+export async function reloadWindowIntoTarget(sessionId: string, target: ResumeTarget): Promise<boolean> {
+  // A remembered folder can be renamed, moved or deleted between sessions.
+  // Check before touching anything: `vscode.openFolder`/
+  // `updateWorkspaceFolders` on a path that isn't there reloads the window
+  // into a broken/empty workspace with no explanation, and the markers armed
+  // just below would then resume the session into it.
+  if (!ensureResumeTargetExists(target)) {
+    return false;
+  }
+
   // This reload is at least as disruptive as the `insertAt <= 1` cases
   // `reloadWipesSerializerState` guards (the whole folder set or the
   // workspace file changes) — always arm the dead-serializer marker, and
@@ -179,10 +240,10 @@ export async function reloadWindowIntoTarget(sessionId: string, target: ResumeTa
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target.path), {
       forceReuseWindow: true,
     });
-    return;
+    return true;
   }
   if (target.kind === 'none') {
-    return; // nothing to reload into
+    return false; // nothing to reload into
   }
 
   if (state.extensionContext && target.entries.length > 0) {
@@ -196,6 +257,7 @@ export async function reloadWindowIntoTarget(sessionId: string, target: ResumeTa
       ([entryName, entryPath]: [string, string]) => ({ uri: vscode.Uri.file(entryPath), name: entryName }),
     ),
   );
+  return true;
 }
 
 /**

@@ -11,7 +11,7 @@ import * as vscode from 'vscode';
 import { makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import type { SessionController } from '../session/controller';
-import { fetchRememberedWorkspaceFor, reloadWindowIntoTarget } from './session-resume';
+import { ensureResumeTargetExists, fetchRememberedWorkspaceFor, reloadWindowIntoTarget } from './session-resume';
 import { state } from './state';
 import { armWindowIdContinuity } from './window-id';
 import { addWorkspaceFolder, findActiveSession, newSession } from './window-sessions';
@@ -291,6 +291,13 @@ async function promptReconnectForCreateProject(active: SessionController): Promi
     remembered.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
   );
   const target = resumeTarget(remembered, codeWorkspaceFileExists);
+  // Check before arming, not after: `reloadWindowIntoTarget` refuses a
+  // workspace whose folders are gone from disk, and a marker armed for a
+  // reload that never happens would fire the project-name prompt on the
+  // next activation instead (it's recency-bound, not reload-bound).
+  if (!ensureResumeTargetExists(target)) {
+    return null;
+  }
   await armPendingCreateProjectPrompt();
   await reloadWindowIntoTarget(sessionId, target);
   return null;
