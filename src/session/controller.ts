@@ -36,6 +36,8 @@ import type { Envelope } from '../envelope';
 import type { SamplingContext, SamplingValues, ThinkingContext } from '../llm-registry-types';
 import { parseSamplingValues } from '../llm-registry-types';
 import { resolveLogicalPath } from '../logical-path';
+import { attachResponsePayload } from '../extension/workspace-attach';
+import type { WorkspaceAttachResult } from '../extension/workspace-attach';
 import { WsClient } from '../ws-client';
 import { handleStatelessEnvelope } from './agent-event-translation';
 import { ActivityCache } from './activity-cache';
@@ -658,6 +660,14 @@ export class SessionController {
       return;
     }
 
+    // The waited-on twin of `workspace.add_folder`: the server's
+    // `scaffold_new_project` blocks on our answer so the agent never works
+    // against a workspace that is mid window-reload (WS_PROTOCOL.md §6.11).
+    if (env.kind === 'request' && evtType === 'workspace.confirm_folder') {
+      void this._confirmWorkspaceFolder(env);
+      return;
+    }
+
     if (env.kind === 'event' && evtType === 'session.history') {
       const entries = env.payload.entries;
       if (Array.isArray(entries)) {
@@ -884,6 +894,45 @@ export class SessionController {
     } else if (state) {
       this.modeToggle.applyResumedState(state);
     }
+  }
+
+  /**
+   * Answer a `workspace.confirm_folder` request: get the scaffolded directory
+   * into this window's workspace, then tell the server whether it landed.
+   *
+   * The folder map is re-pushed explicitly before replying rather than relying
+   * on `extension.ts`'s window-wide `onDidChangeWorkspaceFolders` listener
+   * having run first. Both push, and `handle_workspace_folders` is idempotent,
+   * so the duplicate is free — but the ordering is not something this reply
+   * should depend on: the server treats our answer as "the workspace is
+   * settled", and it must not be able to read a stale map after hearing that.
+   *
+   * On the reloading path `confirmWorkspaceFolder` never resolves — the
+   * extension host is torn down inside the await — and the server replays the
+   * request to the window that comes back. Nothing here needs to handle that.
+   */
+  private async _confirmWorkspaceFolder(env: Envelope): Promise<void> {
+    const folderPath = String(env.payload.path ?? '');
+    const name = String(env.payload.name ?? '');
+    if (!folderPath) {
+      this._sendStamped(
+        makeResponse(
+          env.id,
+          attachResponsePayload({ attached: false, reloaded: false, error: 'no path given' }),
+        ),
+      );
+      return;
+    }
+    let result: WorkspaceAttachResult;
+    try {
+      result = await this.deps.confirmWorkspaceFolder(folderPath, name);
+    } catch (err) {
+      result = { attached: false, reloaded: false, error: String(err) };
+    }
+    if (result.attached) {
+      this.pushWorkspaceFolders();
+    }
+    this._sendStamped(makeResponse(env.id, attachResponsePayload(result)));
   }
 
   /** Re-push the folder map (e.g. after onDidChangeWorkspaceFolders). */

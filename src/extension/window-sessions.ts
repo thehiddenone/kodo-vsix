@@ -18,6 +18,7 @@ import { handleApiKeyRequest, pushCloudAiSettingsState } from './cloud-ai-settin
 import { handleChooseProjectFolder } from './create-project';
 import { confirmLocalLlamaLaunch } from './local-llm-registry';
 import { currentSamplingContext } from './sampling-context';
+import { addFolderToWorkspace, confirmWorkspaceFolder } from './workspace-attach';
 import { reconnectSessionWorkspace } from './session-resume';
 import { sendControlAwait } from './control-send';
 import { buildFolderMap, codeWorkspaceFile, readUiSettings } from './settings-io';
@@ -36,6 +37,7 @@ function sessionDeps(): SessionDeps {
     buildFolderMap,
     getCodeWorkspaceFile: codeWorkspaceFile,
     addWorkspaceFolder,
+    confirmWorkspaceFolder,
     reconnectWorkspace: reconnectSessionWorkspace,
     getThinkingContext: currentThinkingContext,
     getSamplingContext: currentSamplingContext,
@@ -160,20 +162,22 @@ export function adoptPanel(panel: vscode.WebviewPanel, sessionId: string): void 
 }
 
 /**
- * Add an already-existing directory to the open workspace — either one the
- * server has just scaffolded (via the `create_new_project` tool or the
- * "Create Project" command's `project.create` message, so the agent's
- * subsequent file edits are visible) or, for a currently folder-less window,
- * a raw folder the user picked to become the new workspace home
+ * Fire-and-forget: add an already-existing directory to the open workspace and
+ * return without waiting for it to land there — either one the server has just
+ * scaffolded (the "Create Project" command's `project.create` message, whose
+ * `workspace.add_folder` event this answers) or, for a currently folder-less
+ * window, a raw folder the user picked to become the new workspace home
  * (`promptOpenWorkspaceForNewProject`) before any project exists in it yet.
- * Either way this only registers it as a VS Code workspace folder and
- * re-pushes `workspace.folders` to the server. No-op when the folder is
- * already part of the workspace.
+ * Both are user-driven, with the user watching the window do its thing, so
+ * there is nothing to wait for. No-op when the folder is already part of the
+ * workspace.
  *
- * When this is about to become the window's first folder, VS Code restarts
- * the extension host for it — `armWindowIdContinuity` (awaited, before
- * `updateWorkspaceFolders`) preserves this window's id across that restart;
- * see its doc comment.
+ * The `scaffold_new_project` tool uses `confirmWorkspaceFolder` instead — it
+ * has an agent, not a user, waiting on the other end, and that one blocks
+ * until the folder (and any window reload it triggers) is really done.
+ *
+ * The arming a reload-inducing add needs — window-id continuity, the
+ * dead-serializer marker — lives in the shared `addFolderToWorkspace`.
  */
 export async function addWorkspaceFolder(folderPath: string, name: string): Promise<void> {
   const folderUri = vscode.Uri.file(folderPath);
@@ -182,22 +186,7 @@ export async function addWorkspaceFolder(folderPath: string, name: string): Prom
   if (alreadyInWorkspace) {
     return;
   }
-  const insertAt = vscode.workspace.workspaceFolders?.length ?? 0;
-  if (insertAt === 0 && state.extensionContext) {
-    await armWindowIdContinuity(state.extensionContext, folderPath);
-  }
-  // Both reload-inducing transitions land in a fresh workspace-storage identity
-  // that kills the webview-panel serializer's state — arm the dead-serializer
-  // marker so the post-reload reconcile treats leftover kodoPanel tabs as dead
-  // ghosts instead of deferring on them forever (see `serializerStateIsDead`).
-  if (reloadWipesSerializerState(insertAt)) {
-    await armSerializerDead();
-  }
-  vscode.workspace.updateWorkspaceFolders(
-    insertAt,
-    0,
-    name ? { uri: folderUri, name } : { uri: folderUri },
-  );
+  await addFolderToWorkspace(folderPath, name);
 }
 
 // ---------------------------------------------------------------------------

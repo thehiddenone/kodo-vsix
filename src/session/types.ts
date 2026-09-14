@@ -9,6 +9,7 @@ import type * as vscode from 'vscode';
 import type { Envelope } from '../envelope';
 import type { SamplingContext, ThinkingContext } from '../llm-registry-types';
 import type { SessionController } from './controller';
+import type { WorkspaceAttachResult } from '../extension/workspace-attach';
 
 /** Edit Control posture. `smart` is the default. */
 export type EditControl = 'review_all' | 'allow_all' | 'smart';
@@ -210,6 +211,15 @@ export interface SessionDeps {
    * registers it as a VS Code workspace folder (no-op if already present).
    */
   addWorkspaceFolder: (folderPath: string, name: string) => void;
+  /**
+   * Add a server-scaffolded project directory to the open workspace AND report
+   * back whether it really landed there — the `workspace.confirm_folder`
+   * round-trip that keeps `scaffold_new_project` from returning to the agent
+   * while VS Code is mid window-reload (WS_PROTOCOL.md §6.11). Never resolves
+   * when the add triggers a reload: this host dies and the server replays the
+   * request to the next one. See `confirmWorkspaceFolder`.
+   */
+  confirmWorkspaceFolder: (folderPath: string, name: string) => Promise<WorkspaceAttachResult>;
   /**
    * Reload the current window into `sessionId`'s own remembered workspace
    * (the manual reconnect-workspace button's mechanism, doc/WS_PROTOCOL.md
