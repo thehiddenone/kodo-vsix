@@ -114,6 +114,7 @@ export function App() {
             uiSettings={state.uiSettings}
             stuckDetection={state.stuckDetection}
             housekeeperLlm={state.housekeeperLlm}
+            defaultAgent={state.defaultAgent}
           />
         )}
         {selectedKey === 'sessions' && (

@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'preact/hooks';
 import { SelectRow } from './SelectRow';
-import type { HousekeeperLlmSettings, StuckDetectionSettings, UiSettings } from './types';
+import type {
+  DefaultAgentSettings,
+  HousekeeperLlmSettings,
+  StuckDetectionSettings,
+  UiSettings,
+} from './types';
 import { vscode } from './vscode';
 
 // 'system' resolves to the runtime's local IANA zone (host-side format.ts's
@@ -188,6 +193,61 @@ function HousekeeperLlmSection({ housekeeperLlm }: { housekeeperLlm: Housekeeper
   );
 }
 
+function DefaultAgentSection({ defaultAgent }: { defaultAgent: DefaultAgentSettings }) {
+  // Same optimistic-local-state + WS-round-trip shape as HousekeeperLlmSection
+  // above: `default_agent.set` is a real awaited round trip to the kodo server,
+  // and the choice sticks in the UI immediately.
+  const [selected, setSelected] = useState(defaultAgent.selected);
+  useEffect(() => setSelected(defaultAgent.selected), [defaultAgent.selected]);
+  // What "use the shipped default" actually resolves to right now. Shown on the
+  // row so the choice is never a blind one.
+  const shipped = defaultAgent.agents.find((a) => a.name === defaultAgent.effective);
+  const shippedLabel = shipped?.label ?? defaultAgent.effective;
+  const choose = (name: string) => {
+    setSelected(name);
+    vscode.postMessage({ type: 'set_default_agent', name });
+  };
+  return (
+    <div>
+      <div className="section-subheading">Default agent</div>
+      <p className="intro-text">
+        Which agent a new session starts on. You can still switch agents per session from Session
+        Parameters; this only decides where each one begins.
+      </p>
+      <div className="radio-group">
+        <label className="radio-row" key="">
+          <input
+            type="radio"
+            name="default-agent"
+            checked={selected === ''}
+            onChange={(e) => {
+              if ((e.target as HTMLInputElement).checked) {
+                choose('');
+              }
+            }}
+          />
+          {shippedLabel ? `Use Kōdo's default (${shippedLabel})` : "Use Kōdo's default"}
+        </label>
+        {defaultAgent.agents.map((agent) => (
+          <label className="radio-row" key={agent.name}>
+            <input
+              type="radio"
+              name="default-agent"
+              checked={selected === agent.name}
+              onChange={(e) => {
+                if ((e.target as HTMLInputElement).checked) {
+                  choose(agent.name);
+                }
+              }}
+            />
+            {agent.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StuckDetectionSection({ stuckDetection }: { stuckDetection: StuckDetectionSettings }) {
   // Unlike ShowTimestamps/uiSettings (a local file write, echoed back
   // synchronously) or the cloud-model <select> (pushed back synchronously
@@ -257,9 +317,15 @@ interface GeneralSectionProps {
   uiSettings: UiSettings;
   stuckDetection: StuckDetectionSettings;
   housekeeperLlm: HousekeeperLlmSettings;
+  defaultAgent: DefaultAgentSettings;
 }
 
-export function GeneralSection({ uiSettings, stuckDetection, housekeeperLlm }: GeneralSectionProps) {
+export function GeneralSection({
+  uiSettings,
+  stuckDetection,
+  housekeeperLlm,
+  defaultAgent,
+}: GeneralSectionProps) {
   return (
     <div>
       <h2>General</h2>
@@ -270,6 +336,7 @@ export function GeneralSection({ uiSettings, stuckDetection, housekeeperLlm }: G
       <hr className="section-divider" />
       <AutoScrollSection uiSettings={uiSettings} />
       <hr className="section-divider" />
+      <DefaultAgentSection defaultAgent={defaultAgent} />
       <HousekeeperLlmSection housekeeperLlm={housekeeperLlm} />
       <hr className="section-divider" />
       <StuckDetectionSection stuckDetection={stuckDetection} />

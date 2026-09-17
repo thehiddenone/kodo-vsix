@@ -48,6 +48,7 @@ import { fetchGlobalRules, parseRuleEntries } from './security-rules';
 import { broadcastUiSettings, readUiSettings, writeUiSettings } from './settings-io';
 import { state } from './state';
 import { fetchStuckDetection, parseStuckDetection } from './stuck-detection';
+import { fetchDefaultAgent, parseDefaultAgent } from './default-agent';
 import { fetchHousekeeperLlm } from './housekeeper-llm';
 import { findBySessionId, openExistingSession } from './window-sessions';
 
@@ -156,10 +157,11 @@ export async function openKodoSettings(
   selectSection?: string,
   configureEntry?: string,
 ): Promise<void> {
-  const [rules, stuckDetection, housekeeperLlm, sessions, skills] = await Promise.all([
+  const [rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, skills] = await Promise.all([
     fetchGlobalRules(),
     fetchStuckDetection(),
     fetchHousekeeperLlm(),
+    fetchDefaultAgent(),
     fetchSessionsForPanel(),
     fetchSkillsForPanel(),
   ]);
@@ -198,7 +200,7 @@ export async function openKodoSettings(
   const panel = KodoSettingsPanel.createOrShow(
     state.extensionContext!.extensionUri,
     {
-      rules, stuckDetection, housekeeperLlm, sessions, sessionRules: null, skills,
+      rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, sessionRules: null, skills,
       llamaCpp: llamaCppInfoForPanel(),
       skillScan: null, skillInstall: null,
       uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
@@ -214,7 +216,7 @@ export async function openKodoSettings(
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
   panel.update({
-    rules, stuckDetection, housekeeperLlm, sessions, skills, uiSettings,
+    rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, skills, uiSettings,
     llamaCpp: llamaCppInfoForPanel(),
     hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
   });
@@ -510,6 +512,22 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
       KodoSettingsPanel.instance?.update({ stuckDetection: parseStuckDetection(resp) });
     } catch {
       vscode.window.showErrorMessage('Kōdo: could not reach the server to update stuck-detection settings.');
+    }
+    return;
+  }
+  if (msg.type === 'set_default_agent') {
+    try {
+      const resp = await sendControlAwait('default_agent.set', { name: msg.name });
+      if (resp.ok === false) {
+        const message = typeof resp.error === 'string' ? resp.error : 'Unknown error.';
+        vscode.window.showErrorMessage(`Kōdo: could not set the default agent — ${message}`);
+        return;
+      }
+      // The `.set.ack` already carries the full `.get` shape, so unlike the
+      // housekeeper handler below there is nothing to re-fetch.
+      KodoSettingsPanel.instance?.update({ defaultAgent: parseDefaultAgent(resp) });
+    } catch {
+      vscode.window.showErrorMessage('Kōdo: could not reach the server to set the default agent.');
     }
     return;
   }

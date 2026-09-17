@@ -134,6 +134,27 @@ export interface HousekeeperLlmOption {
  * `HOUSEKEEPER_LLM_OPTIONS` catalog verbatim, in catalog order — the panel
  * renders one radio button per entry with no id hardcoded client-side, so a
  * new catalog entry server-side needs no kodo-vsix change to appear here. */
+/** One selectable top-level agent, as `default_agent.get.ack` lists it.
+ * `name` is the wire value persisted as `default_agent` in settings.json. */
+export interface TopAgentOption {
+  name: string;
+  label: string;
+  description: string;
+}
+
+/** The `default_agent` settings block backing the "General" section's
+ * "Default agent" subsection.
+ *
+ * `selected` is the user's own preference, empty when they have expressed
+ * none; `effective` is the agent a new session will actually start on, which
+ * is the shipped default whenever `selected` is empty. Both are needed to
+ * label the "use the default" choice with the agent it resolves to. */
+export interface DefaultAgentSettings {
+  selected: string;
+  effective: string;
+  agents: TopAgentOption[];
+}
+
 export interface HousekeeperLlmSettings {
   selected: string;
   options: HousekeeperLlmOption[];
@@ -269,6 +290,7 @@ export interface KodoSettingsState {
   rules: GlobalRuleEntry[];
   stuckDetection: StuckDetectionSettings;
   housekeeperLlm: HousekeeperLlmSettings;
+  defaultAgent: DefaultAgentSettings;
   llamaCpp: LlamaCppInfo;
   sessions: SessionListEntry[];
   sessionRules: SessionRulesState | null;
@@ -355,6 +377,7 @@ export type KodoSettingsMessage =
   | { type: 'delete_rules'; rules: GlobalRuleEntry[] }
   | ({ type: 'set_stuck_detection' } & StuckDetectionSettings)
   | { type: 'set_housekeeper_llm'; id: string }
+  | { type: 'set_default_agent'; name: string }
   | ({ type: 'set_ui_settings' } & UiSettings)
   | { type: 'install_llamacpp' }
   | { type: 'uninstall_llamacpp' }

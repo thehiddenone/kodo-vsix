@@ -11,6 +11,7 @@ export const initial: KodoSettingsState = {
     auto_unstuck_interactive: false,
   },
   housekeeperLlm: { selected: '', options: [] },
+  defaultAgent: { selected: '', effective: '', agents: [] },
   llamaCpp: { installedVersion: null, latestVersion: null, latestChecking: false, busy: false },
   sessions: [],
   sessionRules: null,
@@ -56,6 +57,9 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (data.stuckDetection && typeof data.stuckDetection === 'object') {
     next.stuckDetection = data.stuckDetection;
+  }
+  if (data.defaultAgent && typeof data.defaultAgent === 'object') {
+    next.defaultAgent = data.defaultAgent;
   }
   if (data.housekeeperLlm && typeof data.housekeeperLlm === 'object') {
     next.housekeeperLlm = data.housekeeperLlm;
