@@ -92,7 +92,9 @@ export async function pickSession(): Promise<void> {
   for (const s of list) {
     const id = String(s.id ?? '');
     const name = String(s.name ?? id);
-    const workflowMode = typeof s.workflow_mode === 'string' ? s.workflow_mode : null;
+    // The server resolves and labels the session's top-level agent; the row
+    // carries both so this side needs no mapping of its own.
+    const agentLabel = typeof s.agent_label === 'string' ? s.agent_label : null;
     const taken = Boolean(s.taken);
     const openHere = findBySessionId(id) !== undefined;
     const remembered = parseRememberedWorkspace(s.workspace);
@@ -104,7 +106,7 @@ export async function pickSession(): Promise<void> {
     // live tab) regardless of what's remembered.
     const disabledReason = taken && !openHere ? 'Opened in another window' : undefined;
 
-    const kindLabel = workflowMode === 'guided' ? 'Guided' : 'Problem solving';
+    const kindLabel = agentLabel ?? 'Unknown agent';
     const created = typeof s.created_at === 'string' ? s.created_at : '';
     const lastModified = typeof s.last_modified === 'string' ? s.last_modified : '';
     const timeLabel = `created ${formatTimestamp(created)}, last modified ${formatTimestamp(lastModified)}${remembered ? ', in workspace' : ''}`;

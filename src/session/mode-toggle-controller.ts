@@ -1,7 +1,7 @@
 /**
  * The mode/toggle state machine: Autonomous (interactive vs. autonomous,
- * frozen mid-turn), workflow mode (guided vs. problem-solving, also
- * frozen), Edit/Tool Control (never frozen, but forced + locked while
+ * frozen mid-turn), the selected top-level agent (also frozen), Edit/Tool
+ * Control (never frozen, but forced + locked while
  * Autonomous is in effect), and Thinking level (server-owned). Owns exactly
  * the fields `_postModeState`'s snapshot is built from, so every place one of
  * them can change funnels through here and re-derives+re-posts consistently.
@@ -10,8 +10,15 @@
 import type { Envelope } from '../envelope';
 import { makeRequest } from '../envelope';
 import type { ThinkingContext } from '../llm-registry-types';
-import type { CommandControl, EditControl } from './types';
-import { AUTONOMOUS_COMMAND, AUTONOMOUS_EDIT, coerceCommandControl, coerceEditControl, coerceWorkflowMode } from './types';
+import type { AgentRow, CommandControl, EditControl } from './types';
+import {
+  AUTONOMOUS_COMMAND,
+  AUTONOMOUS_EDIT,
+  coerceAgentCatalog,
+  coerceCommandControl,
+  coerceEditControl,
+  coerceTopAgent,
+} from './types';
 
 type Post = (msg: Record<string, unknown>) => void;
 type Send = (env: Envelope) => void;
@@ -24,8 +31,14 @@ export class ModeToggleController {
   // prompt".
   private autonomous = false;
   private effectiveAutonomous = false;
-  private workflowMode: 'guided' | 'problem_solving' = 'problem_solving';
-  private effectiveWorkflowMode: 'guided' | 'problem_solving' = 'problem_solving';
+  private topAgent = '';
+  private effectiveTopAgent = '';
+  // The server's catalog of selectable top-level agents, adopted from
+  // `hello.ack` before any session state is applied. The picker renders one row
+  // per entry, so which agents exist — and which one a new session starts on —
+  // is entirely the server's answer; nothing here names one.
+  private agents: AgentRow[] = [];
+  private defaultAgent = '';
   private workspaceConnected_ = true;
   // Edit/Tool Control are NEVER frozen. The host owns them: it keeps the
   // user's *selected* posture, and derives the *shown* value — which equals the
@@ -120,8 +133,10 @@ export class ModeToggleController {
       type: 'mode_state',
       autonomous: this.autonomous,
       effectiveAutonomous: this.effectiveAutonomous,
-      workflowMode: this.workflowMode,
-      effectiveWorkflowMode: this.effectiveWorkflowMode,
+      topAgent: this.topAgent,
+      effectiveTopAgent: this.effectiveTopAgent,
+      agents: this.agents,
+      defaultAgent: this.defaultAgent,
       editControl: this.editShown(),
       commandControl: this.commandShown(),
       editCommandLocked: this.autonomousInEffect(),
@@ -152,8 +167,11 @@ export class ModeToggleController {
     // server, which only echoes back the shown value we last sent).
     this.autonomous = Boolean(payload.autonomous ?? false);
     this.effectiveAutonomous = Boolean(payload.effective_autonomous ?? this.autonomous);
-    this.workflowMode = coerceWorkflowMode(payload.workflow_mode);
-    this.effectiveWorkflowMode = coerceWorkflowMode(payload.effective_workflow_mode ?? payload.workflow_mode);
+    this.topAgent = coerceTopAgent(payload.top_agent, this.defaultAgent);
+    this.effectiveTopAgent = coerceTopAgent(
+      payload.effective_top_agent ?? payload.top_agent,
+      this.topAgent,
+    );
     // thinking_level is likewise server-owned — adopted verbatim, never
     // client-computed (doc/SESSIONS.md): a new-session seed, a resume
     // reconciliation, a model-switch reset, or a thinking_level.set accept
@@ -185,18 +203,34 @@ export class ModeToggleController {
     this.thinkingLevel = level;
   }
 
-  /** A blank session starts interactive, problem-solving, with Edit & Command
-   *  Control at their Smart default — selected == effective, nothing locked. */
+  /**
+   * Adopt `hello.ack`'s top-level agent catalog.
+   *
+   * Must run **before** `applyNewSessionDefaults`/`applyResumedState`, which
+   * both fall back to `defaultAgent` when the server reports no selection yet.
+   */
+  setCatalogFromHello(agents: unknown, defaultAgent: unknown): void {
+    this.agents = coerceAgentCatalog(agents);
+    this.defaultAgent =
+      typeof defaultAgent === 'string' && defaultAgent
+        ? defaultAgent
+        : (this.agents[0]?.name ?? '');
+  }
+
+  /** A blank session starts interactive, on the server's default agent, with
+   *  Edit & Command Control at their Smart default — selected == effective,
+   *  nothing locked. Which agent that is comes from `hello.ack`, never a
+   *  literal here: the server and the picker must not disagree about it. */
   applyNewSessionDefaults(): void {
-    this.workflowMode = 'problem_solving';
-    this.effectiveWorkflowMode = 'problem_solving';
+    this.topAgent = this.defaultAgent;
+    this.effectiveTopAgent = this.defaultAgent;
     this.autonomous = false;
     this.effectiveAutonomous = false;
     this.running = false;
     this.awaitingLlm = false;
     this.editControl = 'smart';
     this.commandControl = 'smart';
-    this.send(makeRequest('workflow.set', { mode: 'problem_solving' }));
+    this.send(makeRequest('agent.set', { name: this.defaultAgent }));
     this.syncEditCommandToServer();
     this.postModeState();
   }
@@ -216,8 +250,11 @@ export class ModeToggleController {
   applyResumedState(state: Record<string, unknown>): void {
     this.autonomous = Boolean(state.autonomous ?? false);
     this.effectiveAutonomous = Boolean(state.effective_autonomous ?? this.autonomous);
-    this.workflowMode = coerceWorkflowMode(state.workflow_mode);
-    this.effectiveWorkflowMode = coerceWorkflowMode(state.effective_workflow_mode ?? state.workflow_mode);
+    this.topAgent = coerceTopAgent(state.top_agent, this.defaultAgent);
+    this.effectiveTopAgent = coerceTopAgent(
+      state.effective_top_agent ?? state.top_agent,
+      this.topAgent,
+    );
     this.running = false;
     this.awaitingLlm = false;
     if (this.autonomous) {
@@ -241,10 +278,10 @@ export class ModeToggleController {
     this.postModeState();
   }
 
-  /** `workflow_set` webview message. */
-  setWorkflow(mode: 'guided' | 'problem_solving'): void {
-    this.workflowMode = mode;
-    this.send(makeRequest('workflow.set', { mode }));
+  /** `agent_set` webview message. */
+  setTopAgent(name: string): void {
+    this.topAgent = name;
+    this.send(makeRequest('agent.set', { name }));
     this.postModeState();
   }
 

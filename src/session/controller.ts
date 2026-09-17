@@ -317,8 +317,8 @@ export class SessionController {
       case 'mode_set':
         this.modeToggle.setAutonomous(Boolean(msg.autonomous));
         break;
-      case 'workflow_set':
-        this.modeToggle.setWorkflow(msg.mode === 'problem_solving' ? 'problem_solving' : 'guided');
+      case 'agent_set':
+        this.modeToggle.setTopAgent(String(msg.name ?? ''));
         break;
       case 'edit_control_set':
         this.modeToggle.setEditControl(msg.editControl);
@@ -884,6 +884,10 @@ export class SessionController {
     // model's family default — doc/SESSIONS.md) — hydrate it uniformly.
     const state = env.payload.state as Record<string, unknown> | undefined;
     this.modeToggle.setThinkingLevelFromHello(String(state?.thinking_level ?? ''));
+    // The top-level agent catalog, before either branch below: both fall back
+    // to `default_agent` when the server reports no selection yet, and a new
+    // session's first `agent.set` sends it.
+    this.modeToggle.setCatalogFromHello(env.payload.agents, env.payload.default_agent);
     // Same uniform-hydration reasoning as thinking_level: `sampling` is always
     // present in `state` (empty `{}` for a session that never tuned anything),
     // for both a new and a resumed session.

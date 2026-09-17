@@ -3,10 +3,10 @@ import type { ComponentChildren } from 'preact';
 import type { ThinkingFamily } from '../llm-registry-types';
 import { styles } from './styles';
 import { vscode } from './vscode';
-import type { EditControl, CommandControl } from './types';
+import type { AgentRow, EditControl, CommandControl } from './types';
 
 /**
- * Description of what each Agent/Mode choice does. These are *prefix-free*: the
+ * Description of what each Mode choice does. These are *prefix-free*: the
  * popup already prints the group name as a heading and the choice name as the
  * row's label, so a string here starts straight at the explanation. (They used
  * to read "Mode: Interactive — agents work alongside you…" because they were
@@ -15,8 +15,6 @@ import type { EditControl, CommandControl } from './types';
 const _MODE_DESC = {
   interactive: 'Agents work alongside you, asking questions before key decisions.',
   autonomous: 'Agents work on their own, making reasonable assumptions instead of pausing.',
-  problem_solving: 'One generalist agent tackles your request end to end.',
-  guided: 'One coordinating agent drives specialists through design, tests and implementation.',
 };
 
 /** Description of each Edit Control posture (prefix-free — see {@link _MODE_DESC}). */
@@ -268,6 +266,15 @@ function _thinkingNote(family: ThinkingFamily | null, hasTiers: boolean): string
  * queued for the next prompt. Empty string when selection and effect agree (or
  * nothing is running), which is the overwhelmingly common case.
  */
+/** A top-level agent's picker label, falling back to its bare name.
+ *
+ *  The fallback is reachable for an agent the server accepted but left out of
+ *  the catalog — `judge`, which is registered but not selectable. Showing the
+ *  name beats showing nothing, or showing the wrong agent's label. */
+function _agentLabel(agents: AgentRow[], name: string): string {
+  return agents.find((a) => a.name === name)?.label ?? name;
+}
+
 function _frozenNote(pending: boolean, effectiveName: string): string {
   return pending ? `Queued for the next prompt — currently ${effectiveName}.` : '';
 }
@@ -365,8 +372,12 @@ function MenuOption({
 interface ModeControlsProps {
   autonomous: boolean;
   effectiveAutonomous: boolean;
-  workflowMode: 'guided' | 'problem_solving';
-  effectiveWorkflowMode: 'guided' | 'problem_solving';
+  /** The selected top-level agent's name, and the one the in-flight prompt
+   *  is actually running under. */
+  topAgent: string;
+  effectiveTopAgent: string;
+  /** Selectable agents in picker order, straight from the server. */
+  agents: AgentRow[];
   editControl: EditControl;
   commandControl: CommandControl;
   /** True while Autonomous is in effect: Edit/Command are forced and locked. */
@@ -402,8 +413,9 @@ interface ModeControlsProps {
 export function ModeControls({
   autonomous,
   effectiveAutonomous,
-  workflowMode,
-  effectiveWorkflowMode,
+  topAgent,
+  effectiveTopAgent,
+  agents,
   editControl,
   commandControl,
   editCommandLocked,
@@ -481,7 +493,6 @@ export function ModeControls({
     }
   }, [connected]);
 
-  const isPS = workflowMode === 'problem_solving';
   // Bound to a `const` before the null check so the narrowing survives into the
   // `.map` callback below — TypeScript drops a *parameter*'s narrowing inside a
   // closure, since a parameter could in principle be reassigned.
@@ -513,25 +524,18 @@ export function ModeControls({
         <div style={menuStyle} role="menu" aria-label="Session settings">
           <MenuGroup
             title="Agent"
-            note={_frozenNote(
-              running && workflowMode !== effectiveWorkflowMode,
-              effectiveWorkflowMode === 'problem_solving' ? 'Problem Solver' : 'Guide',
-            )}
+            note={_frozenNote(running && topAgent !== effectiveTopAgent, _agentLabel(agents, effectiveTopAgent))}
           >
-            <MenuOption
-              label="Problem Solver"
-              desc={_MODE_DESC.problem_solving}
-              selected={isPS}
-              disabled={false}
-              onSelect={() => vscode.postMessage({ type: 'workflow_set', mode: 'problem_solving' })}
-            />
-            <MenuOption
-              label="Guide"
-              desc={_MODE_DESC.guided}
-              selected={!isPS}
-              disabled={false}
-              onSelect={() => vscode.postMessage({ type: 'workflow_set', mode: 'guided' })}
-            />
+            {agents.map((agent) => (
+              <MenuOption
+                key={agent.name}
+                label={agent.label}
+                desc={agent.description}
+                selected={agent.name === topAgent}
+                disabled={false}
+                onSelect={() => vscode.postMessage({ type: 'agent_set', name: agent.name })}
+              />
+            ))}
           </MenuGroup>
           <hr style={styles.sessionGroupDivider} />
           <MenuGroup

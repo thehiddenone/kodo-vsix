@@ -13,7 +13,7 @@ interface RowProps {
 }
 
 function SessionRow({ session, onOpenSettings }: RowProps) {
-  const kindLabel = session.workflowMode === 'guided' ? 'Guided' : 'Problem solving';
+  const kindLabel = session.agentLabel ?? 'Unknown agent';
   const wsLine = sessionWorkspaceLine(session);
   return (
     <div className="session-row">

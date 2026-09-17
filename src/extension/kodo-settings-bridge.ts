@@ -82,7 +82,8 @@ async function fetchSessionsForPanel(): Promise<SessionListEntry[]> {
     return list.map((s) => ({
       id: String(s.id ?? ''),
       name: String(s.name ?? s.id ?? ''),
-      workflowMode: typeof s.workflow_mode === 'string' ? s.workflow_mode : null,
+      agent: typeof s.agent === 'string' ? s.agent : null,
+      agentLabel: typeof s.agent_label === 'string' ? s.agent_label : null,
       taken: Boolean(s.taken),
       workspace: parseRememberedWorkspace(s.workspace),
     }));

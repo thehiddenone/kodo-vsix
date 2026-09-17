@@ -2,7 +2,13 @@ import { useEffect, useReducer, useRef } from 'preact/hooks';
 import { vscode } from './vscode';
 import { styles } from './styles';
 import type { LastCallTokens, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, PermissionParamRow, PermissionPart, SessionEntry, GateFinding } from './types';
-import { coerceEditControl, coerceCommandControl, coerceClockFormatPreset, coerceAutoScrollMode } from './types';
+import {
+  coerceAgentRows,
+  coerceEditControl,
+  coerceCommandControl,
+  coerceClockFormatPreset,
+  coerceAutoScrollMode,
+} from './types';
 import type { SamplingParamSpec } from '../llm-registry-types';
 import { coerceThinkingFamily, parseSamplingValues } from '../llm-registry-types';
 import { reducer, initial } from './reducer';
@@ -525,8 +531,10 @@ export function App() {
             type: 'mode_state',
             autonomous: Boolean(msg.autonomous),
             effectiveAutonomous: Boolean(msg.effectiveAutonomous),
-            workflowMode: msg.workflowMode === 'guided' ? 'guided' : 'problem_solving',
-            effectiveWorkflowMode: msg.effectiveWorkflowMode === 'guided' ? 'guided' : 'problem_solving',
+            topAgent: String(msg.topAgent ?? ''),
+            effectiveTopAgent: String(msg.effectiveTopAgent ?? ''),
+            agents: coerceAgentRows(msg.agents),
+            defaultAgent: String(msg.defaultAgent ?? ''),
             editControl: coerceEditControl(msg.editControl),
             commandControl: coerceCommandControl(msg.commandControl),
             editCommandLocked: Boolean(msg.editCommandLocked),
@@ -831,8 +839,9 @@ export function App() {
             <ModeControls
               autonomous={state.autonomous}
               effectiveAutonomous={state.effectiveAutonomous}
-              workflowMode={state.workflowMode}
-              effectiveWorkflowMode={state.effectiveWorkflowMode}
+              topAgent={state.topAgent}
+              effectiveTopAgent={state.effectiveTopAgent}
+              agents={state.agents}
               editControl={state.editControl}
               commandControl={state.commandControl}
               editCommandLocked={state.editCommandLocked}

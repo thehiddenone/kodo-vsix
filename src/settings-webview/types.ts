@@ -47,7 +47,10 @@ export interface RememberedWorkspace {
 export interface SessionListEntry {
   id: string;
   name: string;
-  workflowMode: string | null;
+  /** The session's top-level agent, and what to call it — both resolved
+   *  server-side, so nothing here maps a name to a label. */
+  agent: string | null;
+  agentLabel: string | null;
   taken: boolean;
   workspace: RememberedWorkspace | null;
 }

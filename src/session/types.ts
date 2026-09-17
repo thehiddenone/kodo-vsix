@@ -41,9 +41,63 @@ export interface UiSettings {
   autoScroll: 'off' | 'auto' | 'always';
 }
 
-/** Coerce an untyped wire value into a workflow mode (default guided). */
-export function coerceWorkflowMode(value: unknown): 'guided' | 'problem_solving' {
-  return value === 'problem_solving' ? 'problem_solving' : 'guided';
+/**
+ * One selectable top-level agent, as `hello.ack`'s `agents` catalog lists it.
+ *
+ * The client renders one picker row per entry and hardcodes no names of its
+ * own — adding an agent server-side is meant to need no change here.
+ */
+export interface AgentRow {
+  /** Wire value: what `agent.set { name }` sends. */
+  name: string;
+  /** What to call it in the picker. Not the agent's feed display name. */
+  label: string;
+  /** One sentence under the label, explaining what picking it does. */
+  description: string;
+  /** Ascending sort key; the server already sends them in order. */
+  rank: number;
+}
+
+/** Read the `agents` catalog out of an untyped `hello.ack` payload. */
+export function coerceAgentCatalog(value: unknown): AgentRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null) {
+      return [];
+    }
+    const row = entry as Record<string, unknown>;
+    const name = typeof row.name === 'string' ? row.name : '';
+    if (!name) {
+      return [];
+    }
+    return [
+      {
+        name,
+        label: typeof row.label === 'string' && row.label ? row.label : name,
+        description: typeof row.description === 'string' ? row.description : '',
+        rank: typeof row.rank === 'number' ? row.rank : 0,
+      },
+    ];
+  });
+}
+
+/**
+ * Coerce an untyped wire value into a top-level agent name.
+ *
+ * Deliberately *not* checked against the served catalog. Every value reaching
+ * this comes from the server, which has already resolved it — and the catalog
+ * lists only the **selectable** agents, so checking against it would reject
+ * `judge`, which a validator session is legitimately running. The server is the
+ * authority on what it accepted; this only turns "missing or not a string" into
+ * the caller's fallback.
+ *
+ * The version this replaces mapped anything that was not `'problem_solving'` to
+ * `'guided'`, which is exactly why a `judge` session displayed as "Guided".
+ */
+export function coerceTopAgent(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value ? value : fallback;
 }
 
 /** Most attachments a prompt may carry (one per slot in the webview's area). */

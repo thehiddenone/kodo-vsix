@@ -11,6 +11,34 @@ export function coerceEditControl(value: unknown): EditControl {
   return value === 'review_all' || value === 'allow_all' ? value : 'smart';
 }
 
+/** Coerce the host's `mode_state` agent catalog into rows.
+ *
+ *  The message is host-produced and therefore trusted; this exists to satisfy
+ *  the `unknown`-typed message field, not to defend against the host. */
+export function coerceAgentRows(value: unknown): AgentRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null) {
+      return [];
+    }
+    const row = entry as Record<string, unknown>;
+    const name = typeof row.name === 'string' ? row.name : '';
+    if (!name) {
+      return [];
+    }
+    return [
+      {
+        name,
+        label: typeof row.label === 'string' && row.label ? row.label : name,
+        description: typeof row.description === 'string' ? row.description : '',
+        rank: typeof row.rank === 'number' ? row.rank : 0,
+      },
+    ];
+  });
+}
+
 /** Coerce an untyped wire value into a valid {@link CommandControl} (default smart). */
 export function coerceCommandControl(value: unknown): CommandControl {
   return value === 'defensive' || value === 'permissive' ? value : 'smart';
@@ -54,6 +82,20 @@ export function coerceAutoScrollMode(value: unknown): AutoScrollMode {
  * `_writeUiSettings`) and pushed to every open session webview as a
  * `ui_settings` message (see `session-controller.ts`'s `postUiSettings`).
  */
+/**
+ * One selectable top-level agent, mirroring `hello.ack`'s `agents` catalog.
+ *
+ * Declared here rather than imported from `src/session/types.ts`: the webview
+ * is a separate bundle and shares no module graph with the extension host —
+ * the `mode_state` message is the only contract between them.
+ */
+export interface AgentRow {
+  name: string;
+  label: string;
+  description: string;
+  rank: number;
+}
+
 export interface UiSettings {
   showTimestamps: boolean;
   timezone: string;
@@ -666,9 +708,14 @@ export interface State {
   // for the next prompt"; otherwise it is "in effect".
   autonomous: boolean;
   effectiveAutonomous: boolean;
-  /** Per-session workflow mode; toggled in this tab's header. */
-  workflowMode: 'guided' | 'problem_solving';
-  effectiveWorkflowMode: 'guided' | 'problem_solving';
+  /** Per-session top-level agent; picked in this tab's Session Parameters. */
+  topAgent: string;
+  effectiveTopAgent: string;
+  /** The selectable agents the server offers, in picker order. The picker
+   *  renders one row per entry and names none of them itself. */
+  agents: AgentRow[];
+  /** Which agent a brand-new session starts on, per the server. */
+  defaultAgent: string;
   // Edit/Tool Control are never frozen. The host owns them and sends the
   // *shown* value (forced to Allow All / Permissive while Autonomous is in
   // effect) plus `editCommandLocked`, which disables both toggles in the UI.
@@ -834,8 +881,10 @@ export type Action =
       type: 'mode_state';
       autonomous: boolean;
       effectiveAutonomous: boolean;
-      workflowMode: 'guided' | 'problem_solving';
-      effectiveWorkflowMode: 'guided' | 'problem_solving';
+      topAgent: string;
+      effectiveTopAgent: string;
+      agents: AgentRow[];
+      defaultAgent: string;
       editControl: EditControl;
       commandControl: CommandControl;
       editCommandLocked: boolean;
