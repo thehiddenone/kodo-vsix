@@ -278,6 +278,45 @@
       border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
     }
     .skill-row:first-child { border-top: none; }
+    /* Same look as a skill row, two more columns: an agent carries a kind
+       (top-level or sub-agent) and a version, and both are what the user reads
+       before deciding to replace one. */
+    .agent-row {
+      display: grid;
+      grid-template-columns: minmax(110px, 20%) 72px 84px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .agent-row:first-child { border-top: none; }
+    .agent-header {
+      font-size: 0.8em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--vscode-descriptionForeground);
+      background: var(--vscode-editorWidget-background, transparent);
+      padding: 6px 10px;
+    }
+    .agent-header .skill-name { font-weight: 600; }
+    .agent-header .session-icons { width: 84px; }
+    .agent-kind,
+    .agent-version {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* The conflict list is the server's own rendering, aligned with spaces —
+       it has to stay monospaced and keep its line breaks to line up. */
+    pre.install-result-list {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 0.85em;
+      white-space: pre;
+      overflow-x: auto;
+      margin: 6px 0;
+    }
     .skill-header {
       font-size: 0.8em;
       text-transform: uppercase;

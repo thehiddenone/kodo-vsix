@@ -11,7 +11,12 @@ import * as cloudCredentials from '../cloud-credentials';
 import { makeRequest } from '../envelope';
 import * as hfTokens from '../hf-tokens';
 import { KodoSettingsPanel } from '../settings-panel/panel';
-import type { KodoSettingsMessage, SessionListEntry, SkillsState } from '../settings-panel/types';
+import type {
+  AgentsState,
+  KodoSettingsMessage,
+  SessionListEntry,
+  SkillsState,
+} from '../settings-panel/types';
 import {
   cloudAiStateForPanel,
   pruneMissingCloudKeys,
@@ -127,6 +132,199 @@ function parseSkillsResponse(resp: Record<string, unknown>): SkillsState {
   };
 }
 
+/** Fetch the user-installed agents backing the Kōdo Settings panel's "Agents"
+ * section (`agents.list`, kodo/doc/WS_PROTOCOL.md §7.6l). `root` comes from the
+ * server rather than being rebuilt here, so the path the section tells the user
+ * to drop a bundle into is always the one the server actually scans. Entries
+ * with a non-empty `error` are kept — the section renders them as error rows so
+ * a broken bundle can be seen and deleted (kodo/doc/USER_AGENTS.md §5). Returns
+ * an empty listing (and shows a toast) if the server is unreachable. */
+async function fetchAgentsForPanel(): Promise<AgentsState> {
+  try {
+    const resp = await sendControlAwait('agents.list', {});
+    return parseAgentsResponse(resp);
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to list agents.');
+    return { root: '', agents: [] };
+  }
+}
+
+/** Shape any `agents.*` ack into `AgentsState`. Every one of them carries the
+ * same listing, which is what lets an install, a delete and a reload each
+ * refresh the table from its own response with no follow-up round-trip. */
+function parseAgentsResponse(resp: Record<string, unknown>): AgentsState {
+  const list = Array.isArray(resp.agents) ? (resp.agents as Record<string, unknown>[]) : [];
+  return {
+    root: typeof resp.root === 'string' ? resp.root : '',
+    agents: list.map((a) => ({
+      name: String(a.name ?? ''),
+      kind: String(a.kind ?? 'agent'),
+      version: String(a.version ?? ''),
+      label: String(a.label ?? ''),
+      description: String(a.description ?? ''),
+      path: String(a.path ?? ''),
+      error: String(a.error ?? ''),
+    })),
+  };
+}
+
+/** Open an installed agent's folder in a new window (folder icon).
+ * The path comes from `agents.list`, so it is the server's own resolved path. */
+async function openAgentFolder(agentPath: string): Promise<void> {
+  if (!agentPath) {
+    return;
+  }
+  await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(agentPath), {
+    forceNewWindow: true,
+  });
+}
+
+/** Delete a user-installed agent from the panel's "Agents" list (trash icon).
+ * Both the success and failure acks carry the refreshed listing, so the table
+ * updates from the response either way — a failure is most often an agent
+ * someone already removed from disk, and the refreshed table shows that. */
+async function deleteAgentFromSettingsPanel(name: string, kind: string): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    `Delete the ${kind} "${name}"?`,
+    {
+      modal: true,
+      detail: 'This is a destructive action that cannot be undone. The files will be '
+        + 'permanently deleted from disk.\n\n'
+        + 'A session currently running this agent will say so on its next prompt rather '
+        + 'than silently continuing as a different one.',
+    },
+    'Yes',
+  );
+  if (choice !== 'Yes') {
+    return;
+  }
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('agents.delete', { name, kind });
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to delete this agent.');
+    return;
+  }
+  KodoSettingsPanel.instance?.update({ agents: parseAgentsResponse(resp) });
+  const error = String(resp.error ?? '');
+  if (error) {
+    vscode.window.showErrorMessage(`Kōdo: could not delete this agent — ${error}`);
+  }
+}
+
+/** Read a source for installable agents (`agents.install_scan`), for the
+ * install modal's review step. Nothing is written by this call: a cloned source
+ * goes to a throwaway temp directory the server deletes before replying. */
+async function scanAgentSourceForPanel(source: string): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('agents.install_scan', { source }, 70_000);
+  } catch {
+    KodoSettingsPanel.instance?.update({
+      agentScan: {
+        source,
+        ok: false,
+        candidates: [],
+        conflicts: '',
+        error: 'Could not reach the server.',
+      },
+    });
+    return;
+  }
+  const list = Array.isArray(resp.candidates)
+    ? (resp.candidates as Record<string, unknown>[])
+    : [];
+  KodoSettingsPanel.instance?.update({
+    agentScan: {
+      source,
+      ok: resp.ok === true,
+      candidates: list.map((c) => ({
+        name: String(c.name ?? ''),
+        kind: String(c.kind ?? 'agent'),
+        version: String(c.version ?? ''),
+        installedVersion: String(c.installed_version ?? ''),
+        error: String(c.error ?? ''),
+      })),
+      conflicts: String(resp.conflicts ?? ''),
+      error: String(resp.error ?? ''),
+    },
+  });
+}
+
+/** Install from a source (`agents.install`). `replace` is the user's answer to
+ * the keep-or-replace question, applying to every conflicting entry. The server
+ * reloads its registry before replying, so a newly installed agent is
+ * selectable immediately — the refreshed listing on the ack is what the table
+ * redraws from. */
+async function installAgentsFromPanel(source: string, replace: boolean): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('agents.install', { source, replace }, 70_000);
+  } catch {
+    KodoSettingsPanel.instance?.update({
+      agentInstall: {
+        source,
+        ok: false,
+        installed: [],
+        kept: [],
+        skipped: [],
+        missing: [],
+        error: 'Could not reach the server.',
+      },
+    });
+    return;
+  }
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map((v) => String(v)) : [];
+  KodoSettingsPanel.instance?.update({
+    agents: parseAgentsResponse(resp),
+    agentInstall: {
+      source,
+      ok: resp.ok === true,
+      installed: strings(resp.installed),
+      kept: strings(resp.kept),
+      skipped: strings(resp.skipped),
+      missing: strings(resp.missing),
+      error: String(resp.error ?? ''),
+    },
+  });
+}
+
+/** Rebuild the server's agent registry (`agents.reload`), for a bundle the user
+ * edited by hand. A failed reload leaves the previous working set live, so this
+ * reports the error rather than treating it as a broken session. */
+async function reloadAgentsFromPanel(): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('agents.reload', {});
+  } catch {
+    vscode.window.showErrorMessage('Kōdo: could not reach the server to reload agents.');
+    return;
+  }
+  KodoSettingsPanel.instance?.update({ agents: parseAgentsResponse(resp) });
+  const error = String(resp.error ?? '');
+  if (error) {
+    vscode.window.showErrorMessage(`Kōdo: agents could not be reloaded — ${error}`);
+  }
+}
+
+/** "Install from a local folder…" — a native folder picker whose result is fed
+ * back into the same install modal as a repository URL would be, so the
+ * keep-or-replace step is never skipped just because the source is local. */
+async function pickAgentSource(): Promise<void> {
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'Use this folder',
+    title: 'Choose a folder holding an agent bundle',
+  });
+  if (!picked || picked.length === 0) {
+    return;
+  }
+  KodoSettingsPanel.instance?.openInstallAgents(picked[0].fsPath);
+}
+
 /** Open (or reveal) the Kōdo Settings panel, seeded with the current global
  * rules, stuck-detection settings, sessions and skills fetched up-front (the
  * llama.cpp latest-build check is the one thing that is NOT awaited — see
@@ -157,14 +355,16 @@ export async function openKodoSettings(
   selectSection?: string,
   configureEntry?: string,
 ): Promise<void> {
-  const [rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, skills] = await Promise.all([
-    fetchGlobalRules(),
-    fetchStuckDetection(),
-    fetchHousekeeperLlm(),
-    fetchDefaultAgent(),
-    fetchSessionsForPanel(),
-    fetchSkillsForPanel(),
-  ]);
+  const [rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, skills, agents] =
+    await Promise.all([
+      fetchGlobalRules(),
+      fetchStuckDetection(),
+      fetchHousekeeperLlm(),
+      fetchDefaultAgent(),
+      fetchSessionsForPanel(),
+      fetchSkillsForPanel(),
+      fetchAgentsForPanel(),
+    ]);
   // The one deliberate exception to "fetch before opening": the llama.cpp
   // version check is started here but never awaited — awaiting it delayed the
   // whole panel by however long the server's GitHub Releases scan took
@@ -201,6 +401,7 @@ export async function openKodoSettings(
     state.extensionContext!.extensionUri,
     {
       rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, sessionRules: null, skills,
+      agents, agentScan: null, agentInstall: null,
       llamaCpp: llamaCppInfoForPanel(),
       skillScan: null, skillInstall: null,
       uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
@@ -216,7 +417,7 @@ export async function openKodoSettings(
   // while the "Session Settings" modal state is stale just means its next
   // gear-icon click re-fetches, no need to blow away a matching one.
   panel.update({
-    rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, skills, uiSettings,
+    rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, skills, agents, uiSettings,
     llamaCpp: llamaCppInfoForPanel(),
     hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
   });
@@ -612,6 +813,30 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'install_local_skill_pick') {
     await installLocalSkillPicked();
+    return;
+  }
+  if (msg.type === 'open_agent') {
+    await openAgentFolder(msg.path);
+    return;
+  }
+  if (msg.type === 'delete_agent') {
+    await deleteAgentFromSettingsPanel(msg.name, msg.kind);
+    return;
+  }
+  if (msg.type === 'scan_agent_source') {
+    await scanAgentSourceForPanel(msg.source);
+    return;
+  }
+  if (msg.type === 'install_agents') {
+    await installAgentsFromPanel(msg.source, msg.replace);
+    return;
+  }
+  if (msg.type === 'pick_agent_source') {
+    await pickAgentSource();
+    return;
+  }
+  if (msg.type === 'reload_agents') {
+    await reloadAgentsFromPanel();
     return;
   }
   if (msg.type === 'fetch_session_rules') {

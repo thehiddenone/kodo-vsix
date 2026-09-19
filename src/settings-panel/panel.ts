@@ -160,6 +160,14 @@ export class KodoSettingsPanel {
     void this.panel.webview.postMessage({ type: 'configure_local_model', name });
   }
 
+  /** Open the "Install agents" modal with *source* already filled in — the
+   * reply to a `pick_agent_source` message. One-shot for the same reason
+   * `configureLocalModel` is: folding it into persisted state would re-open the
+   * modal on every unrelated `update()` push. */
+  openInstallAgents(source: string): void {
+    void this.panel.webview.postMessage({ type: 'open_install_agents', source });
+  }
+
   /** Reply to a `pick_gguf_file` message with the path chosen in the native dialog (or `null` if cancelled). */
   postGgufFilePicked(path: string | null): void {
     void this.panel.webview.postMessage({ type: 'gguf_file_picked', path });

@@ -108,6 +108,66 @@ export interface SkillInstallResult {
   error: string;
 }
 
+/** One row of the Kōdo Settings panel's "Agents" table — one **user-installed**
+ * agent or sub-agent under `~/.kodo/agents` (kodo/doc/USER_AGENTS.md,
+ * WS_PROTOCOL.md §7.6l). Built-in agents are deliberately absent: they are not
+ * the user's to delete, and the picker already publishes them through
+ * `hello.ack`. An entry that failed to load is still listed, with a non-empty
+ * `error`, so a broken bundle is visible and deletable. */
+export interface AgentEntry {
+  name: string;
+  /** `'agent'` for a top-level agent, `'subagent'` for one it delegates to. */
+  kind: string;
+  /** The `version:` its prompt declares; empty when it declares none. */
+  version: string;
+  /** Picker label for a top-level agent; the display name otherwise. */
+  label: string;
+  description: string;
+  /** Absolute path of the bundle directory (or the prompt, for a sub-agent). */
+  path: string;
+  /** Empty for a healthy entry; the load failure otherwise. */
+  error: string;
+}
+
+/** The "Agents" section's whole state. `root` is the server-reported agents
+ * directory (`~/.kodo/agents`) — never rebuilt client-side. */
+export interface AgentsState {
+  root: string;
+  agents: AgentEntry[];
+}
+
+/** One entry a source offers, from `agents.install_scan`
+ * (kodo/doc/WS_PROTOCOL.md §7.6l). */
+export interface AgentScanEntry {
+  name: string;
+  kind: string;
+  version: string;
+  installedVersion: string;
+  error: string;
+}
+
+/** The outcome of one `agents.install_scan` request. `conflicts` is the
+ * server-rendered existing-vs-incoming list, so every surface asks the
+ * keep-or-replace question the same way. */
+export interface AgentScanResult {
+  source: string;
+  ok: boolean;
+  candidates: AgentScanEntry[];
+  conflicts: string;
+  error: string;
+}
+
+/** The outcome of one `agents.install` request. */
+export interface AgentInstallResult {
+  source: string;
+  ok: boolean;
+  installed: string[];
+  kept: string[];
+  skipped: string[];
+  missing: string[];
+  error: string;
+}
+
 /** The `stuck_detection` settings block (kodo/doc/SETTINGS.md §2.6,
  * kodo/doc/WS_PROTOCOL.md §7.6d) — backs the Kōdo Settings panel's
  * "General" section. */
@@ -300,6 +360,9 @@ export interface KodoSettingsState {
    * `null` until each has fired at least once for the modal currently open. */
   skillScan: SkillScanResult | null;
   skillInstall: SkillInstallResult | null;
+  agents: AgentsState;
+  agentScan: AgentScanResult | null;
+  agentInstall: AgentInstallResult | null;
   uiSettings: UiSettings;
   /** Configured HuggingFace tokens. */
   hfTokens: HfTokenEntry[];
@@ -392,6 +455,12 @@ export type KodoSettingsMessage =
   | { type: 'scan_skill_repo'; repoUrl: string }
   | { type: 'install_skills'; repoUrl: string; install: { name: string; overwrite: boolean }[] }
   | { type: 'install_local_skill_pick' }
+  | { type: 'open_agent'; path: string }
+  | { type: 'delete_agent'; name: string; kind: string }
+  | { type: 'scan_agent_source'; source: string }
+  | { type: 'install_agents'; source: string; replace: boolean }
+  | { type: 'pick_agent_source' }
+  | { type: 'reload_agents' }
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }

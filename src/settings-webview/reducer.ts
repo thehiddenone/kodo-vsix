@@ -18,6 +18,9 @@ export const initial: KodoSettingsState = {
   skills: { root: '', skills: [] },
   skillScan: null,
   skillInstall: null,
+  agents: { root: '', agents: [] },
+  agentScan: null,
+  agentInstall: null,
   uiSettings: {
     showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h', enterSubmits: true, autoScroll: 'auto',
     showAllLocalLlmQuants: false,

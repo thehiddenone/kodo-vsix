@@ -60,6 +60,77 @@ export interface SessionRulesState {
   rules: GlobalRuleEntry[];
 }
 
+/** One row of the Kōdo Settings panel's "Agents" table — one **user-installed**
+ * agent or sub-agent under `~/.kodo/agents` (kodo/doc/USER_AGENTS.md,
+ * WS_PROTOCOL.md §7.6l). Built-in agents are deliberately absent: they are not
+ * the user's to delete, and the picker already publishes them through
+ * `hello.ack`.
+ *
+ * `name` is the entry's identity — a top-level agent's directory name, or a
+ * sub-agent's `subagent_<name>.md` stem — and is what Delete acts on. An entry
+ * that failed to load is still listed, with a non-empty `error`, so a broken
+ * bundle is visible and deletable rather than silently missing. */
+export interface AgentEntry {
+  name: string;
+  /** `'agent'` for a top-level agent, `'subagent'` for one it delegates to. */
+  kind: string;
+  /** The `version:` its prompt declares; empty when it declares none. */
+  version: string;
+  /** Picker label for a top-level agent; the display name otherwise. */
+  label: string;
+  description: string;
+  /** Absolute path of the bundle directory (or the prompt, for a sub-agent). */
+  path: string;
+  /** Empty for a healthy entry; the load failure otherwise. */
+  error: string;
+}
+
+/** The "Agents" section's whole state. `root` is the server-reported agents
+ * directory (`~/.kodo/agents`), shown in the intro so the user knows where a
+ * bundle goes — never rebuilt client-side. */
+export interface AgentsState {
+  root: string;
+  agents: AgentEntry[];
+}
+
+/** One entry a source offers, from `agents.install_scan`
+ * (kodo/doc/WS_PROTOCOL.md §7.6l). A non-empty `installedVersion` is the
+ * existing-vs-incoming decision the modal puts to the user; a non-empty `error`
+ * is an entry that cannot be installed at all, listed with its reason rather
+ * than dropped. */
+export interface AgentScanEntry {
+  name: string;
+  kind: string;
+  version: string;
+  installedVersion: string;
+  error: string;
+}
+
+/** The outcome of one `agents.install_scan` request. `null` until the modal's
+ * first scan reply arrives; `source` lets the modal tell a reply for the source
+ * it currently has open apart from a stale one left over from a prior scan.
+ * `conflicts` is the server-rendered existing-vs-incoming list — rendered there
+ * so every surface asks the keep-or-replace question the same way. */
+export interface AgentScanResult {
+  source: string;
+  ok: boolean;
+  candidates: AgentScanEntry[];
+  conflicts: string;
+  error: string;
+}
+
+/** The outcome of one `agents.install` request — the modal's final
+ * "here's what happened" step. `null` until the first install reply arrives. */
+export interface AgentInstallResult {
+  source: string;
+  ok: boolean;
+  installed: string[];
+  kept: string[];
+  skipped: string[];
+  missing: string[];
+  error: string;
+}
+
 /** One row of the Kōdo Settings panel's "Skills" table — one installed Agent
  * Skill under `~/.kodo/skills` (kodo/doc/SKILLS.md, WS_PROTOCOL.md §7.6j).
  * `name` is the skill's *directory* name, which is its identity: it is what
@@ -372,6 +443,9 @@ export interface KodoSettingsState {
   skills: SkillsState;
   skillScan: SkillScanResult | null;
   skillInstall: SkillInstallResult | null;
+  agents: AgentsState;
+  agentScan: AgentScanResult | null;
+  agentInstall: AgentInstallResult | null;
   uiSettings: UiSettings;
   hfTokens: HfTokenEntry[];
   cloudRegistry: CloudRegistry;
@@ -490,6 +564,7 @@ export const NAV: NavEntry[] = [
   { key: 'general', label: 'General' },
   { key: 'sessions', label: 'Sessions' },
   { key: 'skills', label: 'Skills' },
+  { key: 'agents', label: 'Agents' },
   { key: 'global-rules', label: 'Global Allow-Rules' },
   { key: 'local-inference', label: 'Local Inference' },
   ...CLOUD_VENDOR_KEYS.map((key) => ({ key, label: `${CLOUD_VENDORS[key].icon} ${CLOUD_VENDORS[key].label}` })),
@@ -524,6 +599,12 @@ export type OutboundMessage =
   | { type: 'scan_skill_repo'; repoUrl: string }
   | { type: 'install_skills'; repoUrl: string; install: { name: string; overwrite: boolean }[] }
   | { type: 'install_local_skill_pick' }
+  | { type: 'open_agent'; path: string }
+  | { type: 'delete_agent'; name: string; kind: string }
+  | { type: 'scan_agent_source'; source: string }
+  | { type: 'install_agents'; source: string; replace: boolean }
+  | { type: 'pick_agent_source' }
+  | { type: 'reload_agents' }
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }
@@ -566,4 +647,5 @@ export type InboundMessage =
    *  the Default-profile knobs modal for `name`. One-shot, never part of
    *  `KodoSettingsState` (see `KodoSettingsPanel.configureLocalModel`). */
   | { type: 'configure_local_model'; name: string }
-  | { type: 'gguf_file_picked'; path: string | null };
+  | { type: 'gguf_file_picked'; path: string | null }
+  | { type: 'open_install_agents'; source: string };

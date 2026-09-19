@@ -95,6 +95,9 @@ export function coerceAgentCatalog(value: unknown): AgentRow[] {
  *
  * The version this replaces mapped anything that was not `'problem_solving'` to
  * `'guided'`, which is exactly why a `judge` session displayed as "Guided".
+ * Staying catalog-blind is also what lets a **user-installed** agent
+ * (kodo/doc/USER_AGENTS.md) display correctly the moment it is installed,
+ * without the client learning any of its names.
  */
 export function coerceTopAgent(value: unknown, fallback: string): string {
   return typeof value === 'string' && value ? value : fallback;

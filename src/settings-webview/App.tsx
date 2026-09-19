@@ -9,6 +9,8 @@ import { ConfigureModal } from './ConfigureModal';
 import { GeneralSection } from './GeneralSection';
 import { ProfileModal } from './ProfileModal';
 import { GlobalRulesSection } from './GlobalRulesSection';
+import { AgentsSection } from './AgentsSection';
+import { InstallAgentsModal } from './InstallAgentsModal';
 import { InstallSkillsModal } from './InstallSkillsModal';
 import { LocalInferenceSection } from './LocalInferenceSection';
 import { Nav } from './Nav';
@@ -31,6 +33,10 @@ export function App() {
   const [filePickedPath, setFilePickedPath] = useState<string | null>(null);
   const [serverModalOpen, setServerModalOpen] = useState(false);
   const [installSkillsModalOpen, setInstallSkillsModalOpen] = useState(false);
+  // Holds the source to pre-fill when the user picked a local folder, so one
+  // modal serves both entry points and the keep-or-replace step is never
+  // skipped just because the source happened to be local.
+  const [installAgentsSource, setInstallAgentsSource] = useState<string | null>(null);
   // Which LLM's Configure (Default-profile knobs) modal is open, and which
   // LLM's Manage-profiles modal is open — separate, since they are two
   // different editors reachable from the same card (and from the sidebar's
@@ -51,6 +57,14 @@ export function App() {
       }
       if (data.type === 'select_section') {
         setSelectedKey(data.key);
+        return;
+      }
+      if (data.type === 'open_install_agents') {
+        // Reply to `pick_agent_source` — the native folder picker's result,
+        // fed into the same modal a repository URL goes through so the
+        // keep-or-replace step is never skipped for a local source.
+        setSelectedKey('agents');
+        setInstallAgentsSource(data.source);
         return;
       }
       if (data.type === 'configure_local_model') {
@@ -84,12 +98,14 @@ export function App() {
       if (configureEntryName) { setConfigureEntryName(null); }
       if (profileEntryName) { setProfileEntryName(null); }
       if (installSkillsModalOpen) { setInstallSkillsModalOpen(false); }
+      if (installAgentsSource !== null) { setInstallAgentsSource(null); }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     sessionSettingsFor, addTokenModalOpen, addKeyModalVendor, hfModalOpen, fileModalOpen,
     serverModalOpen, configureEntryName, profileEntryName, installSkillsModalOpen,
+    installAgentsSource,
   ]);
 
   function openSessionSettings(sessionId: string) {
@@ -119,6 +135,9 @@ export function App() {
         )}
         {selectedKey === 'sessions' && (
           <SessionsSection sessions={state.sessions} onOpenSettings={openSessionSettings} />
+        )}
+        {selectedKey === 'agents' && (
+          <AgentsSection agents={state.agents} onInstallClick={() => setInstallAgentsSource('')} />
         )}
         {selectedKey === 'skills' && (
           <SkillsSection skills={state.skills} onInstallClick={() => setInstallSkillsModalOpen(true)} />
@@ -198,6 +217,14 @@ export function App() {
           entry={profileEntry}
           llamaArgCatalog={state.llamaArgCatalog}
           onClose={() => setProfileEntryName(null)}
+        />
+      )}
+      {installAgentsSource !== null && (
+        <InstallAgentsModal
+          initialSource={installAgentsSource}
+          scan={state.agentScan}
+          install={state.agentInstall}
+          onClose={() => setInstallAgentsSource(null)}
         />
       )}
       {installSkillsModalOpen && (
