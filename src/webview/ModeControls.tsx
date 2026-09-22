@@ -1,9 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { ComponentChildren } from 'preact';
 import type { ThinkingFamily } from '../llm-registry-types';
 import { styles } from './styles';
 import { vscode } from './vscode';
-import type { AgentRow, EditControl, CommandControl } from './types';
+import type { EditControl, CommandControl } from './types';
+import { MenuGroup, MenuOption, frozenNote, useMenuPopup } from './MenuPrimitives';
 
 /**
  * Description of what each Mode choice does. These are *prefix-free*: the
@@ -260,26 +259,6 @@ function _thinkingNote(family: ThinkingFamily | null, hasTiers: boolean): string
 }
 
 /**
- * The note printed under the Agent/Mode headings. Both are frozen for the
- * duration of a running turn: while a turn is in flight and the user's
- * selection differs from the value that turn is actually using, the change is
- * queued for the next prompt. Empty string when selection and effect agree (or
- * nothing is running), which is the overwhelmingly common case.
- */
-/** A top-level agent's picker label, falling back to its bare name.
- *
- *  The fallback is reachable for an agent the server accepted but left out of
- *  the catalog — `judge`, which is registered but not selectable. Showing the
- *  name beats showing nothing, or showing the wrong agent's label. */
-function _agentLabel(agents: AgentRow[], name: string): string {
-  return agents.find((a) => a.name === name)?.label ?? name;
-}
-
-function _frozenNote(pending: boolean, effectiveName: string): string {
-  return pending ? `Queued for the next prompt — currently ${effectiveName}.` : '';
-}
-
-/**
  * The note printed under the Edit Control / Tool Control headings. Neither is
  * frozen per turn, but both are forced to a fixed posture while Autonomous is
  * in effect — the rows still show the user's own selection (which is what
@@ -290,94 +269,9 @@ function _lockedNote(locked: boolean, lockedName: string): string {
   return locked ? `Locked to ${lockedName} while Autonomous mode is in effect.` : '';
 }
 
-/** One single-choice group: its heading, an optional status/lock note, and the
- *  option rows. Groups are separated by a rule, drawn by the caller.
- *
- *  The note sits to the *right of the title, on the same line*. Notes come and
- *  go with session state — a turn starting freezes Agent/Mode, Autonomous locks
- *  Edit/Tool Control, a model switch can withdraw Thinking — so giving one its
- *  own line would grow and shrink the group by a line each time, shifting every
- *  row below it while the menu is open under the user's pointer. Sharing the
- *  heading's line makes appearing and disappearing free. */
-function MenuGroup({
-  title,
-  note,
-  children,
-}: {
-  title: string;
-  note: string;
-  children: ComponentChildren;
-}) {
-  return (
-    <div role="group" aria-label={title}>
-      <div style={styles.sessionGroupHeader}>
-        <span style={styles.sessionGroupTitle}>{title}</span>
-        {note !== '' && <span style={styles.sessionGroupNote}>{note}</span>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/**
- * One radio row: the ◉/○ marker, the option's name, and its description
- * underneath. Disabled rows still render their marker, so a locked group shows
- * what is selected while refusing to change it.
- *
- * Hover highlighting is tracked in state rather than left to `:hover`, because
- * VS Code webviews style everything here inline — the same reason
- * FooterButton fakes `:active`.
- */
-function MenuOption({
-  label,
-  desc,
-  selected,
-  disabled,
-  onSelect,
-}: {
-  label: string;
-  desc: string;
-  selected: boolean;
-  disabled: boolean;
-  onSelect: () => void;
-}) {
-  const [hover, setHover] = useState(false);
-  const style = {
-    ...styles.sessionOption,
-    ...(disabled ? styles.sessionOptionDisabled : {}),
-    ...(hover && !disabled ? styles.sessionOptionHover : {}),
-  };
-  return (
-    <button
-      type="button"
-      style={style}
-      role="menuitemradio"
-      aria-checked={selected}
-      disabled={disabled}
-      onClick={onSelect}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
-      <span style={styles.sessionRadio} aria-hidden="true">
-        {selected ? '◉' : '○'}
-      </span>
-      <span>
-        <span style={styles.sessionOptionLabel}>{label}</span>
-        {desc !== '' && <div style={styles.sessionOptionDesc}>{desc}</div>}
-      </span>
-    </button>
-  );
-}
-
 interface ModeControlsProps {
   autonomous: boolean;
   effectiveAutonomous: boolean;
-  /** The selected top-level agent's name, and the one the in-flight prompt
-   *  is actually running under. */
-  topAgent: string;
-  effectiveTopAgent: string;
-  /** Selectable agents in picker order, straight from the server. */
-  agents: AgentRow[];
   editControl: EditControl;
   commandControl: CommandControl;
   /** True while Autonomous is in effect: Edit/Command are forced and locked. */
@@ -394,11 +288,14 @@ interface ModeControlsProps {
 }
 
 /**
- * The "Session Parameters" button and the popup it opens, holding the five
- * per-session single-choice groups (Agent, Mode, Edit Control, Tool Control,
+ * The "Session Parameters" button and the popup it opens, holding the four
+ * per-session single-choice groups (Mode, Edit Control, Tool Control,
  * Thinking). It replaced a stack of five cycling toggle buttons — the
  * groups, their values and the messages they post are unchanged, so there is no
- * protocol change; only the way you reach them is new.
+ * protocol change; only the way you reach them is new. Agent split out into
+ * its own button (`AgentButton.tsx`) once its catalog moved from a one-shot
+ * `hello.ack` field to an on-demand fetch triggered by opening that button
+ * specifically — see doc/WS_PROTOCOL.md §7.4g.
  *
  * Picking an option applies it immediately (exactly as clicking a toggle did)
  * and leaves the popup open, so several settings can be changed in one visit.
@@ -406,16 +303,13 @@ interface ModeControlsProps {
  * widget.
  *
  * This renders only the button and its popup, NOT the composer's left column:
- * the column (`styles.sessionCol`) is App.tsx's, because the two buttons
- * beneath this one — Sampling Parameters and Kōdo Settings — are driven by
- * state and handlers that live there.
+ * the column (`styles.sessionCol`) is App.tsx's, because the other buttons
+ * beside this one — Agent and Sampling Parameters — are driven by state and
+ * handlers that live there (or, for Agent, in `AgentButton.tsx`).
  */
 export function ModeControls({
   autonomous,
   effectiveAutonomous,
-  topAgent,
-  effectiveTopAgent,
-  agents,
   editControl,
   commandControl,
   editCommandLocked,
@@ -425,73 +319,7 @@ export function ModeControls({
   connected,
   running,
 }: ModeControlsProps) {
-  const [open, setOpen] = useState(false);
-  // Space above the button, measured on open: the popup grows upward out of the
-  // bottom of the WebView, so on a short panel it must scroll internally rather
-  // than run off the top. Null until measured (the first paint of a freshly
-  // opened menu), which is also what a `null` maxHeight renders as: uncapped.
-  const [maxHeight, setMaxHeight] = useState<number | null>(null);
-  // Wraps button + popup; every close rule below is "did this happen outside
-  // *this* element?".
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setMaxHeight(null);
-      return;
-    }
-    const el = wrapRef.current;
-    if (el === null) {
-      return;
-    }
-    // The popup's bottom edge sits on the button's top edge, so the room it has
-    // is everything above that, less a small margin off the top of the view.
-    setMaxHeight(Math.max(120, el.getBoundingClientRect().top - 12));
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const outside = (target: EventTarget | null): boolean =>
-      wrapRef.current === null || !(target instanceof Node) || !wrapRef.current.contains(target);
-    // mousedown, not click: the menu should be gone by the time the click lands
-    // on whatever was pressed, and a press that drags out of the popup still
-    // counts as dismissing it.
-    const onMouseDown = (e: MouseEvent) => {
-      if (outside(e.target)) {
-        setOpen(false);
-      }
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-      }
-    };
-    // Focus moving to any other widget (the prompt textarea, a footer button,
-    // anything outside the popup) dismisses it too.
-    const onFocusIn = (e: FocusEvent) => {
-      if (outside(e.target)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('focusin', onFocusIn);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('focusin', onFocusIn);
-    };
-  }, [open]);
-
-  // A disconnected session can change nothing, so the button refuses to open —
-  // and closes an open popup if the connection drops under it.
-  useEffect(() => {
-    if (!connected) {
-      setOpen(false);
-    }
-  }, [connected]);
+  const { open, setOpen, wrapRef, menuStyle } = useMenuPopup(connected);
 
   // Bound to a `const` before the null check so the narrowing survives into the
   // `.map` callback below — TypeScript drops a *parameter*'s narrowing inside a
@@ -505,8 +333,6 @@ export function ModeControls({
           label: _tierName(family, tier),
           desc: _tierDesc(family, tier),
         }));
-  const menuStyle =
-    maxHeight === null ? styles.sessionMenu : { ...styles.sessionMenu, maxHeight: `${maxHeight}px` };
 
   return (
     <div style={styles.sessionBtnWrap} ref={wrapRef}>
@@ -523,24 +349,8 @@ export function ModeControls({
       {open && (
         <div style={menuStyle} role="menu" aria-label="Session settings">
           <MenuGroup
-            title="Agent"
-            note={_frozenNote(running && topAgent !== effectiveTopAgent, _agentLabel(agents, effectiveTopAgent))}
-          >
-            {agents.map((agent) => (
-              <MenuOption
-                key={agent.name}
-                label={agent.label}
-                desc={agent.description}
-                selected={agent.name === topAgent}
-                disabled={false}
-                onSelect={() => vscode.postMessage({ type: 'agent_set', name: agent.name })}
-              />
-            ))}
-          </MenuGroup>
-          <hr style={styles.sessionGroupDivider} />
-          <MenuGroup
             title="Mode"
-            note={_frozenNote(
+            note={frozenNote(
               running && autonomous !== effectiveAutonomous,
               effectiveAutonomous ? 'Autonomous' : 'Interactive',
             )}

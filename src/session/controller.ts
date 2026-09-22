@@ -299,12 +299,6 @@ export class SessionController {
       case 'delete_session':
         void this._confirmAndDelete();
         break;
-      case 'open_kodo_settings':
-        // The composer's ⚙ button. Routed through the registered command
-        // rather than `openKodoSettings()` directly, so the session view has
-        // no dependency on the settings panel's module.
-        void vscode.commands.executeCommand('kodo.openSettings');
-        break;
       case 'reconnect_workspace':
         void this._confirmAndReconnectWorkspace();
         break;
@@ -319,6 +313,12 @@ export class SessionController {
         break;
       case 'agent_set':
         this.modeToggle.setTopAgent(String(msg.name ?? ''));
+        break;
+      case 'agents_refresh':
+        // The Agent button's popup just opened — ask the server for a fresh
+        // catalog (doc/WS_PROTOCOL.md §7.4g). The webview already renders
+        // whatever it cached from the last reply while this is in flight.
+        this.modeToggle.requestAgents();
         break;
       case 'edit_control_set':
         this.modeToggle.setEditControl(msg.editControl);
@@ -622,6 +622,13 @@ export class SessionController {
       return;
     }
 
+    if (env.kind === 'response' && evtType === 'top_agents.list.ack') {
+      // The Agent button's popup opened (`agents_refresh`) and asked for a
+      // fresh catalog — see doc/WS_PROTOCOL.md §7.4g.
+      this.modeToggle.applyTopAgentsList(env.payload);
+      return;
+    }
+
     if (env.kind === 'response' && evtType === 'session.delete.error') {
       // The server could not delete the session: hide the progress, keep the
       // tab open, and surface the error. (Nothing else happens.)
@@ -884,10 +891,14 @@ export class SessionController {
     // model's family default — doc/SESSIONS.md) — hydrate it uniformly.
     const state = env.payload.state as Record<string, unknown> | undefined;
     this.modeToggle.setThinkingLevelFromHello(String(state?.thinking_level ?? ''));
-    // The top-level agent catalog, before either branch below: both fall back
-    // to `default_agent` when the server reports no selection yet, and a new
-    // session's first `agent.set` sends it.
-    this.modeToggle.setCatalogFromHello(env.payload.agents, env.payload.default_agent);
+    // Fetch the agent catalog eagerly, once per connection, rather than
+    // waiting for the Agent button's popup to be opened: without this, the
+    // button shows the raw wire name ("kodo_problem_solver") until the user
+    // clicks it, since `topAgent` itself arrives with `state` independently of
+    // the catalog that resolves it to a label ("Problem Solver"). The popup
+    // still re-requests on every open (AgentButton.tsx) to pick up
+    // installs/deletions mid-session; this call only removes the initial gap.
+    this.modeToggle.requestAgents();
     // Same uniform-hydration reasoning as thinking_level: `sampling` is always
     // present in `state` (empty `{}` for a session that never tuned anything),
     // for both a new and a resumed session.

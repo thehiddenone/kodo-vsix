@@ -203,14 +203,23 @@ export const styles = {
     opacity: 0.6,
     flexShrink: 0,
   },
-  // Left column of the composer (composerRow): a single "Session" button that
-  // opens the session-menu popup (ModeControls.tsx), which holds the five
-  // per-session controls that used to be a stack of five cycling toggles.
+  // Left column of the composer (composerRow): the Agent button
+  // (AgentButton.tsx), the Session Parameters button (ModeControls.tsx, which
+  // holds the four remaining per-session controls that used to be a stack of
+  // five cycling toggles before Agent had its own popup), and Sampling
+  // Parameters.
   sessionCol: {
-    // COMPOSER_SIDE_WIDTH: the same `0 0 240px` composerRight carries — neither
-    // grows nor shrinks, so the two outer columns are exactly the same width at
-    // every panel size and only the centre column responds to width changes.
-    flex: '0 0 240px',
+    // 290px = SESSION_BTN_WIDTH (242px) + 24px of slack either side. This used
+    // to equal composerRight's own fixed 240px (both were "the same
+    // COMPOSER_SIDE_WIDTH"), but the two were deliberately decoupled when the
+    // buttons were widened by 50px to fit "Agent: <name>" without truncating —
+    // composerRight's own 56px-glyph buttons had no such problem and were left
+    // at 240px, so only this column grew. `composerCenter`'s `flex: 1 1 auto`
+    // absorbs the extra 50px on its own, and the 24px-of-slack symmetry with
+    // composerRight's inset (see that key's comment) is preserved because both
+    // the column and the buttons inside it grew by the same 50px — see
+    // `sessionBtn`.
+    flex: '0 0 290px',
     boxSizing: 'border-box' as const,
     // COMPOSER_GRID_HEIGHT: deliberately the same height as composerRight's
     // button grid (3 rows of 32px + 2 gaps of 8px = 112px), written as the same
@@ -222,14 +231,15 @@ export const styles = {
     height: 'calc(3 * 32px + 2 * 8px)',
     display: 'flex',
     flexDirection: 'column' as const,
-    // The three buttons — Session Parameters, Sampling Parameters, Kōdo
-    // Settings — are 32px tall with an 8px gap, i.e. exactly composerRight's
+    // The three buttons — Agent, Session Parameters, Sampling Parameters —
+    // are 32px tall with an 8px gap, i.e. exactly composerRight's
     // row track and row gap, so 3 × 32 + 2 × 8 fills this 112px box precisely
     // and each left button sits level with the grid row beside it. There is no
     // paddingRight (the old toggle column had one to line its ⓘ markers up with
-    // the right column's inset): the 192px buttons are centred in the 240px
+    // the right column's inset): the 242px buttons are centred in the 290px
     // column, leaving 24px of slack either side, which is exactly the inset
-    // composerRight uses — that symmetry is the point.
+    // composerRight uses — that symmetry is the point, and is why the column
+    // grew by the same 50px as the buttons rather than only the buttons.
     justifyContent: 'flex-start' as const,
     alignItems: 'center' as const,
     gap: '8px',
@@ -240,21 +250,21 @@ export const styles = {
   sessionBtnWrap: {
     position: 'relative' as const,
     // SESSION_BTN_WIDTH — must equal `sessionBtn`'s own width (this element
-    // wraps one of them) and composerRight's total grid width, which is the
-    // left/right symmetry the layout is built around. Wide enough for
-    // "Session Parameters" on one line at 14px (~126px of text plus the
-    // button's 16px of padding), with room to spare. It must stay under the
-    // column's 240px — `sessionCol` centres it, and the popup's maxWidth below
-    // is derived from the slack either side.
-    width: '192px',
+    // wraps one of them: Agent and Session Parameters each anchor a popup).
+    // 242px = the original 192px + 50px, widened so "Agent: <name>" fits
+    // without ellipsis-truncating for the longer built-in agent names. It must
+    // stay under the column's 290px — `sessionCol` centres it, and the popup's
+    // maxWidth below is derived from the slack either side.
+    width: '242px',
     flex: 'none' as const,
   },
   sessionBtn: {
-    // SESSION_BTN_WIDTH, stated outright rather than as `100%`: two of the
-    // three buttons that use this style sit directly in `sessionCol` (a 240px
-    // flex column), where `100%` would stretch them to 240px. Only the Session
-    // Parameters button is wrapped in a 192px `sessionBtnWrap`.
-    width: '192px',
+    // SESSION_BTN_WIDTH, stated outright rather than as `100%`: one of the
+    // three buttons that uses this style (Sampling Parameters) sits directly
+    // in `sessionCol` (a 290px flex column), where `100%` would stretch it to
+    // 290px. Agent and Session Parameters are each wrapped in a 242px
+    // `sessionBtnWrap` instead, since each anchors its own popup.
+    width: '242px',
     // Matches composerRight's 32px grid row, so the three left buttons line up
     // with the three button rows across the textarea.
     height: '32px',
@@ -269,7 +279,7 @@ export const styles = {
     cursor: 'pointer',
     // The neutral, grey-bordered treatment the ⚙ and 🎛 buttons used to carry in
     // the right-hand grid, inherited when those two moved into this column as
-    // "Kōdo Settings" and "Sampling Parameters": transparent ground,
+    // (former) "Kōdo Settings" and "Sampling Parameters": transparent ground,
     // descriptionForeground for both text and border. It reads as "opens a
     // surface" rather than "acts on the session", which is what all three of
     // these buttons do — and it sets them apart from the coloured, session-
@@ -302,10 +312,12 @@ export const styles = {
     // few words.
     width: '960px',
     // The popup's left edge sits at the button's left edge, which is 36px into
-    // the viewport (12px of `root` padding + 24px of slack left of the 192px
-    // button inside the 240px column). So cap on that offset plus a 12px right
-    // margin, not on a blanket `90vw` — which would overhang the right edge of
-    // a narrow panel. Re-derive this if the button's width changes.
+    // the viewport (12px of `root` padding + 24px of slack left of the 242px
+    // button inside the 290px column) — unchanged by the 50px widening, since
+    // both grew together and centring keeps the slack itself fixed at 24px. So
+    // cap on that offset plus a 12px right margin, not on a blanket `90vw` —
+    // which would overhang the right edge of a narrow panel. Re-derive this if
+    // the button's width changes without the column also growing to match.
     maxWidth: 'calc(100vw - 48px)',
     boxSizing: 'border-box' as const,
     overflowY: 'auto' as const,
@@ -1801,10 +1813,12 @@ export const styles = {
     display: 'flex',
     flexDirection: 'column' as const,
   },
-  // Right column: exactly as wide as the Session button column (the same
-  // COMPOSER_SIDE_WIDTH `0 0 240px`), holding a 2×3 grid of 56px × 32px cells
-  // inset from the centre column by 24px. Each button is explicitly placed
-  // (gridColumn/gridRow on its own style) rather than flowed.
+  // Right column: its own fixed `0 0 240px` — no longer the same width as
+  // `sessionCol` (290px, widened 50px for the Agent/Session Parameters
+  // buttons; see that key's comment), since nothing here has a text-fitting
+  // problem to solve — holding a 2×3 grid of 56px × 32px cells inset from the
+  // centre column by 24px. Each button is explicitly placed (gridColumn/
+  // gridRow on its own style) rather than flowed.
   //
   // Column 1 is the send button, spanning every row that reconnect does not
   // need; column 2 stacks attach / stop / delete. There is **no third column**:
@@ -1821,24 +1835,27 @@ export const styles = {
   // five-toggle stack that no longer exists.
   //
   // **What is symmetric here is the 24px inset, not the total width.** The grid
-  // measures 2 × 56 + 1 × 12 = 124px, well short of the left column's 192px of
+  // measures 2 × 56 + 1 × 12 = 124px, well short of the left column's 242px of
   // buttons, and the remaining ~92px is slack at the far right edge of the
   // panel — where there is nothing to align against, so it costs nothing. The
   // inset is what matters: it mirrors the 24px of slack left of the left
   // column's buttons, so the textarea is flanked by two identical 34px gutters
-  // (24px + composerRow's 10px gap). **That is the symmetry to preserve.**
+  // (24px + composerRow's 10px gap). **That is the symmetry to preserve** —
+  // and it is preserved regardless of `sessionCol`'s own total width, since
+  // that gutter is entirely a function of the 24px inset on each side, not of
+  // how wide the fixed columns are relative to each other.
   //
   // The buttons were briefly widened (90px cells, three-column 56px before
-  // that) to make the grid's total width literally equal SESSION_BTN_WIDTH.
-  // They looked oversized and were reverted; the options then were to spread
-  // them with an 80px column gap or to narrow the whole column and give the
-  // space to the textarea, and the user chose neither. So: **don't re-derive
-  // the cell width from 192px** — size the cells for the buttons and keep the
-  // inset at 24px.
+  // that) to make the grid's total width literally equal the left column's own
+  // button width. They looked oversized and were reverted; the options then
+  // were to spread them with an 80px column gap or to narrow the whole column
+  // and give the space to the textarea, and the user chose neither. So:
+  // **don't re-derive the cell width from the left column's button width** —
+  // size the cells for the buttons and keep the inset at 24px.
   composerRight: {
     flex: '0 0 240px',
     // border-box so the padding below eats *into* the 240px basis instead of
-    // adding to it — the two outer columns must stay exactly the same width.
+    // adding to it.
     boxSizing: 'border-box' as const,
     display: 'grid',
     gridTemplateColumns: 'repeat(2, 56px)',

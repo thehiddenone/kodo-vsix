@@ -28,6 +28,7 @@ import { PermissionPanel } from './PermissionPanel';
 import { StuckAlertPanel } from './StuckAlertPanel';
 import { FileReviewPanel } from './FileReviewPanel';
 import { ModeControls } from './ModeControls';
+import { AgentButton } from './AgentButton';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { SamplingModal } from './SamplingModal';
 import { FooterButton } from './FooterButton';
@@ -534,7 +535,6 @@ export function App() {
             topAgent: String(msg.topAgent ?? ''),
             effectiveTopAgent: String(msg.effectiveTopAgent ?? ''),
             agents: coerceAgentRows(msg.agents),
-            defaultAgent: String(msg.defaultAgent ?? ''),
             editControl: coerceEditControl(msg.editControl),
             commandControl: coerceCommandControl(msg.commandControl),
             editCommandLocked: Boolean(msg.editCommandLocked),
@@ -630,12 +630,6 @@ export function App() {
     // Confirmation + the actual window reload are driven by the extension
     // host (native dialog + `SessionDeps.reconnectWorkspace`).
     vscode.postMessage({ type: 'reconnect_workspace' });
-  }
-
-  function handleOpenKodoSettings() {
-    // The panel is a host-owned WebView (`kodo.openSettings`), not part of
-    // this session view — the host runs the command.
-    vscode.postMessage({ type: 'open_kodo_settings' });
   }
 
   function handleAttach() {
@@ -829,19 +823,23 @@ export function App() {
         />
       ) : (
         <div style={styles.composerRow}>
-          {/* Left column: three 192px buttons, each level with a row of the
-              right-hand grid. The first opens the session-parameters popup
-              (ModeControls owns it); the other two are the former 🎛 and ⚙
-              buttons of that grid, moved here and given their full names. The
-              column itself lives here rather than in ModeControls because
-              these two are driven by App's state and handlers. */}
+          {/* Left column: three 242px buttons, each level with a row of the
+              right-hand grid. Agent and Session Parameters each open their own
+              anchored popup (AgentButton / ModeControls); Sampling Parameters
+              opens a modal instead. The column itself lives here rather than
+              in either button's own component because Sampling Parameters is
+              driven by App's own state and handlers. */}
           <div style={styles.sessionCol}>
-            <ModeControls
-              autonomous={state.autonomous}
-              effectiveAutonomous={state.effectiveAutonomous}
+            <AgentButton
               topAgent={state.topAgent}
               effectiveTopAgent={state.effectiveTopAgent}
               agents={state.agents}
+              connected={state.connected}
+              running={state.running}
+            />
+            <ModeControls
+              autonomous={state.autonomous}
+              effectiveAutonomous={state.effectiveAutonomous}
               editControl={state.editControl}
               commandControl={state.commandControl}
               editCommandLocked={state.editCommandLocked}
@@ -870,14 +868,6 @@ export function App() {
               }
             >
               Sampling Parameters
-            </button>
-            <button
-              type="button"
-              style={styles.sessionBtn}
-              onClick={handleOpenKodoSettings}
-              title="Open Kōdo Settings"
-            >
-              Kōdo Settings
             </button>
           </div>
           {/* Centre column: the prompt box (the only part that grows) over a

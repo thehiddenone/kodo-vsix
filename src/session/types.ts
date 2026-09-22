@@ -42,7 +42,9 @@ export interface UiSettings {
 }
 
 /**
- * One selectable top-level agent, as `hello.ack`'s `agents` catalog lists it.
+ * One selectable top-level agent, as `top_agents.list.ack`'s `agents` catalog
+ * lists it (kodo/doc/WS_PROTOCOL.md §7.4g) — fetched on demand, each time the
+ * webview's Agent button popup opens, rather than once at `hello.ack`.
  *
  * The client renders one picker row per entry and hardcodes no names of its
  * own — adding an agent server-side is meant to need no change here.
@@ -58,7 +60,7 @@ export interface AgentRow {
   rank: number;
 }
 
-/** Read the `agents` catalog out of an untyped `hello.ack` payload. */
+/** Read the `agents` catalog out of an untyped `top_agents.list.ack` payload. */
 export function coerceAgentCatalog(value: unknown): AgentRow[] {
   if (!Array.isArray(value)) {
     return [];

@@ -33,12 +33,15 @@ export class ModeToggleController {
   private effectiveAutonomous = false;
   private topAgent = '';
   private effectiveTopAgent = '';
-  // The server's catalog of selectable top-level agents, adopted from
-  // `hello.ack` before any session state is applied. The picker renders one row
-  // per entry, so which agents exist — and which one a new session starts on —
-  // is entirely the server's answer; nothing here names one.
+  // The server's catalog of selectable top-level agents. Empty only for the
+  // brief gap before the first `top_agents.list.ack` arrives — requested
+  // eagerly once per connection right after `hello.ack` (controller.ts's
+  // `_onHelloAck`), and again every time the Agent button's popup opens.
+  // `applyTopAgentsList` replaces this wholesale with each reply
+  // (doc/WS_PROTOCOL.md §7.4g), rather than pushing it once at `hello.ack`
+  // itself — so a since-deleted user agent disappears from the picker on the
+  // next open, never merged in alongside stale entries.
   private agents: AgentRow[] = [];
-  private defaultAgent = '';
   private workspaceConnected_ = true;
   // Edit/Tool Control are NEVER frozen. The host owns them: it keeps the
   // user's *selected* posture, and derives the *shown* value — which equals the
@@ -136,7 +139,6 @@ export class ModeToggleController {
       topAgent: this.topAgent,
       effectiveTopAgent: this.effectiveTopAgent,
       agents: this.agents,
-      defaultAgent: this.defaultAgent,
       editControl: this.editShown(),
       commandControl: this.commandShown(),
       editCommandLocked: this.autonomousInEffect(),
@@ -167,7 +169,10 @@ export class ModeToggleController {
     // server, which only echoes back the shown value we last sent).
     this.autonomous = Boolean(payload.autonomous ?? false);
     this.effectiveAutonomous = Boolean(payload.effective_autonomous ?? this.autonomous);
-    this.topAgent = coerceTopAgent(payload.top_agent, this.defaultAgent);
+    // Falls back to whatever this already held (never a hardcoded default —
+    // the server always sends a resolved `top_agent` in a real `state` dict) so
+    // a malformed/absent field can't blank out an otherwise-known selection.
+    this.topAgent = coerceTopAgent(payload.top_agent, this.topAgent);
     this.effectiveTopAgent = coerceTopAgent(
       payload.effective_top_agent ?? payload.top_agent,
       this.topAgent,
@@ -203,34 +208,39 @@ export class ModeToggleController {
     this.thinkingLevel = level;
   }
 
-  /**
-   * Adopt `hello.ack`'s top-level agent catalog.
-   *
-   * Must run **before** `applyNewSessionDefaults`/`applyResumedState`, which
-   * both fall back to `defaultAgent` when the server reports no selection yet.
-   */
-  setCatalogFromHello(agents: unknown, defaultAgent: unknown): void {
-    this.agents = coerceAgentCatalog(agents);
-    this.defaultAgent =
-      typeof defaultAgent === 'string' && defaultAgent
-        ? defaultAgent
-        : (this.agents[0]?.name ?? '');
+  /** `agents_refresh` webview message (the Agent button's popup opening):
+   *  ask the server for the current catalog. The reply lands in
+   *  `applyTopAgentsList`. */
+  requestAgents(): void {
+    this.send(makeRequest('top_agents.list', {}));
+  }
+
+  /** `top_agents.list.ack` response: replace the cached catalog wholesale —
+   *  never merged — so a since-deleted user agent (doc/USER_AGENTS.md)
+   *  disappears from the picker on the next open, not just newly-installed
+   *  ones appearing. */
+  applyTopAgentsList(payload: Record<string, unknown>): void {
+    this.agents = coerceAgentCatalog(payload.agents);
+    this.postModeState();
   }
 
   /** A blank session starts interactive, on the server's default agent, with
    *  Edit & Command Control at their Smart default — selected == effective,
-   *  nothing locked. Which agent that is comes from `hello.ack`, never a
-   *  literal here: the server and the picker must not disagree about it. */
+   *  nothing locked. `agent.set` is sent with an empty name: the client no
+   *  longer tracks a default agent of its own (the catalog is fetched lazily,
+   *  not at connect — doc/WS_PROTOCOL.md §7.4g), so the server resolves its
+   *  own default (`resolve_top_agent`) and the follow-up `state` event
+   *  (`applyStateEvent`) is what actually populates `topAgent`. */
   applyNewSessionDefaults(): void {
-    this.topAgent = this.defaultAgent;
-    this.effectiveTopAgent = this.defaultAgent;
+    this.topAgent = '';
+    this.effectiveTopAgent = '';
     this.autonomous = false;
     this.effectiveAutonomous = false;
     this.running = false;
     this.awaitingLlm = false;
     this.editControl = 'smart';
     this.commandControl = 'smart';
-    this.send(makeRequest('agent.set', { name: this.defaultAgent }));
+    this.send(makeRequest('agent.set', { name: '' }));
     this.syncEditCommandToServer();
     this.postModeState();
   }
@@ -250,7 +260,7 @@ export class ModeToggleController {
   applyResumedState(state: Record<string, unknown>): void {
     this.autonomous = Boolean(state.autonomous ?? false);
     this.effectiveAutonomous = Boolean(state.effective_autonomous ?? this.autonomous);
-    this.topAgent = coerceTopAgent(state.top_agent, this.defaultAgent);
+    this.topAgent = coerceTopAgent(state.top_agent, this.topAgent);
     this.effectiveTopAgent = coerceTopAgent(
       state.effective_top_agent ?? state.top_agent,
       this.topAgent,

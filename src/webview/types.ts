@@ -83,7 +83,8 @@ export function coerceAutoScrollMode(value: unknown): AutoScrollMode {
  * `ui_settings` message (see `session-controller.ts`'s `postUiSettings`).
  */
 /**
- * One selectable top-level agent, mirroring `hello.ack`'s `agents` catalog.
+ * One selectable top-level agent, mirroring the host's `top_agents.list.ack`
+ * catalog (kodo/doc/WS_PROTOCOL.md §7.4g).
  *
  * Declared here rather than imported from `src/session/types.ts`: the webview
  * is a separate bundle and shares no module graph with the extension host —
@@ -712,10 +713,10 @@ export interface State {
   topAgent: string;
   effectiveTopAgent: string;
   /** The selectable agents the server offers, in picker order. The picker
-   *  renders one row per entry and names none of them itself. */
+   *  renders one row per entry and names none of them itself. Fetched
+   *  on demand (each time the Agent button's popup opens) rather than pushed
+   *  once at connect — see `AgentButton.tsx` and doc/WS_PROTOCOL.md §7.4g. */
   agents: AgentRow[];
-  /** Which agent a brand-new session starts on, per the server. */
-  defaultAgent: string;
   // Edit/Tool Control are never frozen. The host owns them and sends the
   // *shown* value (forced to Allow All / Permissive while Autonomous is in
   // effect) plus `editCommandLocked`, which disables both toggles in the UI.
@@ -884,7 +885,6 @@ export type Action =
       topAgent: string;
       effectiveTopAgent: string;
       agents: AgentRow[];
-      defaultAgent: string;
       editControl: EditControl;
       commandControl: CommandControl;
       editCommandLocked: boolean;

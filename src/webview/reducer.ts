@@ -1133,7 +1133,6 @@ export function reducer(state: State, action: Action): State {
         topAgent: action.topAgent,
         effectiveTopAgent: action.effectiveTopAgent,
         agents: action.agents,
-        defaultAgent: action.defaultAgent,
         editControl: action.editControl,
         commandControl: action.commandControl,
         editCommandLocked: action.editCommandLocked,
@@ -1354,12 +1353,13 @@ export const initial: State = {
   fileReviewComposer: null,
   autonomous: false,
   effectiveAutonomous: false,
-  // Empty until the first `mode_state`: which agents exist, and which one is
-  // the default, are the server's answer — there is nothing to guess here.
+  // Empty until the first `mode_state`: which agent is selected is the
+  // server's answer — there is nothing to guess here. `agents` stays empty
+  // until the Agent button is opened for the first time (it fetches its own
+  // catalog on demand; see AgentButton.tsx).
   topAgent: '',
   effectiveTopAgent: '',
   agents: [],
-  defaultAgent: '',
   editControl: 'smart',
   commandControl: 'smart',
   editCommandLocked: false,
