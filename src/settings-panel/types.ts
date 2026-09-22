@@ -123,7 +123,7 @@ export interface AgentEntry {
   /** Picker label for a top-level agent; the display name otherwise. */
   label: string;
   description: string;
-  /** Absolute path of the bundle directory (or the prompt, for a sub-agent). */
+  /** Absolute path of the entry's directory — the bundle, or `subagents/<name>/`. */
   path: string;
   /** Empty for a healthy entry; the load failure otherwise. */
   error: string;

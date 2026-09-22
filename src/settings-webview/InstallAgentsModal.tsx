@@ -109,7 +109,7 @@ export function InstallAgentsModal({
               Give a local folder or a git repository URL. Either way it holds{' '}
               <span className="value-code">&lt;name&gt;.json</span> and{' '}
               <span className="value-code">agent_&lt;name&gt;.md</span> at its root, and any
-              sub-agents under <span className="value-code">subagents/</span>. Kōdo reads it and
+              sub-agents under <span className="value-code">subagents/&lt;name&gt;/</span>. Kōdo reads it and
               shows you what it would install before writing anything.
             </p>
             <div className="modal-field">

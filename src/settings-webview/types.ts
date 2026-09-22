@@ -66,8 +66,8 @@ export interface SessionRulesState {
  * the user's to delete, and the picker already publishes them through
  * `hello.ack`.
  *
- * `name` is the entry's identity — a top-level agent's directory name, or a
- * sub-agent's `subagent_<name>.md` stem — and is what Delete acts on. An entry
+ * `name` is the entry's identity — the directory name of a top-level agent's
+ * bundle or of a sub-agent under `subagents/` — and is what Delete acts on. An entry
  * that failed to load is still listed, with a non-empty `error`, so a broken
  * bundle is visible and deletable rather than silently missing. */
 export interface AgentEntry {
@@ -79,7 +79,7 @@ export interface AgentEntry {
   /** Picker label for a top-level agent; the display name otherwise. */
   label: string;
   description: string;
-  /** Absolute path of the bundle directory (or the prompt, for a sub-agent). */
+  /** Absolute path of the entry's directory — the bundle, or `subagents/<name>/`. */
   path: string;
   /** Empty for a healthy entry; the load failure otherwise. */
   error: string;

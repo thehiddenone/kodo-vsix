@@ -88,6 +88,15 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   if (data.skillInstall === null || (data.skillInstall && typeof data.skillInstall === 'object')) {
     next.skillInstall = data.skillInstall;
   }
+  if (data.agents && typeof data.agents === 'object') {
+    next.agents = data.agents;
+  }
+  if (data.agentScan === null || (data.agentScan && typeof data.agentScan === 'object')) {
+    next.agentScan = data.agentScan;
+  }
+  if (data.agentInstall === null || (data.agentInstall && typeof data.agentInstall === 'object')) {
+    next.agentInstall = data.agentInstall;
+  }
   if (Array.isArray(data.hfTokens)) {
     next.hfTokens = data.hfTokens;
   }
