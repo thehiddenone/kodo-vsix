@@ -35,6 +35,12 @@ import { FooterButton } from './FooterButton';
 /** How close to the bottom (px) counts as "at the bottom" for the auto-scroll
  *  feed — a small tolerance absorbs sub-pixel rounding from browser zoom. */
 const STREAM_BOTTOM_EPSILON = 4;
+/** How long (ms) after an upward user gesture (wheel, key, touch) a falling
+ *  scrollTop is still attributed to the user — long enough to cover a smooth-
+ *  scroll animation and key auto-repeat. */
+const STREAM_USER_INTENT_MS = 500;
+/** Keys that scroll the focused feed upward. */
+const STREAM_UP_KEYS = new Set(['ArrowUp', 'PageUp', 'Home']);
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
@@ -48,25 +54,69 @@ export function App() {
   // way back down. Tracked via refs, not reducer state, since it's read/written
   // on every scroll tick and content update and never needs to trigger a
   // render by itself — only the scrollTop assignment below does the work.
+  //
+  // A falling scrollTop alone is NOT proof the user scrolled: when content
+  // streams in fast, layout also moves it down — the browser clamps scrollTop
+  // when the feed briefly shrinks (a streaming block swapped for its committed
+  // entry) and scroll anchoring shifts it when something above the viewport
+  // collapses. So an upward move only unlocks while a user gesture vouches
+  // for it: an upward wheel/key/touch within STREAM_USER_INTENT_MS
+  // (userScrollUntilRef), or a held pointer on the feed's own scrollbar
+  // (scrollbarHeldRef).
   const streamRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  const userScrollUntilRef = useRef(0);
+  const scrollbarHeldRef = useRef(false);
+
+  function markUserScrollUp() {
+    userScrollUntilRef.current = performance.now() + STREAM_USER_INTENT_MS;
+  }
 
   function handleStreamScroll(e: Event) {
     const el = e.currentTarget as HTMLDivElement;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (el.scrollTop < lastScrollTopRef.current - 1) {
-      // An attempt to scroll in the opposite direction (upward, away from
-      // the bottom) — stop following new content until the user scrolls
-      // all the way back down. Tracked regardless of the current
-      // autoScroll mode so the flag reflects real scroll position the
-      // moment 'auto' is selected (e.g. after being 'off' mid-conversation).
+    const userScrolling = scrollbarHeldRef.current || performance.now() <= userScrollUntilRef.current;
+    if (
+      userScrolling &&
+      el.scrollTop < lastScrollTopRef.current - 1 &&
+      distanceFromBottom > STREAM_BOTTOM_EPSILON
+    ) {
+      // The user scrolled in the opposite direction (upward, away from
+      // the bottom) — stop following new content until they scroll all
+      // the way back down. Tracked regardless of the current autoScroll
+      // mode so the flag reflects real scroll position the moment 'auto'
+      // is selected (e.g. after being 'off' mid-conversation).
       stickToBottomRef.current = false;
     } else if (distanceFromBottom <= STREAM_BOTTOM_EPSILON) {
       stickToBottomRef.current = true;
     }
     lastScrollTopRef.current = el.scrollTop;
   }
+
+  function handleStreamWheel(e: WheelEvent) {
+    if (e.deltaY < 0) markUserScrollUp();
+  }
+
+  function handleStreamKeyDown(e: KeyboardEvent) {
+    if (STREAM_UP_KEYS.has(e.key) || (e.key === ' ' && e.shiftKey)) markUserScrollUp();
+  }
+
+  function handleStreamPointerDown(e: PointerEvent) {
+    // A press on the feed element itself (not a child) is a press on its
+    // scrollbar — the user may drag it upward for as long as it's held.
+    if (e.target === e.currentTarget) scrollbarHeldRef.current = true;
+  }
+
+  useEffect(() => {
+    const release = () => { scrollbarHeldRef.current = false; };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    return () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+    };
+  }, []);
 
   // Runs after every render (no dependency array) so it catches every way new
   // content can land at the bottom of the feed — streamed tokens/thinking/tool
@@ -716,7 +766,15 @@ export function App() {
       />
 
       {/* Session feed */}
-      <div ref={streamRef} style={styles.stream} onScroll={handleStreamScroll}>
+      <div
+        ref={streamRef}
+        style={styles.stream}
+        onScroll={handleStreamScroll}
+        onWheel={handleStreamWheel}
+        onKeyDown={handleStreamKeyDown}
+        onTouchMove={markUserScrollUp}
+        onPointerDown={handleStreamPointerDown}
+      >
         {groupSessionEntries(state.session).map((block) =>
           block.kind === 'entry' ? (
             renderEntry(block.entry, block.index)
