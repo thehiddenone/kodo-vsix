@@ -2,6 +2,14 @@ import { h } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { styles } from './styles';
+import {
+  FENCE_CLOSE_BEFORE_TAG_RE,
+  FENCE_CLOSE_RE,
+  FENCE_OPEN_RE,
+  INLINE_CODE_RE,
+  splitCallouts,
+} from './calloutSegments';
+import type { KodoVariant } from './calloutSegments';
 // ---------------------------------------------------------------------------
 // Markdown rendering
 //
@@ -19,9 +27,9 @@ import { styles } from './styles';
 //   <kodo_warn>…</kodo_warn>  ⚠️  yellow  — potential problems / contradictions
 //   <kodo_crit>…</kodo_crit>  💥  red     — errors / blocking failures
 //   <kodo>…</kodo>            ド  green   — good news / solved problems
+// A tag inside a fenced code block or an inline code span is code, not a
+// callout (calloutSegments.ts).
 // ---------------------------------------------------------------------------
-
-type KodoVariant = 'kodo_info' | 'kodo_warn' | 'kodo_crit' | 'kodo';
 
 const KODO_META = {
   kodo_info: {
@@ -82,14 +90,10 @@ const KODO_META = {
   },
 };
 
-// Opening tag of any kodo callout. More specific names come first so that, e.g.
-// `<kodo_info>` is never mis-read as `<kodo>` followed by stray text.
-const KODO_OPEN_RE = /<(kodo_info|kodo_warn|kodo_crit|kodo)>/;
-
 // Inline patterns, tried in priority order. The earliest match in the text
 // wins; ties are broken by this order (so `**` beats `*` at the same index).
 const INLINE_PATTERNS: { re: RegExp; kind: 'code' | 'bold' | 'italic' | 'link' }[] = [
-  { re: /`([^`]+)`/, kind: 'code' },
+  { re: INLINE_CODE_RE, kind: 'code' },
   { re: /\*\*([\s\S]+?)\*\*/, kind: 'bold' },
   { re: /(?<![A-Za-z0-9])__([\s\S]+?)__(?![A-Za-z0-9])/, kind: 'bold' },
   { re: /\*([\s\S]+?)\*/, kind: 'italic' },
@@ -194,15 +198,25 @@ function parseBlocks(text: string, kp: string): ComponentChildren[] {
       continue;
     }
     // Fenced code block (auto-closes at end of text if the closing fence is
-    // missing — handles content still being streamed).
-    if (/^\s*```/.test(line)) {
+    // missing — handles content still being streamed). A closing fence
+    // followed by a callout tag on the same line ("```</kodo>") ends the
+    // block too; the rest of that line is parsed again as ordinary text.
+    if (FENCE_OPEN_RE.test(line)) {
       i++;
       const code: string[] = [];
-      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+      while (i < lines.length) {
+        if (FENCE_CLOSE_RE.test(lines[i])) {
+          i++; // consume the closing fence
+          break;
+        }
+        const close = FENCE_CLOSE_BEFORE_TAG_RE.exec(lines[i]);
+        if (close) {
+          lines[i] = lines[i].slice(close[0].length);
+          break;
+        }
         code.push(lines[i]);
         i++;
       }
-      if (i < lines.length) i++; // consume the closing fence
       blocks.push(<CodeBlock key={nextKey()} code={code.join('\n')} />);
       continue;
     }
@@ -297,7 +311,7 @@ function parseBlocks(text: string, kp: string): ComponentChildren[] {
     while (
       i < lines.length &&
       lines[i].trim() !== '' &&
-      !/^\s*```/.test(lines[i]) &&
+      !FENCE_OPEN_RE.test(lines[i]) &&
       !/^(#{1,6})\s+/.test(lines[i]) &&
       !/^\s*>/.test(lines[i]) &&
       !/^(\s*)([-*+]|\d+\.)\s+/.test(lines[i]) &&
@@ -374,34 +388,14 @@ function KodoBlock({ variant, inner }: { variant: KodoVariant; inner: string }) 
   );
 }
 
-// Split top-level content into kodo callout blocks and plain markdown spans,
-// then render each. An unterminated kodo tag consumes the rest of the text.
+// Split top-level content into kodo callout blocks and plain markdown spans
+// (fence-aware — see calloutSegments.ts), then render each.
 function renderContent(text: string): ComponentChildren[] {
-  const out: ComponentChildren[] = [];
-  let rest = text;
-  let key = 0;
-  while (rest.length > 0) {
-    const m = KODO_OPEN_RE.exec(rest);
-    if (!m) {
-      out.push(...parseBlocks(rest, `md-${key++}`));
-      break;
-    }
-    const before = rest.slice(0, m.index);
-    if (before.trim() !== '') out.push(...parseBlocks(before, `md-${key++}`));
-    const variant = m[1] as KodoVariant;
-    const afterOpen = rest.slice(m.index + m[0].length);
-    const cm = new RegExp(`</${variant}>`).exec(afterOpen);
-    let inner: string;
-    if (cm) {
-      inner = afterOpen.slice(0, cm.index);
-      rest = afterOpen.slice(cm.index + cm[0].length);
-    } else {
-      inner = afterOpen; // unclosed → take the remainder of the text
-      rest = '';
-    }
-    out.push(<KodoBlock key={`kodo-${key++}`} variant={variant} inner={inner} />);
-  }
-  return out;
+  return splitCallouts(text).flatMap((seg, i) =>
+    seg.kind === 'callout'
+      ? [<KodoBlock key={`kodo-${i}`} variant={seg.variant} inner={seg.inner} />]
+      : parseBlocks(seg.text, `md-${i}`),
+  );
 }
 
 export function Markdown({ content }: { content: string }) {
