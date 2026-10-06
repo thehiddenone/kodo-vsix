@@ -510,12 +510,14 @@ export function localLaunchWarnings(
 /** Which reasoning-tiering mechanism a `base_llm` uses — see
  * kodo/doc/LLM_REGISTRY.md §4.5/§4.5a/§3a.
  *
- * The first three are **local**: `qwen_reasoning_budget` rides a 6-tier
+ * The first four are **local**: `qwen_reasoning_budget` rides a 6-tier
  * `--reasoning-budget`/`thinking_budget_tokens` scale, `gpt_oss_reasoning_effort`
- * rides GPT-OSS's built-in 3-tier `reasoning_effort`, and
+ * rides GPT-OSS's built-in 3-tier `reasoning_effort`,
  * `qwen4exp_reasoning_effort` rides the same `reasoning_effort` field on
  * Qwen3.8-Flash-Next — a separate family because its chat template accepts
- * `low`/`medium`/`xhigh` and rejects GPT-OSS's `high`.
+ * `low`/`medium`/`xhigh` and rejects GPT-OSS's `high` — and
+ * `muse_glimmer_reasoning_strength` rides Muse Glimmer's 4-tier
+ * `reasoning_strength` template field.
  *
  * The rest are **cloud** — one family per vendor, keyed by a synthetic
  * `base_llm` that is just the vendor key (`"anthropic"`, `"openai"`, …; not a
@@ -534,6 +536,7 @@ export const THINKING_FAMILIES = [
   'qwen_reasoning_budget',
   'gpt_oss_reasoning_effort',
   'qwen4exp_reasoning_effort',
+  'muse_glimmer_reasoning_strength',
   'anthropic_effort',
   'openai_reasoning_effort',
   'meta_reasoning_effort',

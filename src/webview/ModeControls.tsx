@@ -97,6 +97,13 @@ const _QWEN4EXP_THINKING_DESC: Record<string, string> = {
   xhigh: "Thinking: High. Qwen3.8-Flash-Next's own default — careful reasoning that validates assumptions and weighs alternatives, at the cost of speed.",
 };
 
+const _MUSE_GLIMMER_THINKING_DESC: Record<string, string> = {
+  low: 'Thinking: Low. The lightest reasoning Muse Glimmer offers — fastest replies, for simple, scoped tasks.',
+  medium: 'Thinking: Medium. A moderate reasoning strength — balances speed and depth for everyday tasks.',
+  high: "Thinking: High. Muse Glimmer's own default — careful reasoning, one of the two levels Meta recommends for coding and agentic work.",
+  xhigh: 'Thinking: Extra high. The strongest reasoning Muse Glimmer offers — for the hardest coding and agentic problems, at the cost of speed.',
+};
+
 const _OPENROUTER_THINKING_DESC: Record<string, string> = {
   low: 'Thinking: Low. The smallest reasoning effort — fastest and cheapest replies.',
   medium: "Thinking: Medium. OpenRouter's own default reasoning effort — balances speed and depth.",
@@ -200,6 +207,7 @@ const _THINKING_DESC: Record<ThinkingFamily, Record<string, string>> = {
   qwen_reasoning_budget: _QWEN_THINKING_DESC,
   gpt_oss_reasoning_effort: _GPT_OSS_THINKING_DESC,
   qwen4exp_reasoning_effort: _QWEN4EXP_THINKING_DESC,
+  muse_glimmer_reasoning_strength: _MUSE_GLIMMER_THINKING_DESC,
   anthropic_effort: _ANTHROPIC_THINKING_DESC,
   openai_reasoning_effort: _OPENAI_THINKING_DESC,
   meta_reasoning_effort: _META_THINKING_DESC,
