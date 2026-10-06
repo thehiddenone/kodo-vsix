@@ -1141,6 +1141,7 @@ export function reducer(state: State, action: Action): State {
         thinkingTiers: action.thinkingTiers,
         running: action.running,
         workspaceConnected: action.workspaceConnected,
+        interactive: action.interactive,
       };
     case 'sampling_state':
       return {
@@ -1373,6 +1374,7 @@ export const initial: State = {
   samplingModalOpen: false,
   running: false,
   workspaceConnected: true,
+  interactive: true,
   resumeSessionId: null,
   awaitingLlm: false,
   llmWaiting: null,

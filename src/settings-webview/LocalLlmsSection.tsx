@@ -63,7 +63,10 @@ export function LocalLlmsSection({
     <div>
       <div className="section-subheading">Local LLMs</div>
 
-      <p className="explain">Download a GGUF model from huggingface.com and add it to your local registry.</p>
+      <p className="explain">
+        Give a GGUF repository on huggingface.com to the Model Importer agent: it picks one quant per precision
+        tier and adds them to your local registry, with MTP speculative decoding where the GGUF supports it.
+      </p>
       <button className="action-btn" onClick={onAddHf}>Add local LLM (GGUF) from huggingface.com</button>
       <div className="spacer" />
 

@@ -43,6 +43,11 @@ export class ModeToggleController {
   // next open, never merged in alongside stale entries.
   private agents: AgentRow[] = [];
   private workspaceConnected_ = true;
+  // `false` for a session started by `agent.run` on a non-interactive agent
+  // (doc/WS_PROTOCOL.md §7.4h). Server-owned like `topAgent` — adopted from
+  // every `state` snapshot, never flipped back here — and the reason
+  // `setAutonomous`/`setTopAgent` become no-ops: the server would refuse them.
+  private interactive_ = true;
   // Edit/Tool Control are NEVER frozen. The host owns them: it keeps the
   // user's *selected* posture, and derives the *shown* value — which equals the
   // selection unless Autonomous mode is currently in effect, in which case it is
@@ -82,6 +87,16 @@ export class ModeToggleController {
 
   get workspaceConnected(): boolean {
     return this.workspaceConnected_;
+  }
+
+  /** Whether this session takes the user's input (see the field comment). */
+  get interactive(): boolean {
+    return this.interactive_;
+  }
+
+  /** Whether a turn is in progress (server phase "running"). */
+  get isRunning(): boolean {
+    return this.running;
   }
 
   /**
@@ -147,6 +162,7 @@ export class ModeToggleController {
       thinkingFamily: this.thinkingContext.family,
       thinkingTiers: this.thinkingContext.tiers,
       workspaceConnected: this.workspaceConnected_,
+      interactive: this.interactive_,
     });
   }
 
@@ -183,6 +199,7 @@ export class ModeToggleController {
     // all land here the same way.
     this.thinkingLevel = String(payload.thinking_level ?? '');
     this.workspaceConnected_ = payload.workspace_connected !== false;
+    this.interactive_ = payload.interactive !== false;
     // The turn boundary may have just locked/unlocked Edit & Command (a turn
     // starting under Autonomous forces Allow All/Permissive; a turn ending
     // unlocks to the user's selection) — resync the shown values if so.
@@ -246,6 +263,28 @@ export class ModeToggleController {
   }
 
   /**
+   * A blank session started by `agent.run` instead (doc/WS_PROTOCOL.md §7.4h):
+   * the server selects *name*, switches Autonomous on and queues *prompt* in
+   * one step, and from then on refuses any prompt, agent switch or mode
+   * change. Mirrored here up front — Autonomous on, input locked — so the
+   * composer never flashes interactive before the `state` event confirms it.
+   */
+  startAgentRun(name: string, prompt: string): void {
+    this.topAgent = name;
+    this.effectiveTopAgent = name;
+    this.autonomous = true;
+    this.effectiveAutonomous = true;
+    this.interactive_ = false;
+    this.running = false;
+    this.awaitingLlm = false;
+    this.editControl = 'smart';
+    this.commandControl = 'smart';
+    this.send(makeRequest('agent.run', { name, prompt }));
+    this.syncEditCommandToServer();
+    this.postModeState();
+  }
+
+  /**
    * Resumed: adopt the session's own persisted prefs from hello.ack state. A
    * resumed tab is never mid-turn (the worker is idle on connect), so the
    * lock follows the resumed `autonomous` selection. Hydrate the Edit/Command
@@ -258,6 +297,7 @@ export class ModeToggleController {
    * both fields from the live snapshot.
    */
   applyResumedState(state: Record<string, unknown>): void {
+    this.interactive_ = state.interactive !== false;
     this.autonomous = Boolean(state.autonomous ?? false);
     this.effectiveAutonomous = Boolean(state.effective_autonomous ?? this.autonomous);
     this.topAgent = coerceTopAgent(state.top_agent, this.topAgent);
@@ -282,6 +322,9 @@ export class ModeToggleController {
    *  Command immediately; while a turn runs the shown values stay put
    *  (gated on `effectiveAutonomous`). */
   setAutonomous(autonomous: boolean): void {
+    if (!this.interactive_) {
+      return;
+    }
     this.autonomous = autonomous;
     this.send(makeRequest('mode.set', { autonomous }));
     this.syncEditCommandToServer();
@@ -290,6 +333,9 @@ export class ModeToggleController {
 
   /** `agent_set` webview message. */
   setTopAgent(name: string): void {
+    if (!this.interactive_) {
+      return;
+    }
     this.topAgent = name;
     this.send(makeRequest('agent.set', { name }));
     this.postModeState();

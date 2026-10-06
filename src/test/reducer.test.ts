@@ -535,3 +535,35 @@ suite('reducer — approval gate findings', () => {
     assert.deepStrictEqual(next.pendingGate.findings, []);
   });
 });
+
+suite('reducer — agent.run sessions', () => {
+  function modeState(interactive: boolean) {
+    return {
+      type: 'mode_state' as const,
+      autonomous: true,
+      effectiveAutonomous: true,
+      topAgent: 'kodo_model_importer',
+      effectiveTopAgent: 'kodo_model_importer',
+      agents: [],
+      editControl: 'allow_all' as const,
+      commandControl: 'permissive' as const,
+      editCommandLocked: true,
+      thinkingLevel: '',
+      thinkingFamily: null,
+      thinkingTiers: [],
+      running: true,
+      workspaceConnected: true,
+      interactive,
+    };
+  }
+
+  test('a session takes input until the host says otherwise', () => {
+    assert.strictEqual(initial.interactive, true);
+  });
+
+  test('mode_state carries the lock into the state the composer renders from', () => {
+    const locked = reducer(initial, modeState(false));
+    assert.strictEqual(locked.interactive, false);
+    assert.strictEqual(reducer(locked, modeState(true)).interactive, true);
+  });
+});

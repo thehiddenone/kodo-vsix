@@ -1798,6 +1798,26 @@ export const styles = {
   // attachment row), and the fixed button grid (composerRight). `flex-end`
   // keeps the two fixed columns pinned to the bottom of the WebView while
   // only the textarea in the middle grows upward.
+  // Read-only stand-in for composerRow in a session started by `agent.run`
+  // (the agent takes no input): one line of status, then Stop and Delete at
+  // the same 56px × 32px size they have in composerRight's grid.
+  lockedRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    paddingTop: '6px',
+    flexShrink: 0,
+  },
+  lockedText: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '12px',
+  },
+  lockedBtn: {
+    width: '56px',
+    height: '32px',
+  },
   composerRow: {
     display: 'flex',
     alignItems: 'flex-end',

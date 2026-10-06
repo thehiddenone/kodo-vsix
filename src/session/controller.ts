@@ -45,7 +45,7 @@ import { AttachmentManager } from './attachment-manager';
 import { ModeToggleController } from './mode-toggle-controller';
 import { PromptGateManager } from './prompt-gate-manager';
 import { ReviewGateController } from './review-gate-controller';
-import type { SessionDeps, UiSettings } from './types';
+import type { AgentRunRequest, SessionDeps, UiSettings } from './types';
 import { buildHtml, generateNonce } from './webview-html';
 
 let _keySeq = 0;
@@ -89,6 +89,10 @@ export class SessionController {
     private readonly deps: SessionDeps,
     panel: vscode.WebviewPanel,
     sessionId: string,
+    // Set only for a brand-new session opened to run a non-interactive agent
+    // (the Model Importer): sent as `agent.run` once the server assigns the
+    // session, in place of the usual new-session defaults.
+    private readonly agentRun?: AgentRunRequest,
   ) {
     this.key = `session-${++_keySeq}`;
     this.sessionId = sessionId;
@@ -258,7 +262,9 @@ export class SessionController {
         break;
       case 'prompt': {
         const text = String(msg.text ?? '').trim();
-        if (text) {
+        // A locked `agent.run` session has no composer; the server would refuse
+        // the prompt anyway (doc/WS_PROTOCOL.md §7.4h).
+        if (text && this.modeToggle.interactive) {
           void this._submitPrompt(text);
         }
         break;
@@ -622,6 +628,16 @@ export class SessionController {
       return;
     }
 
+    if (env.kind === 'response' && evtType === 'error') {
+      // A refused `agent.run`, or a request the server turned down because
+      // this session is locked (doc/WS_PROTOCOL.md §7.4h).
+      const code = String(env.payload.code ?? '');
+      if (code === 'agent_run_refused' || code === 'session_locked' || code === 'agent_run_only') {
+        void vscode.window.showWarningMessage(`Kōdo: ${String(env.payload.message ?? code)}`);
+        return;
+      }
+    }
+
     if (env.kind === 'response' && evtType === 'top_agents.list.ack') {
       // The Agent button's popup opened (`agents_refresh`) and asked for a
       // fresh catalog — see doc/WS_PROTOCOL.md §7.4g.
@@ -653,7 +669,14 @@ export class SessionController {
       if (phase === 'stopped') {
         this._post({ type: 'interrupted' });
       }
+      const wasRunning = this.modeToggle.isRunning;
       this.modeToggle.applyStateEvent(env.payload);
+      // An `agent.run` session's turn just ended. The Model Importer writes
+      // user catalog files from inside the session, which pushes no registry
+      // update of its own — re-read it so the Local LLMs list shows them.
+      if (wasRunning && !this.modeToggle.isRunning && !this.modeToggle.interactive) {
+        this.deps.refreshLocalRegistry();
+      }
       this._adoptSamplingValues(env.payload.sampling);
       return;
     }
@@ -904,11 +927,30 @@ export class SessionController {
     // for both a new and a resumed session.
     this._adoptSamplingValues(state?.sampling);
 
-    if (this.isNewSession) {
+    if (this.isNewSession && this.agentRun) {
+      void this._startAgentRun(this.agentRun);
+    } else if (this.isNewSession) {
       this.modeToggle.applyNewSessionDefaults();
     } else if (state) {
       this.modeToggle.applyResumedState(state);
     }
+  }
+
+  /**
+   * Run this brand-new session's one prompt on a non-interactive agent
+   * (`agent.run`, doc/WS_PROTOCOL.md §7.4h). Same llama.cpp launch confirmation
+   * as a typed prompt; a declined launch leaves an ordinary blank session.
+   */
+  private async _startAgentRun(run: AgentRunRequest): Promise<void> {
+    if (!(await this.deps.confirmLocalLaunch())) {
+      void vscode.window.showWarningMessage('Kōdo: the agent was not started — llama.cpp was not started.');
+      this.modeToggle.applyNewSessionDefaults();
+      return;
+    }
+    this.lastPrompt = run.prompt;
+    this.activity.resetForSubmit();
+    this.modeToggle.startAgentRun(run.name, run.prompt);
+    this._post({ type: 'agent_run_started', text: run.prompt });
   }
 
   /**

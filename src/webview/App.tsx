@@ -593,7 +593,14 @@ export function App() {
             thinkingTiers: Array.isArray(msg.thinkingTiers) ? msg.thinkingTiers.map((t) => String(t)) : [],
             running: Boolean(msg.running),
             workspaceConnected: msg.workspaceConnected !== false,
+            interactive: msg.interactive !== false,
           });
+          break;
+        case 'agent_run_started':
+          // The host started this session with `agent.run` (no typed prompt to
+          // echo optimistically, unlike sendPrompt) — show its one prompt the
+          // same way a typed one appears.
+          dispatch({ type: 'prompt_sent', text: String(msg.text ?? '') });
           break;
         case 'sampling_state':
           dispatch({
@@ -879,6 +886,33 @@ export function App() {
             dispatch({ type: 'approval_cleared' });
           }}
         />
+      ) : !state.interactive ? (
+        // A session started by `agent.run` (doc/WS_PROTOCOL.md §7.4h): the
+        // agent takes no input, so the whole composer gives way to a status
+        // strip. Stop and Delete are the two actions that still mean something.
+        <div style={styles.lockedRow}>
+          <span style={styles.lockedText}>
+            {isRunning
+              ? '🔒 An agent is working on its own in this session — it takes no input.'
+              : '🔒 This session ran an agent on its own — it takes no input.'}
+          </span>
+          <FooterButton
+            style={{ ...styles.globalStopBtn, ...styles.lockedBtn }}
+            onClick={handleStop}
+            disabled={!state.connected || !isRunning}
+            title="Stop the agent"
+          >
+            {'🛑'}
+          </FooterButton>
+          <FooterButton
+            style={{ ...styles.deleteBtn, ...styles.lockedBtn }}
+            onClick={handleDelete}
+            disabled={!state.connected}
+            title="Delete this session (permanently removes all its history)"
+          >
+            {'🗑'}
+          </FooterButton>
+        </div>
       ) : (
         <div style={styles.composerRow}>
           {/* Left column: three 242px buttons, each level with a row of the

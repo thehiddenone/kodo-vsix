@@ -760,6 +760,13 @@ export interface State {
    * reconnect-workspace button.
    */
   workspaceConnected: boolean;
+  /**
+   * `false` for a session started by `agent.run` on a non-interactive agent
+   * (server's `state.interactive`, doc/WS_PROTOCOL.md §7.4h): the composer is
+   * replaced by a read-only strip that keeps only Stop and Delete. Derived
+   * server-side from the session's agent, so it survives a reload.
+   */
+  interactive: boolean;
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
   awaitingLlm: boolean;
@@ -893,6 +900,7 @@ export type Action =
       thinkingTiers: string[];
       running: boolean;
       workspaceConnected: boolean;
+      interactive: boolean;
     }
   | {
       type: 'sampling_state';

@@ -619,7 +619,7 @@ export type OutboundMessage =
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }
-  | { type: 'add_huggingface'; name: string; description: string; repo_id: string; filename: string; llama_args: Record<string, string>; context_window: number }
+  | { type: 'import_hf_with_agent'; repo_id: string }
   | { type: 'add_file'; name: string; description: string; path: string; llama_args: Record<string, string>; context_window: number }
   | { type: 'add_server_url'; name: string; description: string; url: string }
   | { type: 'pick_gguf_file' }

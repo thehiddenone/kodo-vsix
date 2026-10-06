@@ -55,7 +55,12 @@ import { state } from './state';
 import { fetchStuckDetection, parseStuckDetection } from './stuck-detection';
 import { fetchDefaultAgent, parseDefaultAgent } from './default-agent';
 import { fetchHousekeeperLlm } from './housekeeper-llm';
-import { findBySessionId, openExistingSession } from './window-sessions';
+import { findBySessionId, newSession, openExistingSession } from './window-sessions';
+
+/** The built-in non-interactive agent behind "Add local LLM (GGUF) from
+ *  huggingface.com" (kodo/src/kodo/agents/kodo_model_importer.json). It is
+ *  absent from `top_agents.list` by design, so its name is known here. */
+const MODEL_IMPORTER_AGENT = 'kodo_model_importer';
 
 /** The sidebar's "Local inference settings" button — opens (or reveals) the
  * Kōdo Settings panel with its "Local Inference" tab forced selected (the
@@ -966,17 +971,12 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
 }
 
 async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
-  if (msg.type === 'add_huggingface') {
-    sendControl(
-      makeRequest('local_llm.add_huggingface', {
-        name: msg.name,
-        description: msg.description,
-        repo_id: msg.repo_id,
-        filename: msg.filename,
-        llama_args: msg.llama_args,
-        context_window: msg.context_window,
-      }),
-    );
+  if (msg.type === 'import_hf_with_agent') {
+    // A new session tab runs the Model Importer on this repo (agent.run,
+    // kodo/doc/WS_PROTOCOL.md §7.4h); the user watches it but cannot type. The
+    // entries it writes reach this panel when that session's turn ends
+    // (SessionDeps.refreshLocalRegistry → local_llm.registry_get).
+    newSession({ name: MODEL_IMPORTER_AGENT, prompt: msg.repo_id });
   } else if (msg.type === 'add_file') {
     // A file the user just picked from disk exists by construction — mark it
     // installed immediately rather than waiting for the next extension

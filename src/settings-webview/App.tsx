@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useState } from 'preact/hooks';
 import { AddFileModal } from './AddFileModal';
-import { AddHuggingfaceModal } from './AddHuggingfaceModal';
+import { ImportHfModelModal } from './ImportHfModelModal';
 import { AddKeyModal } from './AddKeyModal';
 import { AddServerUrlModal } from './AddServerUrlModal';
 import { AddTokenModal } from './AddTokenModal';
@@ -196,7 +196,7 @@ export function App() {
       )}
       {addTokenModalOpen && <AddTokenModal onClose={() => setAddTokenModalOpen(false)} />}
       {addKeyModalVendor && <AddKeyModal vendor={addKeyModalVendor} onClose={() => setAddKeyModalVendor(null)} />}
-      {hfModalOpen && <AddHuggingfaceModal localRegistry={state.localRegistry} onClose={() => setHfModalOpen(false)} />}
+      {hfModalOpen && <ImportHfModelModal onClose={() => setHfModalOpen(false)} />}
       {fileModalOpen && (
         <AddFileModal
           localRegistry={state.localRegistry}

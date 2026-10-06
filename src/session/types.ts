@@ -248,6 +248,16 @@ export interface FileReviewData {
 }
 
 /** Collaborators the controller needs from the window-level host. */
+/**
+ * Start a brand-new session with `agent.run` instead of the usual defaults:
+ * the server runs *prompt* on the non-interactive top-level agent *name* and
+ * locks the session against further input (doc/WS_PROTOCOL.md §7.4h).
+ */
+export interface AgentRunRequest {
+  name: string;
+  prompt: string;
+}
+
 export interface SessionDeps {
   context: vscode.ExtensionContext;
   windowId: string;
@@ -296,6 +306,13 @@ export interface SessionDeps {
   chooseProjectFolder: (requestId: string, send: (env: Envelope) => void) => void;
   /** Forget whichever key is currently active for `vendor` (server-initiated revoke). */
   revokeApiKey: (vendor: string) => void;
+  /**
+   * Re-read the local-LLM registry over the control connection
+   * (`local_llm.registry_get`). Called when an `agent.run` session's turn ends:
+   * the Model Importer writes user catalog files from inside a session, which
+   * pushes no `local_llm.registry_state` of its own.
+   */
+  refreshLocalRegistry: () => void;
   /** Called once the server assigns/confirms this session's id. */
   onSessionAssigned: (c: SessionController, sessionId: string) => void;
   /**

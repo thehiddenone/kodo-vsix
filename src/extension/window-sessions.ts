@@ -10,8 +10,9 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as cloudCredentials from '../cloud-credentials';
 import { kodoDiagnostics } from '../diagnostics';
+import { makeRequest } from '../envelope';
 import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from '../reconcile-policy';
-import type { SessionDeps } from '../session/types';
+import type { AgentRunRequest, SessionDeps } from '../session/types';
 import { SessionController } from '../session/controller';
 import { applyLlamaState } from './llamacpp';
 import { handleApiKeyRequest, pushCloudAiSettingsState } from './cloud-ai-settings';
@@ -20,7 +21,7 @@ import { confirmLocalLlamaLaunch } from './local-llm-registry';
 import { currentSamplingContext } from './sampling-context';
 import { addFolderToWorkspace, confirmWorkspaceFolder } from './workspace-attach';
 import { reconnectSessionWorkspace } from './session-resume';
-import { sendControlAwait } from './control-send';
+import { sendControl, sendControlAwait } from './control-send';
 import { buildFolderMap, codeWorkspaceFile, readUiSettings } from './settings-io';
 import { state } from './state';
 import { currentThinkingContext } from './thinking-context';
@@ -63,6 +64,7 @@ function sessionDeps(): SessionDeps {
     revokeApiKey: (vendor) => {
       void cloudCredentials.revokeActiveKey(state.extensionContext!, vendor).then(() => pushCloudAiSettingsState());
     },
+    refreshLocalRegistry: () => sendControl(makeRequest('local_llm.registry_get', {})),
     onSessionAssigned: (_c, sessionId) => rememberOpenSession(sessionId),
     onLlamaState: applyLlamaState,
     confirmLocalLaunch: () => {
@@ -122,9 +124,13 @@ function createPanel(): vscode.WebviewPanel {
   });
 }
 
-/** Open a blank session (interactive + problem-solving) in a new tab. */
-export function newSession(): SessionController {
-  const controller = new SessionController(sessionDeps(), createPanel(), '');
+/**
+ * Open a blank session in a new tab — interactive, on the server's default
+ * agent, unless *agentRun* is given: then the session runs that one prompt on
+ * a non-interactive agent and takes no input (doc/WS_PROTOCOL.md §7.4h).
+ */
+export function newSession(agentRun?: AgentRunRequest): SessionController {
+  const controller = new SessionController(sessionDeps(), createPanel(), '', agentRun);
   state.sessions.set(controller.key, controller);
   return controller;
 }

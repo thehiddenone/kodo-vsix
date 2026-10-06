@@ -301,15 +301,6 @@ export interface UiSettings {
 
 /** Payloads shared with the (former, now-merged-in) Local Inference Settings
  * panel — kodo/doc/LLM_REGISTRY.md §4. */
-export interface AddHuggingfaceLlmPayload {
-  name: string;
-  description: string;
-  repo_id: string;
-  filename: string;
-  llama_args: Record<string, string>;
-  context_window: number;
-}
-
 export interface AddFileLlmPayload {
   name: string;
   description: string;
@@ -475,7 +466,7 @@ export type KodoSettingsMessage =
   | { type: 'add_key'; vendor: string; name: string; secret: string }
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }
-  | ({ type: 'add_huggingface' } & AddHuggingfaceLlmPayload)
+  | { type: 'import_hf_with_agent'; repo_id: string }
   | ({ type: 'add_file' } & AddFileLlmPayload)
   | ({ type: 'add_server_url' } & AddServerUrlLlmPayload)
   | { type: 'pick_gguf_file' }
