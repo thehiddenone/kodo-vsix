@@ -125,8 +125,8 @@ export function MenuGroup({
 }
 
 /**
- * One radio row: the ◉/○ marker, the option's name, and its description
- * underneath. Disabled rows still render their marker, so a locked group shows
+ * One radio row: the ◉/○ marker, an optional glyph, the option's name, and its
+ * description underneath. Disabled rows still render their marker, so a locked group shows
  * what is selected while refusing to change it.
  *
  * Hover highlighting is tracked in state rather than left to `:hover`, because
@@ -134,12 +134,15 @@ export function MenuGroup({
  * FooterButton fakes `:active`.
  */
 export function MenuOption({
+  glyph = '',
   label,
   desc,
   selected,
   disabled,
   onSelect,
 }: {
+  /** Colored emoji shown before the label; '' (the default) renders none. */
+  glyph?: string;
   label: string;
   desc: string;
   selected: boolean;
@@ -166,6 +169,11 @@ export function MenuOption({
       <span style={styles.sessionRadio} aria-hidden="true">
         {selected ? '◉' : '○'}
       </span>
+      {glyph !== '' && (
+        <span style={styles.sessionGlyph} aria-hidden="true">
+          {glyph}
+        </span>
+      )}
       <span>
         <span style={styles.sessionOptionLabel}>{label}</span>
         {desc !== '' && <div style={styles.sessionOptionDesc}>{desc}</div>}

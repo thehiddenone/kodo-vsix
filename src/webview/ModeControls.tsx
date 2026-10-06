@@ -44,6 +44,28 @@ const _COMMAND_NAME: Record<CommandControl, string> = {
   permissive: 'Permissive',
 };
 
+/** Glyph shown before each Mode row's name. */
+const _MODE_GLYPH = {
+  interactive: '💬',
+  autonomous: '⚡',
+};
+
+/** Glyph shown before each Edit Control row's name. Smart shares 🧠 with Tool
+ *  Control's Smart on purpose — it is the same "Kōdo decides" posture in both
+ *  groups; every other glyph in the popup is unique. */
+const _EDIT_GLYPH: Record<EditControl, string> = {
+  smart: '🧠',
+  review_all: '🔍',
+  allow_all: '✅',
+};
+
+/** Glyph shown before each Tool Control row's name (Smart: see {@link _EDIT_GLYPH}). */
+const _COMMAND_GLYPH: Record<CommandControl, string> = {
+  smart: '🧠',
+  defensive: '🛡️',
+  permissive: '🔓',
+};
+
 /** Row order within each single-choice group — default first, as before. */
 const _EDIT_ORDER: EditControl[] = ['smart', 'review_all', 'allow_all'];
 const _COMMAND_ORDER: CommandControl[] = ['smart', 'defensive', 'permissive'];
@@ -220,6 +242,20 @@ function _tierName(family: ThinkingFamily, tier: string): string {
   return label.startsWith('Thinking: ') ? label.slice('Thinking: '.length) : label;
 }
 
+/** Glyph per thinking tier, a rising-energy ladder. Keyed by the tier's
+ *  *display name* ({@link _tierName}), not its slug: slugs mean different rungs
+ *  in different families (DeepSeek's `max` reads "High"), and the glyph has to
+ *  agree with the name printed beside it. */
+const _THINKING_GLYPH: Record<string, string> = {
+  Minimal: '🪶',
+  Low: '🕯️',
+  Medium: '💡',
+  High: '🔥',
+  'Extra high': '☄️',
+  Max: '🌋',
+  Unlimited: '♾️',
+};
+
 /** The prefix-free description of a thinking tier, for the popup row under its
  *  name: the family's tooltip text minus the leading "Thinking: <tier>." that
  *  {@link tierLabel} consumes. Unlike the other four groups' description
@@ -328,11 +364,10 @@ export function ModeControls({
   const thinkingRows =
     family === null
       ? []
-      : thinkingTiers.map((tier) => ({
-          tier,
-          label: _tierName(family, tier),
-          desc: _tierDesc(family, tier),
-        }));
+      : thinkingTiers.map((tier) => {
+          const label = _tierName(family, tier);
+          return { tier, label, glyph: _THINKING_GLYPH[label] ?? '', desc: _tierDesc(family, tier) };
+        });
 
   return (
     <div style={styles.sessionBtnWrap} ref={wrapRef}>
@@ -356,6 +391,7 @@ export function ModeControls({
             )}
           >
             <MenuOption
+              glyph={_MODE_GLYPH.interactive}
               label="Interactive"
               desc={_MODE_DESC.interactive}
               selected={!autonomous}
@@ -363,6 +399,7 @@ export function ModeControls({
               onSelect={() => vscode.postMessage({ type: 'mode_set', autonomous: false })}
             />
             <MenuOption
+              glyph={_MODE_GLYPH.autonomous}
               label="Autonomous"
               desc={_MODE_DESC.autonomous}
               selected={autonomous}
@@ -375,6 +412,7 @@ export function ModeControls({
             {_EDIT_ORDER.map((value) => (
               <MenuOption
                 key={value}
+                glyph={_EDIT_GLYPH[value]}
                 label={_EDIT_NAME[value]}
                 desc={_EDIT_DESC[value]}
                 selected={editControl === value}
@@ -388,6 +426,7 @@ export function ModeControls({
             {_COMMAND_ORDER.map((value) => (
               <MenuOption
                 key={value}
+                glyph={_COMMAND_GLYPH[value]}
                 label={_COMMAND_NAME[value]}
                 desc={_TOOL_DESC[value]}
                 selected={commandControl === value}
@@ -401,6 +440,7 @@ export function ModeControls({
             {thinkingRows.map((row) => (
               <MenuOption
                 key={row.tier}
+                glyph={row.glyph}
                 label={row.label}
                 desc={row.desc}
                 selected={thinkingLevel === row.tier}

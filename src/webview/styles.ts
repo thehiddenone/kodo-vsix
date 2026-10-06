@@ -417,6 +417,15 @@ export const styles = {
     fontSize: '11px',
     lineHeight: '17px',
   },
+  // Fixed width so labels line up whatever each emoji's natural advance is;
+  // lineHeight matches the label's so the glyph sits on its first line.
+  sessionGlyph: {
+    flex: 'none' as const,
+    width: '18px',
+    textAlign: 'center' as const,
+    fontSize: '13px',
+    lineHeight: '17px',
+  },
   sessionOptionLabel: {
     fontSize: '13px',
     lineHeight: '17px',
