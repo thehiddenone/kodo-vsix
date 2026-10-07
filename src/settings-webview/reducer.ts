@@ -18,6 +18,7 @@ export const initial: KodoSettingsState = {
   skills: { root: '', skills: [] },
   skillScan: null,
   skillInstall: null,
+  hfSearch: null,
   agents: { root: '', agents: [] },
   agentScan: null,
   agentInstall: null,
@@ -87,6 +88,9 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (data.skillInstall === null || (data.skillInstall && typeof data.skillInstall === 'object')) {
     next.skillInstall = data.skillInstall;
+  }
+  if (data.hfSearch === null || (data.hfSearch && typeof data.hfSearch === 'object')) {
+    next.hfSearch = data.hfSearch;
   }
   if (data.agents && typeof data.agents === 'object') {
     next.agents = data.agents;

@@ -196,7 +196,7 @@ export function App() {
       )}
       {addTokenModalOpen && <AddTokenModal onClose={() => setAddTokenModalOpen(false)} />}
       {addKeyModalVendor && <AddKeyModal vendor={addKeyModalVendor} onClose={() => setAddKeyModalVendor(null)} />}
-      {hfModalOpen && <ImportHfModelModal onClose={() => setHfModalOpen(false)} />}
+      {hfModalOpen && <ImportHfModelModal search={state.hfSearch} onClose={() => setHfModalOpen(false)} />}
       {fileModalOpen && (
         <AddFileModal
           localRegistry={state.localRegistry}

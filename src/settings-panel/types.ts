@@ -78,6 +78,34 @@ export interface SkillsState {
   skills: SkillEntry[];
 }
 
+/** One Hugging Face GGUF repository matched by `local_llm.hf_search`
+ * (kodo/doc/WS_PROTOCOL.md §7.6m) — a row in the "Add local LLM (GGUF) from
+ * huggingface.com" dialog's search list. `publisher_tier` is the server's
+ * ranking bucket (the original labs, established quantizers, everyone else);
+ * `in_catalog` means an entry the local registry serves already uses the repo. */
+export interface HfSearchHit {
+  repo_id: string;
+  author: string;
+  publisher_tier: 'top' | 'known' | 'other';
+  downloads: number;
+  likes: number;
+  gated: boolean;
+  last_modified: string;
+  base_model: string;
+  license: string;
+  in_catalog: boolean;
+}
+
+/** The outcome of one `local_llm.hf_search` request. `null` until the first
+ * reply arrives; `query` is the text the search was sent for, so the dialog
+ * can tell a reply to what it last asked for apart from one left over from an
+ * earlier opening. `error` is non-empty when the Hub could not be searched. */
+export interface HfSearchResult {
+  query: string;
+  results: HfSearchHit[];
+  error: string;
+}
+
 /** One candidate found while scanning a repo for `skills.install_scan`
  * (kodo/doc/WS_PROTOCOL.md §7.6j) — name/description only, since the temp
  * clone it came from is already deleted by the time the reply arrives. */
@@ -351,6 +379,7 @@ export interface KodoSettingsState {
    * `null` until each has fired at least once for the modal currently open. */
   skillScan: SkillScanResult | null;
   skillInstall: SkillInstallResult | null;
+  hfSearch: HfSearchResult | null;
   agents: AgentsState;
   agentScan: AgentScanResult | null;
   agentInstall: AgentInstallResult | null;
@@ -467,6 +496,7 @@ export type KodoSettingsMessage =
   | { type: 'forget_key'; vendor: string; uuid: string }
   | { type: 'make_active'; vendor: string; uuid: string }
   | { type: 'import_hf_with_agent'; repo_id: string }
+  | { type: 'hf_search'; query: string }
   | ({ type: 'add_file' } & AddFileLlmPayload)
   | ({ type: 'add_server_url' } & AddServerUrlLlmPayload)
   | { type: 'pick_gguf_file' }

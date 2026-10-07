@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 
 import { reducer, initial } from '../settings-webview/reducer';
-import type { AgentInstallResult, AgentScanResult, AgentsState } from '../settings-webview/types';
+import type { AgentInstallResult, AgentScanResult, AgentsState, HfSearchResult } from '../settings-webview/types';
 
 // The Kōdo Settings panel is seeded and refreshed through one merge-patch
 // reducer; a field the reducer does not copy is silently stuck at its initial
@@ -41,5 +41,23 @@ suite('settings reducer — agents', () => {
     const cleared = reducer(filled, { type: 'patch', data: { agentScan: null, agentInstall: null } });
     assert.strictEqual(cleared.agentScan, null);
     assert.strictEqual(cleared.agentInstall, null);
+  });
+});
+
+suite('settings reducer — Hugging Face repo search', () => {
+  const search: HfSearchResult = {
+    query: 'qwen',
+    results: [{
+      repo_id: 'Qwen/Qwen3-8B-GGUF', author: 'Qwen', publisher_tier: 'top', downloads: 10, likes: 1,
+      gated: false, last_modified: '', base_model: 'Qwen/Qwen3-8B', license: 'apache-2.0', in_catalog: false,
+    }],
+    error: '',
+  };
+
+  test('a search reply reaches the state, survives unrelated patches, and null clears it', () => {
+    const filled = reducer(initial, { type: 'patch', data: { hfSearch: search } });
+    assert.deepStrictEqual(filled.hfSearch, search);
+    assert.deepStrictEqual(reducer(filled, { type: 'patch', data: { rules: [] } }).hfSearch, search);
+    assert.strictEqual(reducer(filled, { type: 'patch', data: { hfSearch: null } }).hfSearch, null);
   });
 });

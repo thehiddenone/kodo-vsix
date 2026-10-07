@@ -31,6 +31,7 @@ import {
   setOpenRouterAutoMode,
 } from './cloud-ai-settings';
 import { sendControl, sendControlAwait } from './control-send';
+import { parseHfSearchReply } from './hf-search';
 import {
   installLlamaCpp,
   llamaCppInfoForPanel,
@@ -61,6 +62,29 @@ import { findBySessionId, newSession, openExistingSession } from './window-sessi
  *  huggingface.com" (kodo/src/kodo/agents/kodo_model_importer.json). It is
  *  absent from `top_agents.list` by design, so its name is known here. */
 const MODEL_IMPORTER_AGENT = 'kodo_model_importer';
+
+/** The query of the newest `hf_search` the import dialog sent. Replies can
+ *  arrive out of order (each is answered from its own server task), and one
+ *  for text the user has already typed past must not replace newer results. */
+let latestHfSearchQuery = '';
+
+/** Search Hugging Face for GGUF repos as the user types in the "Add local LLM
+ *  (GGUF) from huggingface.com" dialog (`local_llm.hf_search`,
+ *  kodo/doc/WS_PROTOCOL.md §7.6m). The reply lands in `hfSearch`; a failure
+ *  is shown inline in the dialog, never as a toast, since a search fires on
+ *  every pause in typing. The timeout outlasts the server's own Hub timeout,
+ *  so a slow Hub comes back as the server's error rather than ours. */
+async function searchHfForPanel(query: string): Promise<void> {
+  latestHfSearchQuery = query;
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('local_llm.hf_search', { query }, 12_000);
+  } catch {
+    resp = { results: [], error: 'Could not reach the Kōdo server.' };
+  }
+  if (query !== latestHfSearchQuery) { return; }
+  KodoSettingsPanel.instance?.update({ hfSearch: parseHfSearchReply(query, resp) });
+}
 
 /** The sidebar's "Local inference settings" button — opens (or reveals) the
  * Kōdo Settings panel with its "Local Inference" tab forced selected (the
@@ -408,7 +432,7 @@ export async function openKodoSettings(
       rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, sessionRules: null, skills,
       agents, agentScan: null, agentInstall: null,
       llamaCpp: llamaCppInfoForPanel(),
-      skillScan: null, skillInstall: null,
+      skillScan: null, skillInstall: null, hfSearch: null,
       uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
     },
     (msg) => void onKodoSettingsMessage(msg),
@@ -977,6 +1001,8 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
     // entries it writes reach this panel when that session's turn ends
     // (SessionDeps.refreshLocalRegistry → local_llm.registry_get).
     newSession({ name: MODEL_IMPORTER_AGENT, prompt: msg.repo_id });
+  } else if (msg.type === 'hf_search') {
+    void searchHfForPanel(msg.query);
   } else if (msg.type === 'add_file') {
     // A file the user just picked from disk exists by construction — mark it
     // installed immediately rather than waiting for the next extension
