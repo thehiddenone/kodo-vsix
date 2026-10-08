@@ -49,7 +49,7 @@ import { createProject } from './extension/create-project';
 import { openCloudAiSettings, openKodoSettings, openLocalInferenceSettings } from './extension/kodo-settings-bridge';
 import { abortLlamaCppInstallOp, installLlamaCpp, startLlamaCpp } from './extension/llamacpp';
 import { pushLocalInferenceState, setActiveLocalModel, setActiveProfile } from './extension/local-llm-registry';
-import { beginServerStartupProgress, endServerStartupProgress, handleServerStartFailure, launchKodoServer, showTransientNotification } from './extension/server-lifecycle';
+import { beginServerStartupProgress, handleServerStartFailure, launchKodoServer, onControlConnected, onControlConnectionFailure, showTransientNotification } from './extension/server-lifecycle';
 import {
   readActiveCloudVendor,
   readActiveLocalModel,
@@ -119,9 +119,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         state.sidebarProvider?.update({ connected });
         if (connected) {
           sendControlHello();
+          onControlConnected();
           if (!state.serverStartupConnected) {
             state.serverStartupConnected = true;
-            endServerStartupProgress();
             showTransientNotification('Kōdo: server is connected.');
           }
         } else {
@@ -132,7 +132,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           abortLlamaCppInstallOp('lost the connection to the Kōdo server');
         }
       },
-      () => handleServerStartFailure(port, 'the server did not respond'),
+      {
+        onNeverConnected: () => handleServerStartFailure(port, 'the server did not respond'),
+        onFailure: (wasOpen) => onControlConnectionFailure(port, wasOpen),
+      },
     );
 
     beginServerStartupProgress();

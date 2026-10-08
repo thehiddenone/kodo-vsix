@@ -132,6 +132,15 @@ export class SessionController {
     this.panel.reveal();
   }
 
+  /**
+   * Retry this tab's connection right away if it is down — also after its
+   * reconnect loop gave up. Called when the window's control connection
+   * (re)opens, i.e. the server is known to be reachable again.
+   */
+  reconnectNow(): void {
+    this.ws.reconnectNow();
+  }
+
   /** True when this session's tab is the foreground tab and its connection is ready. */
   get isActiveAndReady(): boolean {
     return this.panel.active && this.connected && this.sessionId !== '';

@@ -8,6 +8,7 @@
 
 import type * as vscode from 'vscode';
 import type { BedrockModelInfo, CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, OpenRouterModelInfo, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
+import type { LaunchOutcome } from '../server-attach-policy';
 import type { ServerLauncher } from '../server-launcher';
 import type { SessionController } from '../session/controller';
 import type { SidebarProvider } from '../sidebar-provider';
@@ -42,9 +43,20 @@ interface WindowState {
   // Open session tabs in this window, keyed by the controller's internal key.
   sessions: Map<string, SessionController>;
 
-  // Startup-failure remediation (rebuild ~/.kodo/venv and retry once) has
-  // already been attempted for this window's server launch.
-  serverStartRemediationAttempted: boolean;
+  // Consecutive genuine start failures since the last successful control
+  // connect — drives retry → venv rebuild → error (`startFailureAction`).
+  serverStartFailures: number;
+  // Consecutive "server went away" relaunches since the last successful
+  // control connect (capped by MAX_FREE_RELAUNCHES).
+  freeRelaunches: number;
+  // A `launch()` (or the pause before a retry) is under way; connection
+  // failures meanwhile must not start another one.
+  serverLaunchInFlight: boolean;
+  // How the most recent `launch()` resolved, and whether the control
+  // connection has opened since — together they tell "the server we had went
+  // away" from "the server we spawned never came up".
+  lastLaunchOutcome: LaunchOutcome | null;
+  controlConnectedSinceLaunch: boolean;
 
   // "Starting the local Kōdo server…" progress notification, shown from the
   // first launch attempt in `activate()` until the control connection either
@@ -166,7 +178,11 @@ export const state: WindowState = {
 
   sessions: new Map(),
 
-  serverStartRemediationAttempted: false,
+  serverStartFailures: 0,
+  freeRelaunches: 0,
+  serverLaunchInFlight: false,
+  lastLaunchOutcome: null,
+  controlConnectedSinceLaunch: false,
 
   serverStartProgressResolve: null,
   serverStartProgressReporter: null,

@@ -10,6 +10,10 @@
  * the venv, the running server is what stops that venv from being upgraded, so
  * it is asked to stop, the backend is upgraded, and a fresh server is spawned
  * on it. Every other window's `WsClient` reconnects to the new one by itself.
+ *
+ * Whether a server found here can be reused, must be waited out, or is stale
+ * is decided by `decideAttach` (`server-attach-policy.ts`), from the
+ * discovery file's `state` plus the PID/port liveness probed here.
  */
 
 import { spawn, type ChildProcess } from 'child_process';
@@ -21,6 +25,7 @@ import * as vscode from 'vscode';
 import WebSocket from 'ws';
 import { logDiag as log } from './diagnostics';
 import { makeRequest, fromJson, toJson } from './envelope';
+import { decideAttach, type LaunchOutcome, type ServerDiscovery, type ServerProbe, type ServerState } from './server-attach-policy';
 import { ensureKodoEnvironment, planKodoUpgrade, rebuildKodoVenv, withKodoEnvLock } from './uv-setup';
 
 const IS_WINDOWS = process.platform === 'win32';
@@ -32,6 +37,13 @@ const SHUTDOWN_EXIT_TIMEOUT_MS = 20_000;
 /** How long to wait after the SIGTERM fallback before giving up entirely. */
 const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
 const SHUTDOWN_POLL_MS = 250;
+/**
+ * How long `launch()` waits for a server that advertised `stopping` to exit
+ * before spawning anyway (the new server then waits for it on its own — see
+ * `kodo.server._lifecycle`).
+ */
+const STOPPING_EXIT_TIMEOUT_MS = 30_000;
+const SERVER_STATES: readonly ServerState[] = ['starting', 'serving', 'stopping'];
 
 export const DEFAULT_PORT = 9042;
 
@@ -55,20 +67,31 @@ export function serverStdoutLogPath(): string {
   return path.join(os.homedir(), '.kodo', 'logs', 'server.out.log');
 }
 
-/** Read `{pid, port}` from the discovery file, or null if absent/unparseable. */
-export function readServerDiscovery(): { pid: number; port: number } | null {
+/** Read `{pid, port, state}` from the discovery file, or null if absent/unparseable. */
+export function readServerDiscovery(): ServerDiscovery | null {
   try {
     const data = JSON.parse(fs.readFileSync(discoveryPath(), 'utf8')) as {
       pid?: unknown;
       port?: unknown;
+      state?: unknown;
     };
     if (typeof data.pid === 'number' && typeof data.port === 'number') {
-      return { pid: data.pid, port: data.port };
+      const state = SERVER_STATES.find((s) => s === data.state) ?? null;
+      return { pid: data.pid, port: data.port, state };
     }
   } catch {
     /* missing or malformed */
   }
   return null;
+}
+
+/** Read the discovery file and probe the liveness of the server it names. */
+export async function probeServer(): Promise<ServerProbe> {
+  const discovery = readServerDiscovery();
+  if (discovery === null) {
+    return { discovery, pidAlive: false, portBusy: false };
+  }
+  return { discovery, pidAlive: pidAlive(discovery.pid), portBusy: await portBusy(discovery.port) };
 }
 
 export function pidAlive(pid: number): boolean {
@@ -230,13 +253,20 @@ export class ServerLauncher {
     this.output = vscode.window.createOutputChannel('Kodo Server');
   }
 
+  /** Append one line to this window's "Kodo Server" output channel. */
+  log(message: string): void {
+    log(this.output, message);
+  }
+
   /**
    * Ensure the kōdo environment is ready, then launch the server for the
    * physical workspace root ``workspaceRoot`` on ``port``.
    *
    * Returns a Promise that resolves once the subprocess has been spawned
-   * (environment setup is complete).  The caller should wait for this before
-   * attempting a WebSocket connection.
+   * (environment setup is complete), or once a live server has been found to
+   * reuse — which of the two is the resolved {@link LaunchOutcome}. The caller
+   * should wait for this before attempting a WebSocket connection; a reused
+   * server can be connected to immediately, a spawned one needs a moment.
    *
    * API keys are delivered at runtime over the WebSocket via
    * ``api_key.request`` / ``api_key.response`` — never via environment
@@ -254,26 +284,28 @@ export class ServerLauncher {
    * happen here, before the reuse decision, and not inside
    * {@link ensureKodoEnvironment}.
    */
-  async launch(port = DEFAULT_PORT, opts: { rebuildVenv?: boolean } = {}): Promise<void> {
+  async launch(port = DEFAULT_PORT, opts: { rebuildVenv?: boolean } = {}): Promise<LaunchOutcome> {
     if (this.proc !== null) {
-      return; // we already spawned the singleton from this window
+      return 'spawned'; // we already spawned the singleton from this window
     }
     // The lock spans the reuse decision too, not just the install: after an
     // extension auto-update every window reloads at once, and each one is
     // about to ask "is py-kodo stale?" and possibly restart the server. Held
     // serially, the first window upgrades and relaunches and the rest simply
     // find a current py-kodo and reuse what it started. See `withKodoEnvLock`.
-    await withKodoEnvLock(this.output, () => this.launchLocked(port, opts));
+    return withKodoEnvLock(this.output, () => this.launchLocked(port, opts));
   }
 
-  private async launchLocked(port: number, opts: { rebuildVenv?: boolean }): Promise<void> {
-    // Singleton discovery / stale-file protocol: if a live server already holds
-    // the discovery file (its port is busy or its PID is alive), reuse it and do
-    // not spawn. Only when the file is absent or stale do we launch a new one
-    // (the server itself does the authoritative exit-1 race guard).
-    const disc = readServerDiscovery();
+  private async launchLocked(port: number, opts: { rebuildVenv?: boolean }): Promise<LaunchOutcome> {
+    // Singleton discovery / stale-file protocol (`decideAttach`): a live server
+    // holding the discovery file is reused, one that has advertised `stopping`
+    // is waited out, and only an absent or stale file leads straight to a
+    // spawn (the server itself does the authoritative exit-1 race guard).
+    const probe = await probeServer();
+    const disc = probe.discovery;
+    const decision = decideAttach(probe);
     if (disc !== null) {
-      if ((await portBusy(disc.port)) || pidAlive(disc.pid)) {
+      if (decision === 'reuse') {
         // A live server is NOT automatically a server we can keep: it may be
         // running the py-kodo of an extension version we have since replaced.
         // Check before reusing — this is the only path that runs after the
@@ -287,7 +319,7 @@ export class ServerLauncher {
           // This window did not spawn the server, but it can still surface the
           // shared singleton's logs: follow the log file from its current end.
           this.startTailing(serverStdoutLogPath(), false);
-          return;
+          return 'reused';
         }
         log(
           this.output,
@@ -297,13 +329,29 @@ export class ServerLauncher {
         // Fall through to the spawn path: `ensureKodoEnvironment` performs the
         // upgrade, then we start a fresh server on the new backend. Other
         // windows' WsClients reconnect to it on their own.
+        this.removeDiscoveryFile();
+      } else if (decision === 'await-exit') {
+        // It self-reaped (or was shut down) and is still tearing down. Reusing
+        // it would connect to a server that is about to vanish; spawning at
+        // once would only make the new server wait for the old one itself.
+        log(
+          this.output,
+          `[launch] kodo-server pid=${disc.pid} is shutting down — waiting for it to exit before starting a new one`,
+        );
+        if (await waitForExit(disc, STOPPING_EXIT_TIMEOUT_MS)) {
+          log(this.output, `[launch] kodo-server pid=${disc.pid} exited`);
+        } else {
+          log(
+            this.output,
+            `[launch] kodo-server pid=${disc.pid} is still shutting down after ${STOPPING_EXIT_TIMEOUT_MS / 1000}s — ` +
+            'starting a new one anyway; it waits for the old one to exit before taking over',
+          );
+        }
+        // Its file is left alone: the old server removes it on the way out,
+        // and the new one judges whatever is left (stale, or still stopping).
       } else {
         log(this.output, '[launch] Removing stale kodo-server discovery file');
-      }
-      try {
-        fs.rmSync(discoveryPath());
-      } catch {
-        /* already gone */
+        this.removeDiscoveryFile();
       }
     } else {
       log(this.output, '[launch] No kodo-server discovery file — starting a new singleton server');
@@ -402,6 +450,15 @@ export class ServerLauncher {
 
     // Mirror the shared log into the output channel for live debugging.
     this.startTailing(logPath, true);
+    return 'spawned';
+  }
+
+  private removeDiscoveryFile(): void {
+    try {
+      fs.rmSync(discoveryPath());
+    } catch {
+      /* already gone */
+    }
   }
 
   /**
