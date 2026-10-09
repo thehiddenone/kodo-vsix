@@ -411,10 +411,14 @@ export const styles = {
     opacity: 0.5,
     cursor: 'default' as const,
   },
+  // The ◉/○ marker. Fixed width, centred, so the two glyphs (whose natural
+  // advances can differ) occupy the same box and toggling moves nothing;
+  // lineHeight matches the label's so the row height is unchanged.
   sessionRadio: {
     flex: 'none' as const,
-    width: '12px',
-    fontSize: '11px',
+    width: '15px',
+    textAlign: 'center' as const,
+    fontSize: '14px',
     lineHeight: '17px',
   },
   // Fixed width so labels line up whatever each emoji's natural advance is;
@@ -426,15 +430,37 @@ export const styles = {
     fontSize: '13px',
     lineHeight: '17px',
   },
+  // The option name: an inline `BoldReserved` cell (MenuPrimitives.tsx), so
+  // bolding the selected row's name changes no box size.
   sessionOptionLabel: {
+    display: 'inline-grid',
     fontSize: '13px',
     lineHeight: '17px',
   },
+  // The option description, under the name. A block-level `BoldReserved` cell:
+  // its height is that of the bold rendering, so a description that would wrap
+  // onto one more line when bold already has that line reserved.
   sessionOptionDesc: {
+    display: 'grid',
     marginTop: '1px',
     fontSize: '11px',
     lineHeight: 1.35,
     opacity: 0.75,
+  },
+  // The three stacked layers of a `BoldReserved` cell: the visible text at
+  // normal or bold weight, and the invisible always-bold copy that sizes the
+  // cell.
+  boldReservedText: {
+    gridArea: '1 / 1',
+  },
+  boldReservedBold: {
+    gridArea: '1 / 1',
+    fontWeight: 'bold' as const,
+  },
+  boldReservedGhost: {
+    gridArea: '1 / 1',
+    fontWeight: 'bold' as const,
+    visibility: 'hidden' as const,
   },
   stream: {
     flex: 1,

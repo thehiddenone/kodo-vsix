@@ -49,7 +49,7 @@ import { createProject } from './extension/create-project';
 import { openCloudAiSettings, openKodoSettings, openLocalInferenceSettings } from './extension/kodo-settings-bridge';
 import { abortLlamaCppInstallOp, installLlamaCpp, startLlamaCpp } from './extension/llamacpp';
 import { pushLocalInferenceState, setActiveLocalModel, setActiveProfile } from './extension/local-llm-registry';
-import { beginServerStartupProgress, handleServerStartFailure, launchKodoServer, onControlConnected, onControlConnectionFailure, showTransientNotification } from './extension/server-lifecycle';
+import { beginServerStartupProgress, handleServerStartFailure, launchKodoServer, onControlConnected, onControlConnectionFailure } from './extension/server-lifecycle';
 import {
   readActiveCloudVendor,
   readActiveLocalModel,
@@ -120,10 +120,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (connected) {
           sendControlHello();
           onControlConnected();
-          if (!state.serverStartupConnected) {
-            state.serverStartupConnected = true;
-            showTransientNotification('Kōdo: server is connected.');
-          }
         } else {
           // An install/update op streams its progress over this connection and
           // is only ever finished by a terminal frame on it, so a drop strands

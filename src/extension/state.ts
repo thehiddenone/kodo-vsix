@@ -63,7 +63,6 @@ interface WindowState {
   // connects for the first time or exhausts remediation.
   serverStartProgressResolve: (() => void) | null;
   serverStartProgressReporter: vscode.Progress<{ message?: string }> | null;
-  serverStartupConnected: boolean;
 
   projectRoot: string;
   physicalRoot: string;
@@ -186,7 +185,6 @@ export const state: WindowState = {
 
   serverStartProgressResolve: null,
   serverStartProgressReporter: null,
-  serverStartupConnected: false,
 
   projectRoot: '',
   physicalRoot: '',

@@ -127,7 +127,9 @@ export function MenuGroup({
 /**
  * One radio row: the ◉/○ marker, an optional glyph, the option's name, and its
  * description underneath. Disabled rows still render their marker, so a locked group shows
- * what is selected while refusing to change it.
+ * what is selected while refusing to change it. The selected row's name and
+ * description are also bold, with their size reserved up front (see
+ * {@link BoldReserved}) so the switch moves nothing.
  *
  * Hover highlighting is tracked in state rather than left to `:hover`, because
  * VS Code webviews style everything here inline — the same reason
@@ -175,9 +177,36 @@ export function MenuOption({
         </span>
       )}
       <span>
-        <span style={styles.sessionOptionLabel}>{label}</span>
-        {desc !== '' && <div style={styles.sessionOptionDesc}>{desc}</div>}
+        <BoldReserved text={label} bold={selected} boxStyle={styles.sessionOptionLabel} />
+        {desc !== '' && <BoldReserved text={desc} bold={selected} boxStyle={styles.sessionOptionDesc} />}
       </span>
     </button>
+  );
+}
+
+/**
+ * Text that can switch between normal and bold weight without changing size.
+ * It sits in a one-cell grid with an invisible, always-bold copy of itself
+ * stacked in the same cell, so the box is always as large as the bold
+ * rendering: as wide, and, for text that wraps, as many lines tall. Selecting a
+ * row (which bolds it) therefore cannot move or re-wrap anything in the popup.
+ * `boxStyle` sets the cell's `display` (`inline-grid` or `grid`) and its font.
+ */
+function BoldReserved({
+  text,
+  bold,
+  boxStyle,
+}: {
+  text: string;
+  bold: boolean;
+  boxStyle: Record<string, string | number>;
+}) {
+  return (
+    <span style={boxStyle}>
+      <span style={bold ? styles.boldReservedBold : styles.boldReservedText}>{text}</span>
+      <span style={styles.boldReservedGhost} aria-hidden="true">
+        {text}
+      </span>
+    </span>
   );
 }
