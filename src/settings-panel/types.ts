@@ -507,6 +507,7 @@ export type KodoSettingsMessage =
   | { type: 'uninstall'; name: string }
   | { type: 'update'; name: string }
   | { type: 'remove'; name: string }
+  | { type: 'remove_user_llm'; name: string }
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
   | { type: 'remove_override' }

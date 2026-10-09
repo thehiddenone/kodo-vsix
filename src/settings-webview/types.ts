@@ -419,6 +419,9 @@ export interface LlamaArgSpec {
 export interface LocalRegistryEntry {
   name: string;
   kind: 'hardcoded_hf' | 'custom_hf' | 'custom_file' | 'custom_server_url';
+  /** Defined by a file in `~/.kodo/local_llms/` ("user-installed"); a
+   *  `hardcoded_hf` entry without it is "built-in". */
+  user_catalog?: boolean;
   description?: string;
   base_llm?: string;
   quant_type?: string;
@@ -660,6 +663,7 @@ export type OutboundMessage =
   | { type: 'uninstall'; name: string }
   | { type: 'update'; name: string }
   | { type: 'remove'; name: string }
+  | { type: 'remove_user_llm'; name: string }
   | { type: 'reveal'; name: string }
   | { type: 'set_override' }
   | { type: 'remove_override' }

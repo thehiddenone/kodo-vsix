@@ -994,6 +994,34 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   await onLocalInferenceSettingsMessage(msg);
 }
 
+/** "Remove LLM" on a user-installed (`~/.kodo/local_llms/`) quant's card.
+ * `local_llm.remove` deletes the catalog file and, if the quant has a download
+ * (finished or partial), that too — kodo/doc/WS_PROTOCOL.md §7.6. Its
+ * `local_llm.registry_state` reply re-renders the list, so nothing is sent
+ * back to the webview from here. */
+async function removeUserLlmFromSettingsPanel(name: string): Promise<void> {
+  const entry = state.localRegistryState.find((e) => e.name === name);
+  const label = entry?.description || name;
+  const downloaded = entry?.installed
+    ? ` Its downloaded model file${entry.size_hint ? ` (${entry.size_hint})` : ''} will be deleted from disk too.`
+    : state.localDownloadsState.some((d) => d.name === name)
+      ? ' Its unfinished download will be cancelled and deleted too.'
+      : '';
+  const choice = await vscode.window.showWarningMessage(
+    `Remove "${label}" from your local LLMs?`,
+    {
+      modal: true,
+      detail: `This deletes its catalog file from ~/.kodo/local_llms/.${downloaded} `
+        + 'If that file replaced a built-in quant of the same name, the built-in quant returns, '
+        + 'not installed.\n\nThis cannot be undone.',
+    },
+    'Remove',
+  );
+  if (choice === 'Remove') {
+    sendControl(makeRequest('local_llm.remove', { name }));
+  }
+}
+
 async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   if (msg.type === 'import_hf_with_agent') {
     // A new session tab runs the Model Importer on this repo (agent.run,
@@ -1050,6 +1078,8 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
     sendControl(makeRequest('local_llm.update', { name: msg.name }));
   } else if (msg.type === 'remove') {
     sendControl(makeRequest('local_llm.remove', { name: msg.name }));
+  } else if (msg.type === 'remove_user_llm') {
+    await removeUserLlmFromSettingsPanel(msg.name);
   } else if (msg.type === 'reveal') {
     revealLocalLlmFiles(msg.name);
   } else if (msg.type === 'set_override') {

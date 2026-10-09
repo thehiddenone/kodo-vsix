@@ -269,6 +269,13 @@ export interface SamplingParamSpec {
 export interface LocalRegistryEntry {
   name: string;
   kind: LocalEntryKind;
+  /**
+   * Defined by a file in `~/.kodo/local_llms/` (always `hardcoded_hf`) — the
+   * card's "user-installed" label and "Remove LLM" button. A `hardcoded_hf`
+   * entry without it is shipped with Kōdo ("built-in"). Absent from servers
+   * older than the field; read as `false`.
+   */
+  user_catalog?: boolean;
   description: string;
   repo_id: string;
   filename: string;

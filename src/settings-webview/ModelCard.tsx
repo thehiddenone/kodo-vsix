@@ -44,7 +44,14 @@ export function ModelCard({
       {/* entry.name is an internal identifier for hardcoded entries (a slug);
           only custom entries lack a description and fall back to the
           user-typed name. */}
-      <div className="cell-name">{entry.description || entry.name}</div>
+      <div className="cell-name">
+        {entry.description || entry.name}
+        {entry.user_catalog ? (
+          <span className="origin-tag user-installed">user-installed</span>
+        ) : entry.kind === 'hardcoded_hf' ? (
+          <span className="origin-tag built-in">built-in</span>
+        ) : null}
+      </div>
 
       {(entry.quant_type || entry.quant_author) && (
         <div className="model-meta-line">{[entry.quant_type, entry.quant_author].filter(Boolean).join(' · ')}</div>
@@ -140,6 +147,16 @@ export function ModelCard({
         {CUSTOM.has(entry.kind) && (
           <button className="secondary-btn" onClick={() => vscode.postMessage({ type: 'remove', name: entry.name })}>
             Remove
+          </button>
+        )}
+
+        {/* A user catalog file — shown whether or not the quant is installed.
+            The host confirms first, then the server uninstalls it (if it has
+            a download) and deletes the file; an override of a built-in quant
+            turns back into that built-in one. */}
+        {entry.user_catalog && (
+          <button className="secondary-btn" onClick={() => vscode.postMessage({ type: 'remove_user_llm', name: entry.name })}>
+            Remove LLM
           </button>
         )}
       </div>

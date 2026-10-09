@@ -204,6 +204,11 @@ export class SessionController {
     };
     if (this.sessionId) {
       payload.session_id = this.sessionId;
+    } else if (this.agentRun) {
+      // About to `agent.run` this session (_startAgentRun): nobody chats with
+      // a non-interactive agent, so ask the server for no opening greeting
+      // (kodo/doc/WS_PROTOCOL.md §4.1, §7.4h).
+      payload.greet = false;
     }
     this._sendStamped(makeRequest('hello', payload));
   }

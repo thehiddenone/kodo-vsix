@@ -650,6 +650,20 @@
       margin: 24px 0;
     }
     .cell-name { font-weight: 600; margin-bottom: 2px; word-break: break-word; }
+    /* "user-installed" / "built-in" pill after a model card's name. */
+    .origin-tag {
+      display: inline-block;
+      margin-left: 8px;
+      font-size: 0.75em;
+      font-weight: normal;
+      border: 1px solid currentColor;
+      border-radius: 10px;
+      padding: 0 7px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .origin-tag.user-installed { color: var(--vscode-charts-blue, #3794ff); }
+    .origin-tag.built-in { color: var(--vscode-descriptionForeground); }
     .cell-kind {
       font-size: 0.78em;
       color: var(--vscode-descriptionForeground);
