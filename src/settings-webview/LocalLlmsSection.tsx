@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
 import { DownloadsSection, UpdatesBanner } from './DownloadsSection';
-import { ramWarning } from './localLlmUtils';
+import { LLM_FILTER_MIN_CHARS, llmFilterNeedle, matchesLlmFilter, ramWarning } from './localLlmUtils';
 import { ModelCard } from './ModelCard';
 import type { LocalDownloadState, LocalRegistryEntry, UiSettings } from './types';
 import { vscode } from './vscode';
@@ -21,12 +21,32 @@ interface LocalLlmsSectionProps {
   onManageProfiles: (name: string) => void;
 }
 
+/** A local-LLM filter box. Purely client-side: the query lives in the
+ *  parent's component state and never reaches the host or the settings. */
+function LlmFilterInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <input
+      type="search"
+      className="llm-filter-input"
+      autocomplete="off"
+      spellcheck={false}
+      placeholder={`Filter by quant name or Hugging Face repo (${LLM_FILTER_MIN_CHARS}+ characters)`}
+      value={value}
+      onInput={(e) => onChange((e.target as HTMLInputElement).value)}
+    />
+  );
+}
+
 export function LocalLlmsSection({
   localRegistry, downloads, updatableNames, isMac, detectedVramGb, detectedRamGb, installedLlamaCppVersion, uiSettings,
   onAddHf, onAddFile, onAddServer, onConfigure, onManageProfiles,
 }: LocalLlmsSectionProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [installedExpanded, setInstalledExpanded] = useState(false);
+  const [installedFilter, setInstalledFilter] = useState('');
+  const [availableFilter, setAvailableFilter] = useState('');
+  const installedNeedle = llmFilterNeedle(installedFilter);
+  const availableNeedle = llmFilterNeedle(availableFilter);
 
   const downloadingNames = new Set(downloads.map((d) => d.name));
   const cardProps = {
@@ -34,6 +54,7 @@ export function LocalLlmsSection({
   };
 
   const installed = localRegistry.filter((e) => e.installed);
+  const shownInstalled = installed.filter((e) => matchesLlmFilter(e, installedNeedle));
 
   // "Show all LLM quants…" unchecked hides entries the detected VRAM+RAM
   // can't run (ramWarning's red/yellow cases) from the cards below —
@@ -43,9 +64,16 @@ export function LocalLlmsSection({
     ? localRegistry
     : localRegistry.filter((e) => e.installed || !ramWarning(e, detectedVramGb, detectedRamGb));
 
+  // An active filter drops non-matching cards, so a group left empty
+  // disappears entirely. Groups keep their expanded/collapsed state while
+  // filtering; the header count reads "matched of total" (total = what the
+  // group holds with the RAM/VRAM filter alone) unless every entry matched.
   const groups = new Map<string, LocalRegistryEntry[]>();
+  const groupTotals = new Map<string, number>();
   for (const entry of cardEntries) {
     const key = entry.base_llm || entry.name;
+    groupTotals.set(key, (groupTotals.get(key) ?? 0) + 1);
+    if (!matchesLlmFilter(entry, availableNeedle)) { continue; }
     const list = groups.get(key) ?? [];
     list.push(entry);
     groups.set(key, list);
@@ -90,13 +118,22 @@ export function LocalLlmsSection({
           <div className={'group-header' + (installedExpanded ? ' expanded' : '')} onClick={() => setInstalledExpanded((v) => !v)}>
             <span className="chevron">▶</span>
             <span className="group-title">Installed</span>
-            <span className="group-count">({installed.length})</span>
+            <span className="group-count">
+              ({shownInstalled.length === installed.length ? installed.length : `${shownInstalled.length} of ${installed.length}`})
+            </span>
           </div>
           <div className={'group-body' + (installedExpanded ? ' expanded' : '')}>
             {installed.length === 0 ? (
               <div id="empty-msg">Nothing installed yet — download one of the quants below.</div>
             ) : (
-              installed.map((entry) => <ModelCard key={entry.name} entry={entry} {...cardProps} />)
+              <>
+                <LlmFilterInput value={installedFilter} onChange={setInstalledFilter} />
+                {shownInstalled.length === 0 ? (
+                  <div id="empty-msg">No installed LLM matches &quot;{installedFilter.trim()}&quot;.</div>
+                ) : (
+                  shownInstalled.map((entry) => <ModelCard key={entry.name} entry={entry} {...cardProps} />)
+                )}
+              </>
             )}
           </div>
         </div>
@@ -122,9 +159,16 @@ export function LocalLlmsSection({
         Show all LLM quants including those that will not run on this system due to insufficient RAM/VRAM
       </label>
 
+      {localRegistry.length > 0 && <LlmFilterInput value={availableFilter} onChange={setAvailableFilter} />}
+
       <div id="cards">
         {localRegistry.length === 0 ? (
           <div id="empty-msg">No local LLMs yet — add one above.</div>
+        ) : groups.size === 0 && availableNeedle !== null ? (
+          <div id="empty-msg">
+            No quant matches &quot;{availableFilter.trim()}&quot;
+            {uiSettings.showAllLocalLlmQuants ? '.' : ' among those this system can run — check "Show all LLM quants" above to search them all.'}
+          </div>
         ) : groups.size === 0 ? (
           <div id="empty-msg">
             Every quant is hidden because this system&apos;s detected RAM/VRAM is below what it needs — check
@@ -133,12 +177,15 @@ export function LocalLlmsSection({
         ) : (
           [...groups.entries()].map(([key, entries]) => {
             const expanded = expandedGroups.has(key);
+            const total = groupTotals.get(key) ?? entries.length;
             return (
               <div className="base-llm-group" key={key}>
                 <div className={'group-header' + (expanded ? ' expanded' : '')} onClick={() => toggleGroup(key)}>
                   <span className="chevron">▶</span>
                   <span className="group-title">{key}</span>
-                  <span className="group-count">({entries.length})</span>
+                  <span className="group-count">
+                    ({entries.length === total ? total : `${entries.length} of ${total}`})
+                  </span>
                 </div>
                 <div className={'group-body' + (expanded ? ' expanded' : '')}>
                   {entries.map((entry) => <ModelCard key={entry.name} entry={entry} {...cardProps} />)}

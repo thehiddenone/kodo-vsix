@@ -49,7 +49,7 @@ import { createProject } from './extension/create-project';
 import { openCloudAiSettings, openKodoSettings, openLocalInferenceSettings } from './extension/kodo-settings-bridge';
 import { abortLlamaCppInstallOp, installLlamaCpp, startLlamaCpp } from './extension/llamacpp';
 import { pushLocalInferenceState, setActiveLocalModel, setActiveProfile } from './extension/local-llm-registry';
-import { beginServerStartupProgress, handleServerStartFailure, launchKodoServer, onControlConnected, onControlConnectionFailure } from './extension/server-lifecycle';
+import { handleServerStartFailure, launchKodoServer, onControlConnected, onControlConnectionFailure } from './extension/server-lifecycle';
 import {
   readActiveCloudVendor,
   readActiveLocalModel,
@@ -134,7 +134,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     );
 
-    beginServerStartupProgress();
     launchKodoServer(port);
   }
 

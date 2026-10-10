@@ -782,6 +782,26 @@
       color: var(--vscode-descriptionForeground);
     }
 
+    /* --- "Installed" / "Available local LLM quants" filter boxes (UI-only) --- */
+    .llm-filter-input {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      margin: 8px 0;
+      padding: 5px 7px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #444));
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: inherit;
+    }
+    .llm-filter-input::placeholder { color: var(--vscode-input-placeholderForeground); }
+    .llm-filter-input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+
     /* --- Grouped / collapsible available-LLM cards --- */
     .base-llm-group { margin-bottom: 4px; }
     .group-header {

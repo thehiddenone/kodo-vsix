@@ -1,7 +1,7 @@
 /**
- * Singleton-server launch + the "Starting the local Kōdo server…" progress
- * notification spanning environment bootstrap, spawn, and the WebSocket
- * connect (including remediation retries).
+ * Singleton-server launch, plus the progress notification shown only while
+ * recovering from a failed start (retry / venv rebuild). A normal start or a
+ * relaunch shows no notification at all.
  *
  * Two kinds of trouble are told apart here (policy in
  * `server-attach-policy.ts`):
@@ -29,24 +29,28 @@ import { state } from './state';
 export const SERVER_STARTUP_DELAY_MS = 1_500;
 
 /**
- * Show the "Starting the local Kōdo server…" progress notification, if not
- * already showing. Spans the whole startup sequence as a single indicator
- * rather than one toast per phase.
+ * Show (or update) the "Restarting local Kōdo server" progress notification
+ * with `message` as its current phase. Only {@link handleServerStartFailure}'s
+ * retry and rebuild steps call this — a normal start stays silent, but a
+ * recovery can take minutes (a venv rebuild) and would otherwise end in a
+ * surprise error dialog. One notification spans every recovery step until a
+ * connect or the final give-up closes it.
  */
-export function beginServerStartupProgress(): void {
-  if (state.serverStartProgressResolve !== null) {
-    return;
+function beginServerRecoveryProgress(message: string): void {
+  if (state.serverStartProgressResolve === null) {
+    vscode.window
+      .withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Restarting local Kōdo server', cancellable: false },
+        (progress) =>
+          new Promise<void>((resolve) => {
+            state.serverStartProgressReporter = progress;
+            state.serverStartProgressResolve = resolve;
+          }),
+      )
+      .then(undefined, () => undefined);
   }
-  vscode.window
-    .withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Starting local Kōdo server…', cancellable: false },
-      (progress) =>
-        new Promise<void>((resolve) => {
-          state.serverStartProgressReporter = progress;
-          state.serverStartProgressResolve = resolve;
-        }),
-    )
-    .then(undefined, () => undefined);
+  // `withProgress` runs its task synchronously, so the reporter is set by now.
+  state.serverStartProgressReporter?.report({ message });
 }
 
 export function endServerStartupProgress(): void {
@@ -141,7 +145,6 @@ export function relaunchKodoServer(port: number, reason: string): void {
     return;
   }
   state.launcher?.log(`[connect] ${reason} — launching it again (no venv rebuild)`);
-  beginServerStartupProgress();
   launchKodoServer(port);
 }
 
@@ -163,16 +166,14 @@ export function handleServerStartFailure(port: number, reason: string): void {
   state.launcher?.log(`[remediation] start failure #${state.serverStartFailures}: ${reason} — next: ${action.kind}`);
   switch (action.kind) {
     case 'retry':
-      beginServerStartupProgress();
-      state.serverStartProgressReporter?.report({ message: 'Retrying…' });
+      beginServerRecoveryProgress('Retrying…');
       // Held as "in flight" through the pause so a stray connection failure
       // cannot start a second, overlapping launch.
       state.serverLaunchInFlight = true;
       setTimeout(() => launchKodoServer(port), action.delayMs);
       return;
     case 'rebuild':
-      beginServerStartupProgress();
-      state.serverStartProgressReporter?.report({ message: 'Rebuilding the Python environment and retrying…' });
+      beginServerRecoveryProgress('Rebuilding the Python environment and retrying…');
       launchKodoServer(port, true);
       return;
     case 'give-up':

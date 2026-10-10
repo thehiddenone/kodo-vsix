@@ -384,3 +384,26 @@ export function llamacppVersionWarning(
     text: `⛔ The installed llama.cpp (b${installed}) does not support this LLM — it requires at least b${required}. Update llama.cpp to run it.`,
   };
 }
+
+/** Fewer typed characters than this leave a local-LLM filter box inactive
+ *  (everything shown) — one or two characters match nearly every quant. */
+export const LLM_FILTER_MIN_CHARS = 3;
+
+/** The active needle for a local-LLM filter box: the trimmed, lower-cased
+ *  query, or `null` while it is shorter than `LLM_FILTER_MIN_CHARS`. */
+export function llmFilterNeedle(query: string): string | null {
+  const needle = query.trim().toLowerCase();
+  return needle.length >= LLM_FILTER_MIN_CHARS ? needle : null;
+}
+
+/** Whether `entry` survives a local-LLM filter: a case-insensitive substring
+ *  match against the card's displayed quant name (`description`, falling back
+ *  to `name` as `ModelCard` does), its Hugging Face repo id, or its base LLM
+ *  name (`base_llm`, the group title) — so "Gemma4" keeps every quant of every
+ *  Gemma4-* family. A `null` needle (inactive filter) matches everything.
+ *  UI-only — never sent to the host. */
+export function matchesLlmFilter(entry: LocalRegistryEntry, needle: string | null): boolean {
+  if (needle === null) { return true; }
+  return [entry.description || entry.name, entry.repo_id, entry.base_llm]
+    .some((field) => field !== undefined && field.toLowerCase().includes(needle));
+}

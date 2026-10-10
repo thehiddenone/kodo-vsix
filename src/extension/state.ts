@@ -58,9 +58,9 @@ interface WindowState {
   lastLaunchOutcome: LaunchOutcome | null;
   controlConnectedSinceLaunch: boolean;
 
-  // "Starting the local Kōdo server…" progress notification, shown from the
-  // first launch attempt in `activate()` until the control connection either
-  // connects for the first time or exhausts remediation.
+  // "Restarting local Kōdo server" progress notification, shown only while
+  // `handleServerStartFailure` retries or rebuilds the venv, until the control
+  // connection connects or remediation gives up. A normal start shows none.
   serverStartProgressResolve: (() => void) | null;
   serverStartProgressReporter: vscode.Progress<{ message?: string }> | null;
 
