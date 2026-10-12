@@ -150,7 +150,7 @@ export function ConfigureModal({ entry, knobDefs, onClose }: ConfigureModalProps
   return (
     <div className="li-modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) { onClose(); } }}>
       <div className="modal-dialog configure-modal-dialog" role="dialog" aria-modal="true">
-        <h3>Configure — {entry.description || entry.name}</h3>
+        <h3>Configure Default Profile — {entry.description || entry.name}</h3>
         <p className="explain">
           These settings build this LLM&apos;s <strong>Default profile</strong>: each control below owns a group of
           llama.cpp launch arguments, and the ones it contributes are listed under it. Changes apply when you press

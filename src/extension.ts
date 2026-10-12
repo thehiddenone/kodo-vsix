@@ -201,7 +201,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // The knobs modal lives in the Kōdo Settings panel (editor-width,
         // preact) rather than in this narrow plain-JS sidebar — the button
         // here just deep-links into it (LLM_REGISTRY.md §4.6).
-        void openKodoSettings('local-inference', msg.name);
+        void openKodoSettings('local-inference', { modal: 'configure', name: msg.name });
+      } else if (msg.type === 'manage_local_model_profiles') {
+        // Same deep link as Configure, into the user-defined profile editor.
+        void openKodoSettings('local-inference', { modal: 'manage_profiles', name: msg.name });
       } else if (msg.type === 'set_cloud_vendor') {
         setActiveCloudVendor(msg.vendor);
       } else if (msg.type === 'set_cloud_model') {

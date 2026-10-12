@@ -677,9 +677,13 @@ export type OutboundMessage =
 export type InboundMessage =
   | ({ type: 'update' } & Partial<KodoSettingsState>)
   | { type: 'select_section'; key: string }
-  /** The sidebar card's Configure button deep-linking into this panel — open
-   *  the Default-profile knobs modal for `name`. One-shot, never part of
-   *  `KodoSettingsState` (see `KodoSettingsPanel.configureLocalModel`). */
+  /** The sidebar card's ⚙ button deep-linking into this panel — open the
+   *  Default-profile knobs modal for `name`. One-shot, never part of
+   *  `KodoSettingsState` (see `KodoSettingsPanel.openLocalModelModal`). */
   | { type: 'configure_local_model'; name: string }
+  /** The sidebar card's "Manage Profiles..." picker item deep-linking into
+   *  this panel — open the user-defined profile editor for `name`. One-shot,
+   *  same as `configure_local_model`. */
+  | { type: 'manage_local_model_profiles'; name: string }
   | { type: 'gguf_file_picked'; path: string | null }
   | { type: 'open_install_agents'; source: string };

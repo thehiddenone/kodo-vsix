@@ -88,13 +88,13 @@ export function ModelCard({
 
       <div className="row-buttons">
         {/* Which configuration is *active* is chosen in the sidebar; these two
-            buttons edit the definitions. "Configure" is the Default profile's
+            buttons edit the definitions. "Configure Default Profile" is the Default profile's
             knobs, "Manage profiles" the user-defined arg sets — the same split
             the sidebar card makes. Only meaningful once the model is
             installed, since both describe how to launch a local file. */}
         {PROFILE_CAPABLE.has(entry.kind) && entry.installed && (
           <button className="secondary-btn" type="button" onClick={() => onConfigure(entry.name)}>
-            Configure
+            Configure Default Profile
           </button>
         )}
 

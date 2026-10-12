@@ -10,7 +10,7 @@ import * as vscode from 'vscode';
 import * as cloudCredentials from '../cloud-credentials';
 import { makeRequest } from '../envelope';
 import * as hfTokens from '../hf-tokens';
-import { KodoSettingsPanel } from '../settings-panel/panel';
+import { KodoSettingsPanel, type LocalModelModal } from '../settings-panel/panel';
 import type {
   AgentsState,
   KodoSettingsMessage,
@@ -382,7 +382,7 @@ async function pickAgentSource(): Promise<void> {
  * (`latestChecking`, rendered as "checking…"). */
 export async function openKodoSettings(
   selectSection?: string,
-  configureEntry?: string,
+  localModelModal?: LocalModelModal,
 ): Promise<void> {
   const [rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, skills, agents] =
     await Promise.all([
@@ -437,7 +437,7 @@ export async function openKodoSettings(
     },
     (msg) => void onKodoSettingsMessage(msg),
     selectSection,
-    configureEntry,
+    localModelModal,
   );
   // For an already-open panel, createOrShow only revealed it (initialState is
   // ignored) — push the freshly-fetched state in explicitly so re-opening the

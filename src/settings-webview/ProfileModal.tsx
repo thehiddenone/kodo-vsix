@@ -234,7 +234,7 @@ export function ProfileModal({ entry, llamaArgCatalog, onClose }: ProfileModalPr
         <p className="explain">
           A profile is your own named set of llama.cpp launch arguments for this LLM. Selecting one from the
           sidebar <strong>fully replaces</strong> the Default profile&apos;s arguments — the two are never combined.
-          The Default profile itself isn&apos;t listed here; configure it with the &quot;Configure&quot; button instead.
+          The Default profile itself isn&apos;t listed here; configure it with the &quot;Configure Default Profile&quot; button instead.
         </p>
         <div className="flavor-modal-body">
           <div className="flavor-list-pane">

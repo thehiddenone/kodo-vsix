@@ -73,6 +73,12 @@ export function App() {
         setConfigureEntryName(data.name);
         return;
       }
+      if (data.type === 'manage_local_model_profiles') {
+        // Deep link from the sidebar profile picker's "Manage Profiles..."
+        // item — same tab-forcing as the Configure deep link above.
+        setProfileEntryName(data.name);
+        return;
+      }
       if (data.type !== 'update') { return; }
       dispatch({ type: 'patch', data });
       // A deleted (or otherwise vanished) session can't keep its modal open.

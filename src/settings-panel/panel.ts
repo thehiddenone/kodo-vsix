@@ -11,6 +11,15 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { KodoSettingsMessage, KodoSettingsState } from './types';
 
+/** One of a local registry entry's two launch-configuration modals, opened by
+ * deep link from the sidebar card: `'configure'` is the Default profile's
+ * knobs (ConfigureModal), `'manage_profiles'` the user-defined profile editor
+ * (ProfileModal). */
+export interface LocalModelModal {
+  modal: 'configure' | 'manage_profiles';
+  name: string;
+}
+
 function genNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let s = '';
@@ -48,26 +57,27 @@ export class KodoSettingsPanel {
    * requested. Only meaningful for a brand-new panel; `createOrShow` handles
    * the reveal-existing-panel case by calling `selectSection` directly. */
   private _pendingSelectSection: string | null = null;
-  /** A local registry entry name whose Configure (knobs) modal should open
-   * once the `ready` handshake lands — the sidebar card's Configure button
-   * deep-links here (see `configureLocalModel`). Same one-shot treatment as
+  /** A local registry entry modal (Configure or Manage profiles) to open
+   * once the `ready` handshake lands — the sidebar card's ⚙ button and its
+   * profile picker's "Manage Profiles..." item deep-link here (see
+   * `openLocalModelModal`). Same one-shot treatment as
    * `_pendingSelectSection`. */
-  private _pendingConfigureEntry: string | null = null;
+  private _pendingLocalModelModal: LocalModelModal | null = null;
 
   static createOrShow(
     extensionUri: vscode.Uri,
     initialState: KodoSettingsState,
     onMessage: (msg: KodoSettingsMessage) => void,
     selectSection?: string,
-    configureEntry?: string,
+    localModelModal?: LocalModelModal,
   ): KodoSettingsPanel {
     if (KodoSettingsPanel.current) {
       KodoSettingsPanel.current.panel.reveal();
       if (selectSection) {
         KodoSettingsPanel.current.selectSection(selectSection);
       }
-      if (configureEntry) {
-        KodoSettingsPanel.current.configureLocalModel(configureEntry);
+      if (localModelModal) {
+        KodoSettingsPanel.current.openLocalModelModal(localModelModal);
       }
       return KodoSettingsPanel.current;
     }
@@ -85,8 +95,8 @@ export class KodoSettingsPanel {
     if (selectSection) {
       instance._pendingSelectSection = selectSection;
     }
-    if (configureEntry) {
-      instance._pendingConfigureEntry = configureEntry;
+    if (localModelModal) {
+      instance._pendingLocalModelModal = localModelModal;
     }
     KodoSettingsPanel.current = instance;
     panel.onDidDispose(() => {
@@ -122,9 +132,9 @@ export class KodoSettingsPanel {
           this.selectSection(this._pendingSelectSection);
           this._pendingSelectSection = null;
         }
-        if (this._pendingConfigureEntry) {
-          this.configureLocalModel(this._pendingConfigureEntry);
-          this._pendingConfigureEntry = null;
+        if (this._pendingLocalModelModal) {
+          this.openLocalModelModal(this._pendingLocalModelModal);
+          this._pendingLocalModelModal = null;
         }
         return;
       }
@@ -152,17 +162,18 @@ export class KodoSettingsPanel {
     void this.panel.webview.postMessage({ type: 'select_section', key });
   }
 
-  /** Open the Configure (Default-profile knobs) modal for one local registry
-   * entry. One-shot, kept out of `KodoSettingsState` for exactly the reason
-   * `selectSection` is: folding it into persisted state would re-open the
-   * modal on every unrelated `update()` push. */
-  configureLocalModel(name: string): void {
-    void this.panel.webview.postMessage({ type: 'configure_local_model', name });
+  /** Open the Configure (Default-profile knobs) or Manage profiles modal for
+   * one local registry entry. One-shot, kept out of `KodoSettingsState` for
+   * exactly the reason `selectSection` is: folding it into persisted state
+   * would re-open the modal on every unrelated `update()` push. */
+  openLocalModelModal({ modal, name }: LocalModelModal): void {
+    const type = modal === 'configure' ? 'configure_local_model' : 'manage_local_model_profiles';
+    void this.panel.webview.postMessage({ type, name });
   }
 
   /** Open the "Install agents" modal with *source* already filled in — the
    * reply to a `pick_agent_source` message. One-shot for the same reason
-   * `configureLocalModel` is: folding it into persisted state would re-open the
+   * `openLocalModelModal` is: folding it into persisted state would re-open the
    * modal on every unrelated `update()` push. */
   openInstallAgents(source: string): void {
     void this.panel.webview.postMessage({ type: 'open_install_agents', source });

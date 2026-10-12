@@ -86,6 +86,7 @@ export type SidebarMessage =
   | { type: 'set_active_model'; name: string }
   | { type: 'set_active_profile'; name: string; profile_id: string }
   | { type: 'configure_local_model'; name: string }
+  | { type: 'manage_local_model_profiles'; name: string }
   | { type: 'set_cloud_vendor'; vendor: string }
   | { type: 'set_cloud_model'; vendor: string; effort: EffortLevel; model_id: string }
   | { type: 'set_cloud_uniform_enabled'; vendor: string; enabled: boolean }
@@ -926,8 +927,9 @@ function buildHtml(): string {
         card.appendChild(contextLine);
 
         // Launch configuration: a picker over "Default" + the entry's
-        // user-defined profiles, plus a Configure button that opens the
-        // Default profile's knobs in Kōdo Settings. Not offered for
+        // user-defined profiles + a trailing "Manage Profiles..." action item,
+        // plus a Configure button that opens the Default profile's knobs in
+        // Kōdo Settings. Not offered for
         // custom_server_url — kodo doesn't launch that process, so it has no
         // launch args to configure (doc/LLM_REGISTRY.md §4.6).
         if (model.kind !== 'custom_server_url') {
@@ -944,7 +946,16 @@ function buildHtml(): string {
             option.textContent = 'Profile: ' + p.name;
             select.appendChild(option);
           });
+          // An action, not a profile: choosing it opens the profile editor
+          // and snaps the picker back, so it is never the selected value.
+          // The value can't collide with a profile id: ids are [a-z0-9-] slugs.
+          const MANAGE_PROFILES_VALUE = '__manage_profiles__';
+          const manageOption = document.createElement('option');
+          manageOption.value = MANAGE_PROFILES_VALUE;
+          manageOption.textContent = 'Manage Profiles...';
+          select.appendChild(manageOption);
           select.value = activeProfileId;
+          let selectedProfileId = activeProfileId;
 
           // Enabled only while the Default profile is selected — knobs exist
           // only on that one; a user-defined profile is edited as raw args in
@@ -953,13 +964,19 @@ function buildHtml(): string {
           const configureBtn = document.createElement('button');
           configureBtn.className = 'configure-btn';
           configureBtn.textContent = '⚙';
-          configureBtn.title = 'Configure';
+          configureBtn.title = 'Configure Default Profile';
           configureBtn.disabled = !!activeProfileId;
           configureBtn.addEventListener('click', () => {
             vsc.postMessage({ type: 'configure_local_model', name: model.name });
           });
 
           select.addEventListener('change', () => {
+            if (select.value === MANAGE_PROFILES_VALUE) {
+              select.value = selectedProfileId;
+              vsc.postMessage({ type: 'manage_local_model_profiles', name: model.name });
+              return;
+            }
+            selectedProfileId = select.value;
             contextLine.textContent =
               'Context: ' + resolveContextSize(model, profileLlamaArgs(model, select.value)).toLocaleString();
             configureBtn.disabled = !!select.value;
