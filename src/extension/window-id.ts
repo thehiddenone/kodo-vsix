@@ -70,6 +70,25 @@ export function deriveWindowIdFromKey(key: string): string {
   return 'w-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
 }
 
+/**
+ * The exact form `stableWindowId` will see `futureKey` in after the reload:
+ * VS Code reports `folders[0]`/`workspaceFile` as `Uri.fsPath`, i.e. the path
+ * we hand it run through `vscode.Uri.file`. Arming under any other spelling
+ * hashes to a different id and strands every marker keyed by the old one.
+ *
+ * That is not hypothetical: on 2026-10-11 a model passed `scaffold_new_project`
+ * the path `Users/dev/dev_root/kodo` (no leading slash). Continuity was armed
+ * under `hash("Users/dev/…")`, VS Code reported `/Users/dev/…` after the
+ * reload, the window came back under a fresh id, never re-joined its session,
+ * and the server's `workspace.confirm_folder` wait timed out with the agent
+ * still running. The server now rejects relative paths too; this keeps every
+ * caller (scaffold, Create Project, session resume) safe from any spelling
+ * difference `Uri.file` normalizes away.
+ */
+export function canonicalWindowKey(futureKey: string): string {
+  return vscode.Uri.file(futureKey).fsPath;
+}
+
 function windowIdContinuityStateKey(candidateId: string): string {
   return `kodo.windowIdContinuity.${candidateId}`;
 }
@@ -105,7 +124,7 @@ function windowIdContinuityStateKey(candidateId: string): string {
  * durable, and the very next line of code is free to trigger the reload.
  */
 export async function armWindowIdContinuity(context: vscode.ExtensionContext, futureKey: string): Promise<void> {
-  const futureId = deriveWindowIdFromKey(futureKey);
+  const futureId = deriveWindowIdFromKey(canonicalWindowKey(futureKey));
   if (futureId === state.windowId) {
     return; // already the id we'd derive post-reload — nothing to preserve
   }

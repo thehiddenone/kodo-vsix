@@ -26,7 +26,7 @@ import * as vscode from 'vscode';
 import { kodoDiagnostics } from '../diagnostics';
 import { reloadWipesSerializerState } from '../reconcile-policy';
 import { armSerializerDead } from './window-sessions';
-import { armWindowIdContinuity } from './window-id';
+import { armWindowIdContinuity, canonicalWindowKey } from './window-id';
 import { state } from './state';
 
 /** The answer sent back as the `workspace.confirm_folder` response payload. */
@@ -43,20 +43,22 @@ export interface WorkspaceAttachResult {
  * How long to wait for `onDidChangeWorkspaceFolders` to report the folder
  * before giving up and answering with a failure.
  *
- * Deliberately *below* the server's own `WORKSPACE_ATTACH_TIMEOUT_S` (60s) so
+ * Deliberately *below* the server's own `WORKSPACE_ATTACH_TIMEOUT_S` (15s) so
  * that when something goes wrong it is this side — the side that actually
  * knows what VS Code did — that names the failure, rather than the server
  * reporting a bare "timeout". If you raise the server's deadline, raise this
  * one with it and keep the gap.
  */
-export const FOLDER_CHANGE_TIMEOUT_MS = 45_000;
+// Only the non-reloading path ever reaches this deadline (on the reloading one
+// the host dies first), and there the folder lands within a tick or two.
+export const FOLDER_CHANGE_TIMEOUT_MS = 10_000;
 
 /**
  * The server's matching deadline (`EngineCore.WORKSPACE_ATTACH_TIMEOUT_S`),
  * duplicated here only so a test can assert {@link FOLDER_CHANGE_TIMEOUT_MS}
  * stays below it. Nothing reads it at runtime.
  */
-export const SERVER_ATTACH_TIMEOUT_MS = 60_000;
+export const SERVER_ATTACH_TIMEOUT_MS = 15_000;
 
 /**
  * Shape the `workspace.confirm_folder` response payload.
@@ -166,6 +168,9 @@ export async function addFolderToWorkspace(
   name: string,
   opts: { markReloadedForAttach: boolean } = { markReloadedForAttach: false },
 ): Promise<{ accepted: boolean; willReload: boolean }> {
+  // Hand VS Code — and log — the same spelling `armWindowIdContinuity` arms
+  // under, so the diagnostics line shows what the reloaded window will see.
+  folderPath = canonicalWindowKey(folderPath);
   const insertAt = vscode.workspace.workspaceFolders?.length ?? 0;
   const willReload = reloadWipesSerializerState(insertAt);
   if (insertAt === 0 && state.extensionContext) {
