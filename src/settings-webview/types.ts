@@ -413,6 +413,10 @@ export interface LlamaArgSpec {
   default?: string;
   sensible_minimum?: number | null;
   sensible_maximum?: number | null;
+  /** The value that turns the mirrored sampler off (`"0.0"` for `--min-p`),
+   *  exempt from the recommended-band ⚠. `''`/absent for non-sampling flags
+   *  and from an older kodo server that does not ship it. */
+  neutral?: string;
   valid_values?: string[] | null;
 }
 

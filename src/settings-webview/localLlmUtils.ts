@@ -174,7 +174,10 @@ export function argFieldError(spec: LlamaArgSpec, value: string): string | null 
  * flags carry (kodo/doc/SAMPLING.md §8d) — the server never clamps or rejects
  * against it. A half-typed number never warns, since the check reruns on every
  * keystroke and would otherwise flicker while a perfectly good value is being
- * typed.
+ * typed. Nor does the flag's `neutral` value: several samplers turn off at a
+ * value outside their useful active band (`--min-p 0`), and flagging a
+ * deliberate "off" would also block Save on it. Mirrors `samplingRangeWarning`
+ * in ../llm-registry-types.
  */
 export function argRangeWarning(spec: LlamaArgSpec, value: string): string | null {
   const range = argRangeText(spec);
@@ -183,11 +186,14 @@ export function argRangeWarning(spec: LlamaArgSpec, value: string): string | nul
   if (!trimmed) { return null; }
   const parsed = spec.kind === 'int' ? parseInt(trimmed, 10) : parseFloat(trimmed);
   if (!Number.isFinite(parsed)) { return null; }
+  const neutral = spec.neutral ?? '';
+  if (neutral !== '' && parsed === parseFloat(neutral)) { return null; }
   const low = spec.sensible_minimum ?? null;
   const high = spec.sensible_maximum ?? null;
   if ((low === null || parsed >= low) && (high === null || parsed <= high)) { return null; }
+  const off = neutral === '' ? '' : ` Set it to ${neutral} to turn ${spec.label} off.`;
   return `${trimmed} is outside the recommended range for ${spec.label} (${range}). ` +
-    'Values outside that range are accepted but usually degrade output quality.';
+    `Values outside that range are accepted but usually degrade output quality.${off}`;
 }
 
 /**
