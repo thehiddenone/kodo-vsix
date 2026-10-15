@@ -283,7 +283,7 @@
        before deciding to replace one. */
     .agent-row {
       display: grid;
-      grid-template-columns: minmax(110px, 20%) 72px 84px 1fr auto;
+      grid-template-columns: minmax(110px, 20%) 72px 84px 44px 1fr auto;
       align-items: center;
       gap: 10px;
       padding: 8px 10px;
@@ -299,15 +299,31 @@
       padding: 6px 10px;
     }
     .agent-header .skill-name { font-weight: 600; }
-    .agent-header .session-icons { width: 84px; }
+    .agent-header .session-icons { width: 128px; }
     .agent-kind,
-    .agent-version {
+    .agent-version,
+    .agent-lint {
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .agent-lint-warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+    /* One lint warning in the Validate report: rule, line (a link into the
+       prompt file when there is one), then the message, which wraps. */
+    .report-finding {
+      display: grid;
+      grid-template-columns: 170px 64px 1fr;
+      gap: 8px;
+      padding: 6px 10px;
+      font-size: 0.88em;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .report-finding:first-child { border-top: none; }
+    .report-rule { font-family: var(--vscode-editor-font-family, monospace); }
+    .report-line { color: var(--vscode-descriptionForeground); }
+    .report-findings { max-height: 50vh; overflow-y: auto; }
     /* The conflict list is the server's own rendering, aligned with spaces —
        it has to stay monospaced and keep its line breaks to line up. */
     pre.install-result-list {

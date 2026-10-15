@@ -3,9 +3,25 @@ import { vscode } from './vscode';
 
 interface RowProps {
   agent: AgentEntry;
+  onValidate: (name: string) => void;
 }
 
-function AgentRow({ agent }: RowProps) {
+/** The lint column: how many warnings the prompt has (kodo/doc/AGENT_BUILDER.md
+ * §5.2). Warnings never stop an agent loading — a broken row's reason is in its
+ * description column — so this only says whether the report is worth opening. */
+function LintCell({ agent }: { agent: AgentEntry }) {
+  if (agent.warnings === 0) {
+    return <div className="agent-lint" title="Its prompt passes every lint rule">✓</div>;
+  }
+  const plural = agent.warnings === 1 ? '' : 's';
+  return (
+    <div className="agent-lint agent-lint-warn" title={`${agent.warnings} lint warning${plural}`}>
+      ⚠ {agent.warnings}
+    </div>
+  );
+}
+
+function AgentRow({ agent, onValidate }: RowProps) {
   const broken = agent.error !== '';
   // A broken bundle has no description to show, so its load error takes the
   // column instead — that is the whole reason broken entries are listed
@@ -18,10 +34,18 @@ function AgentRow({ agent }: RowProps) {
       </div>
       <div className="agent-kind">{agent.kind}</div>
       <div className="agent-version">{agent.version || '—'}</div>
+      <LintCell agent={agent} />
       <div className={'skill-description' + (broken ? ' skill-error' : '')} title={detail}>
         {detail}
       </div>
       <div className="session-icons">
+        <button
+          className="icon-btn secondary-btn"
+          title="Validate: does it load, and what does the lint say about its prompt"
+          onClick={() => onValidate(agent.name)}
+        >
+          🩺
+        </button>
         <button
           className="icon-btn secondary-btn"
           title="Open this agent's folder in a new window"
@@ -46,9 +70,13 @@ function AgentRow({ agent }: RowProps) {
 interface AgentsSectionProps {
   agents: AgentsState;
   onInstallClick: () => void;
+  onCopyClick: () => void;
+  onValidate: (name: string) => void;
 }
 
-export function AgentsSection({ agents, onInstallClick }: AgentsSectionProps) {
+export function AgentsSection({
+  agents, onInstallClick, onCopyClick, onValidate,
+}: AgentsSectionProps) {
   return (
     <div>
       <h2>Agents</h2>
@@ -58,9 +86,13 @@ export function AgentsSection({ agents, onInstallClick }: AgentsSectionProps) {
         agent you install. Install from a local folder or a git repository below, or by hand by
         copying a bundle into <code>{agents.root || '~/.kodo/agents'}</code> and using Reload —
         either way no restart is needed. Names beginning <code>kodo_</code> are reserved for the
-        built-in agents.
+        built-in agents. To change how a built-in works, copy it — with every sub-agent it uses —
+        and edit the copy.
       </p>
       <p>
+        <button className="secondary-btn" onClick={onCopyClick}>
+          Copy a built-in agent…
+        </button>{' '}
         <button className="secondary-btn" onClick={onInstallClick}>
           Install from a repository…
         </button>{' '}
@@ -86,11 +118,12 @@ export function AgentsSection({ agents, onInstallClick }: AgentsSectionProps) {
             <div className="skill-name">Agent</div>
             <div className="agent-kind">Kind</div>
             <div className="agent-version">Version</div>
+            <div className="agent-lint">Lint</div>
             <div className="skill-description">Description</div>
             <div className="session-icons" />
           </div>
           {agents.agents.map((a) => (
-            <AgentRow key={`${a.kind}:${a.name}`} agent={a} />
+            <AgentRow key={`${a.kind}:${a.name}`} agent={a} onValidate={onValidate} />
           ))}
         </div>
       )}

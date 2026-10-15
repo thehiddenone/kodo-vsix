@@ -155,6 +155,9 @@ export interface AgentEntry {
   path: string;
   /** Empty for a healthy entry; the load failure otherwise. */
   error: string;
+  /** How many lint warnings its prompt has (kodo/doc/AGENT_BUILDER.md §5.2);
+   * `agents.validate` lists them. */
+  warnings: number;
 }
 
 /** The "Agents" section's whole state. `root` is the server-reported agents
@@ -162,6 +165,8 @@ export interface AgentEntry {
 export interface AgentsState {
   root: string;
   agents: AgentEntry[];
+  /** The built-ins "Copy a built-in agent…" offers. */
+  builtins: BuiltinAgentEntry[];
 }
 
 /** One entry a source offers, from `agents.install_scan`
@@ -193,6 +198,87 @@ export interface AgentInstallResult {
   kept: string[];
   skipped: string[];
   missing: string[];
+  error: string;
+}
+
+/** One built-in agent the panel's "Copy a built-in agent…" modal offers, from
+ * every `agents.*` ack's `builtins` (kodo/doc/AGENT_BUILDER.md §3). Only
+ * built-ins `agents.copy` accepts are listed — never an engine-driven
+ * sub-agent or a non-interactive top-level agent. */
+export interface BuiltinAgentEntry {
+  name: string;
+  /** `'agent'` for a top-level agent, `'subagent'` for one it delegates to. */
+  kind: string;
+  label: string;
+}
+
+/** One member of a copy's closure, from `agents.copy_scan`. A non-empty
+ * `installedVersion` is a member whose new name is already taken — the
+ * keep-or-replace decision the modal puts to the user. */
+export interface AgentCopyMember {
+  /** The built-in being copied (`kodo_coder`). */
+  source: string;
+  /** The name of its copy (`acme_coder`). */
+  name: string;
+  kind: string;
+  installedVersion: string;
+}
+
+/** The outcome of one `agents.copy_scan` request. `name` + `prefix` let the
+ * modal tell a reply for the request it has open apart from a stale one;
+ * `conflicts` is the server-rendered existing-vs-incoming list, worded exactly
+ * as the install modal's. */
+export interface AgentCopyScanResult {
+  name: string;
+  prefix: string;
+  ok: boolean;
+  members: AgentCopyMember[];
+  conflicts: string;
+  error: string;
+}
+
+/** The outcome of one `agents.copy` request — the copy modal's final step.
+ * `failed` names every copied member the reloaded registry could not load,
+ * as `"<name>: <why>"`. */
+export interface AgentCopyResult {
+  name: string;
+  prefix: string;
+  ok: boolean;
+  copied: string[];
+  kept: string[];
+  failed: string[];
+  error: string;
+}
+
+/** One lint warning on an agent's prompt (kodo/doc/AGENT_BUILDER.md §5.2).
+ * `line` is the 1-based line in the report's `path`, or `null` for something
+ * absent (a missing section). */
+export interface AgentReportFinding {
+  rule: string;
+  severity: string;
+  line: number | null;
+  message: string;
+}
+
+/** One agent's validation report (`agents.validate`): whether it loads, and
+ * the deterministic lint's warnings. */
+export interface AgentReport {
+  name: string;
+  kind: string;
+  load: 'ok' | 'error';
+  /** Why the agent does not load; empty when it does. */
+  error: string;
+  /** The prompt file the findings' line numbers refer to; empty when unknown. */
+  path: string;
+  findings: AgentReportFinding[];
+}
+
+/** The outcome of one `agents.validate` request. `name` is what was asked
+ * for, so the report modal ignores a reply meant for an earlier row. */
+export interface AgentReportResult {
+  name: string;
+  ok: boolean;
+  report: AgentReport | null;
   error: string;
 }
 
@@ -383,6 +469,9 @@ export interface KodoSettingsState {
   agents: AgentsState;
   agentScan: AgentScanResult | null;
   agentInstall: AgentInstallResult | null;
+  agentCopyScan: AgentCopyScanResult | null;
+  agentCopy: AgentCopyResult | null;
+  agentReport: AgentReportResult | null;
   uiSettings: UiSettings;
   /** Configured HuggingFace tokens. */
   hfTokens: HfTokenEntry[];
@@ -481,6 +570,10 @@ export type KodoSettingsMessage =
   | { type: 'install_agents'; source: string; replace: boolean }
   | { type: 'pick_agent_source' }
   | { type: 'reload_agents' }
+  | { type: 'scan_agent_copy'; name: string; prefix: string }
+  | { type: 'copy_agent'; name: string; prefix: string; replace: boolean }
+  | { type: 'validate_agent'; name: string }
+  | { type: 'open_agent_file'; path: string; line: number | null }
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }

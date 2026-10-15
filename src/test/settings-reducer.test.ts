@@ -1,7 +1,10 @@
 import * as assert from 'assert';
 
 import { reducer, initial } from '../settings-webview/reducer';
-import type { AgentInstallResult, AgentScanResult, AgentsState, HfSearchResult } from '../settings-webview/types';
+import type {
+  AgentCopyResult, AgentCopyScanResult, AgentInstallResult, AgentReportResult, AgentScanResult,
+  AgentsState, HfSearchResult,
+} from '../settings-webview/types';
 
 // The Kōdo Settings panel is seeded and refreshed through one merge-patch
 // reducer; a field the reducer does not copy is silently stuck at its initial
@@ -13,7 +16,9 @@ suite('settings reducer — agents', () => {
     agents: [{
       name: 'researcher', kind: 'agent', version: '0.1.0', label: 'Researcher',
       description: 'Read-only research.', path: '/home/u/.kodo/agents/researcher', error: '',
+      warnings: 2,
     }],
+    builtins: [{ name: 'kodo_guide', kind: 'agent', label: 'Guide' }],
   };
 
   test('a patch carrying the agent listing reaches the state', () => {
@@ -41,6 +46,46 @@ suite('settings reducer — agents', () => {
     const cleared = reducer(filled, { type: 'patch', data: { agentScan: null, agentInstall: null } });
     assert.strictEqual(cleared.agentScan, null);
     assert.strictEqual(cleared.agentInstall, null);
+  });
+});
+
+suite('settings reducer — agent copy and validation', () => {
+  const copyScan: AgentCopyScanResult = {
+    name: 'kodo_coder', prefix: 'acme_', ok: true, conflicts: '', error: '',
+    members: [{ source: 'kodo_coder', name: 'acme_coder', kind: 'subagent', installedVersion: '' }],
+  };
+  const copy: AgentCopyResult = {
+    name: 'kodo_coder', prefix: 'acme_', ok: true, copied: ['acme_coder'], kept: [], failed: [],
+    error: '',
+  };
+  const report: AgentReportResult = {
+    name: 'acme_coder', ok: true, error: '',
+    report: {
+      name: 'acme_coder', kind: 'subagent', load: 'ok', error: '', path: '/p.md',
+      findings: [{ rule: 'L6 vague-qualifier', severity: 'warning', line: 12, message: 'm' }],
+    },
+  };
+
+  test('copy and report replies reach the state and survive unrelated patches', () => {
+    const filled = reducer(initial, {
+      type: 'patch', data: { agentCopyScan: copyScan, agentCopy: copy, agentReport: report },
+    });
+    const next = reducer(filled, { type: 'patch', data: { rules: [] } });
+    assert.deepStrictEqual(next.agentCopyScan, copyScan);
+    assert.deepStrictEqual(next.agentCopy, copy);
+    assert.deepStrictEqual(next.agentReport, report);
+  });
+
+  test('null clears each of them', () => {
+    const filled = reducer(initial, {
+      type: 'patch', data: { agentCopyScan: copyScan, agentCopy: copy, agentReport: report },
+    });
+    const cleared = reducer(filled, {
+      type: 'patch', data: { agentCopyScan: null, agentCopy: null, agentReport: null },
+    });
+    assert.strictEqual(cleared.agentCopyScan, null);
+    assert.strictEqual(cleared.agentCopy, null);
+    assert.strictEqual(cleared.agentReport, null);
   });
 });
 

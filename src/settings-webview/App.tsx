@@ -9,7 +9,9 @@ import { ConfigureModal } from './ConfigureModal';
 import { GeneralSection } from './GeneralSection';
 import { ProfileModal } from './ProfileModal';
 import { GlobalRulesSection } from './GlobalRulesSection';
+import { AgentReportModal } from './AgentReportModal';
 import { AgentsSection } from './AgentsSection';
+import { CopyAgentModal } from './CopyAgentModal';
 import { InstallAgentsModal } from './InstallAgentsModal';
 import { InstallSkillsModal } from './InstallSkillsModal';
 import { LocalInferenceSection } from './LocalInferenceSection';
@@ -37,6 +39,9 @@ export function App() {
   // modal serves both entry points and the keep-or-replace step is never
   // skipped just because the source happened to be local.
   const [installAgentsSource, setInstallAgentsSource] = useState<string | null>(null);
+  const [copyAgentModalOpen, setCopyAgentModalOpen] = useState(false);
+  // The agent whose Validate report is open, or null.
+  const [reportAgentName, setReportAgentName] = useState<string | null>(null);
   // Which LLM's Configure (Default-profile knobs) modal is open, and which
   // LLM's Manage-profiles modal is open — separate, since they are two
   // different editors reachable from the same card (and from the sidebar's
@@ -105,14 +110,28 @@ export function App() {
       if (profileEntryName) { setProfileEntryName(null); }
       if (installSkillsModalOpen) { setInstallSkillsModalOpen(false); }
       if (installAgentsSource !== null) { setInstallAgentsSource(null); }
+      if (copyAgentModalOpen) { setCopyAgentModalOpen(false); }
+      if (reportAgentName !== null) { setReportAgentName(null); }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     sessionSettingsFor, addTokenModalOpen, addKeyModalVendor, hfModalOpen, fileModalOpen,
     serverModalOpen, configureEntryName, profileEntryName, installSkillsModalOpen,
-    installAgentsSource,
+    installAgentsSource, copyAgentModalOpen, reportAgentName,
   ]);
+
+  function openCopyAgent() {
+    // Drop any reply a previous copy left in state, so the modal starts clean.
+    dispatch({ type: 'patch', data: { agentCopyScan: null, agentCopy: null } });
+    setCopyAgentModalOpen(true);
+  }
+
+  function openAgentReport(name: string) {
+    dispatch({ type: 'patch', data: { agentReport: null } });
+    setReportAgentName(name);
+    vscode.postMessage({ type: 'validate_agent', name });
+  }
 
   function openSessionSettings(sessionId: string) {
     setSessionSettingsFor(sessionId);
@@ -143,7 +162,12 @@ export function App() {
           <SessionsSection sessions={state.sessions} onOpenSettings={openSessionSettings} />
         )}
         {selectedKey === 'agents' && (
-          <AgentsSection agents={state.agents} onInstallClick={() => setInstallAgentsSource('')} />
+          <AgentsSection
+            agents={state.agents}
+            onInstallClick={() => setInstallAgentsSource('')}
+            onCopyClick={openCopyAgent}
+            onValidate={openAgentReport}
+          />
         )}
         {selectedKey === 'skills' && (
           <SkillsSection skills={state.skills} onInstallClick={() => setInstallSkillsModalOpen(true)} />
@@ -231,6 +255,21 @@ export function App() {
           scan={state.agentScan}
           install={state.agentInstall}
           onClose={() => setInstallAgentsSource(null)}
+        />
+      )}
+      {copyAgentModalOpen && (
+        <CopyAgentModal
+          builtins={state.agents.builtins}
+          scan={state.agentCopyScan}
+          copy={state.agentCopy}
+          onClose={() => setCopyAgentModalOpen(false)}
+        />
+      )}
+      {reportAgentName !== null && (
+        <AgentReportModal
+          name={reportAgentName}
+          result={state.agentReport}
+          onClose={() => setReportAgentName(null)}
         />
       )}
       {installSkillsModalOpen && (

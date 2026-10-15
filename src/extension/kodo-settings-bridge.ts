@@ -174,7 +174,7 @@ async function fetchAgentsForPanel(): Promise<AgentsState> {
     return parseAgentsResponse(resp);
   } catch {
     vscode.window.showErrorMessage('Kōdo: could not reach the server to list agents.');
-    return { root: '', agents: [] };
+    return { root: '', agents: [], builtins: [] };
   }
 }
 
@@ -183,6 +183,9 @@ async function fetchAgentsForPanel(): Promise<AgentsState> {
  * refresh the table from its own response with no follow-up round-trip. */
 function parseAgentsResponse(resp: Record<string, unknown>): AgentsState {
   const list = Array.isArray(resp.agents) ? (resp.agents as Record<string, unknown>[]) : [];
+  const builtins = Array.isArray(resp.builtins)
+    ? (resp.builtins as Record<string, unknown>[])
+    : [];
   return {
     root: typeof resp.root === 'string' ? resp.root : '',
     agents: list.map((a) => ({
@@ -193,6 +196,12 @@ function parseAgentsResponse(resp: Record<string, unknown>): AgentsState {
       description: String(a.description ?? ''),
       path: String(a.path ?? ''),
       error: String(a.error ?? ''),
+      warnings: typeof a.warnings === 'number' ? a.warnings : 0,
+    })),
+    builtins: builtins.map((b) => ({
+      name: String(b.name ?? ''),
+      kind: String(b.kind ?? 'agent'),
+      label: String(b.label ?? ''),
     })),
   };
 }
@@ -337,6 +346,126 @@ async function reloadAgentsFromPanel(): Promise<void> {
   }
 }
 
+/** Plan a copy of a built-in agent (`agents.copy_scan`, kodo/doc/AGENT_BUILDER.md
+ * §3), for the copy modal's review step. Nothing is written by this call. */
+async function scanAgentCopyForPanel(name: string, prefix: string): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('agents.copy_scan', { name, prefix });
+  } catch {
+    KodoSettingsPanel.instance?.update({
+      agentCopyScan: {
+        name, prefix, ok: false, members: [], conflicts: '', error: 'Could not reach the server.',
+      },
+    });
+    return;
+  }
+  const members = Array.isArray(resp.members) ? (resp.members as Record<string, unknown>[]) : [];
+  KodoSettingsPanel.instance?.update({
+    agentCopyScan: {
+      name,
+      prefix,
+      ok: resp.ok === true,
+      members: members.map((m) => ({
+        source: String(m.source ?? ''),
+        name: String(m.name ?? ''),
+        kind: String(m.kind ?? 'agent'),
+        installedVersion: String(m.installed_version ?? ''),
+      })),
+      conflicts: String(resp.conflicts ?? ''),
+      error: String(resp.error ?? ''),
+    },
+  });
+}
+
+/** Copy a built-in agent into `~/.kodo/agents` (`agents.copy`). `replace` is
+ * the user's answer to the keep-or-replace question. The server reloads its
+ * registry before replying, so a copied top-level agent is in the picker at
+ * once, and the ack's listing is what the Agents table redraws from. */
+async function copyAgentFromPanel(name: string, prefix: string, replace: boolean): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('agents.copy', { name, prefix, replace });
+  } catch {
+    KodoSettingsPanel.instance?.update({
+      agentCopy: {
+        name, prefix, ok: false, copied: [], kept: [], failed: [],
+        error: 'Could not reach the server.',
+      },
+    });
+    return;
+  }
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map((v) => String(v)) : [];
+  KodoSettingsPanel.instance?.update({
+    // A refused copy carries no listing; keep the table as it is then.
+    ...(Array.isArray(resp.agents) ? { agents: parseAgentsResponse(resp) } : {}),
+    agentCopy: {
+      name,
+      prefix,
+      ok: resp.ok === true,
+      copied: strings(resp.copied),
+      kept: strings(resp.kept),
+      failed: strings(resp.failed),
+      error: String(resp.error ?? ''),
+    },
+  });
+}
+
+/** Validate one agent (`agents.validate`, kodo/doc/AGENT_BUILDER.md §5) for the
+ * report modal: the load check plus the deterministic lint's warnings. */
+async function validateAgentForPanel(name: string): Promise<void> {
+  let resp: Record<string, unknown>;
+  try {
+    resp = await sendControlAwait('agents.validate', { name });
+  } catch {
+    KodoSettingsPanel.instance?.update({
+      agentReport: { name, ok: false, report: null, error: 'Could not reach the server.' },
+    });
+    return;
+  }
+  const raw = resp.report && typeof resp.report === 'object'
+    ? (resp.report as Record<string, unknown>)
+    : null;
+  const findings = raw && Array.isArray(raw.findings)
+    ? (raw.findings as Record<string, unknown>[])
+    : [];
+  KodoSettingsPanel.instance?.update({
+    agentReport: {
+      name,
+      ok: resp.ok === true && raw !== null,
+      report: raw === null ? null : {
+        name: String(raw.name ?? name),
+        kind: String(raw.kind ?? 'agent'),
+        load: raw.load === 'error' ? 'error' : 'ok',
+        error: String(raw.error ?? ''),
+        path: String(raw.path ?? ''),
+        findings: findings.map((f) => ({
+          rule: String(f.rule ?? ''),
+          severity: String(f.severity ?? 'warning'),
+          line: typeof f.line === 'number' ? f.line : null,
+          message: String(f.message ?? ''),
+        })),
+      },
+      error: String(resp.error ?? ''),
+    },
+  });
+}
+
+/** Open an agent's prompt file at a report finding's line, in this window. */
+async function openAgentFile(filePath: string, line: number | null): Promise<void> {
+  if (!filePath) {
+    return;
+  }
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+  const editor = await vscode.window.showTextDocument(document, { preview: false });
+  if (line !== null && line > 0) {
+    const position = new vscode.Position(line - 1, 0);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+  }
+}
+
 /** "Install from a local folder…" — a native folder picker whose result is fed
  * back into the same install modal as a repository URL would be, so the
  * keep-or-replace step is never skipped just because the source is local. */
@@ -430,7 +559,8 @@ export async function openKodoSettings(
     state.extensionContext!.extensionUri,
     {
       rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, sessionRules: null, skills,
-      agents, agentScan: null, agentInstall: null,
+      agents, agentScan: null, agentInstall: null, agentCopyScan: null, agentCopy: null,
+      agentReport: null,
       llamaCpp: llamaCppInfoForPanel(),
       skillScan: null, skillInstall: null, hfSearch: null,
       uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
@@ -858,6 +988,22 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'install_agents') {
     await installAgentsFromPanel(msg.source, msg.replace);
+    return;
+  }
+  if (msg.type === 'scan_agent_copy') {
+    await scanAgentCopyForPanel(msg.name, msg.prefix);
+    return;
+  }
+  if (msg.type === 'copy_agent') {
+    await copyAgentFromPanel(msg.name, msg.prefix, msg.replace);
+    return;
+  }
+  if (msg.type === 'validate_agent') {
+    await validateAgentForPanel(msg.name);
+    return;
+  }
+  if (msg.type === 'open_agent_file') {
+    await openAgentFile(msg.path, msg.line);
     return;
   }
   if (msg.type === 'pick_agent_source') {
