@@ -299,7 +299,7 @@
       padding: 6px 10px;
     }
     .agent-header .skill-name { font-weight: 600; }
-    .agent-header .session-icons { width: 128px; }
+    .agent-header .session-icons { width: 172px; }
     .agent-kind,
     .agent-version,
     .agent-lint {

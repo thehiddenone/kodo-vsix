@@ -63,6 +63,11 @@ import { findBySessionId, newSession, openExistingSession } from './window-sessi
  *  absent from `top_agents.list` by design, so its name is known here. */
 const MODEL_IMPORTER_AGENT = 'kodo_model_importer';
 
+/** The built-in non-interactive agent behind the Agents table's "Review with AI"
+ *  button (kodo/src/kodo/agents/kodo_agent_review.json, kodo/doc/AGENT_BUILDER.md
+ *  §5.3). Absent from `top_agents.list` for the same reason as the importer. */
+const AGENT_REVIEW_AGENT = 'kodo_agent_review';
+
 /** The query of the newest `hf_search` the import dialog sent. Replies can
  *  arrive out of order (each is answered from its own server task), and one
  *  for text the user has already typed past must not replace newer results. */
@@ -1023,6 +1028,14 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'open_agent_file') {
     await openAgentFile(msg.path, msg.line);
+    return;
+  }
+  if (msg.type === 'review_agent') {
+    // A new session tab runs Agent Review on this agent (agent.run,
+    // kodo/doc/WS_PROTOCOL.md §7.4h): it has Agent Critic review the files and
+    // shows each concern as a callout. The user watches but cannot type; the
+    // review changes nothing, so the panel needs no refresh when it ends.
+    newSession({ name: AGENT_REVIEW_AGENT, prompt: msg.name });
     return;
   }
   if (msg.type === 'pick_agent_source') {

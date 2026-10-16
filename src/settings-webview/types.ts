@@ -738,6 +738,7 @@ export type OutboundMessage =
   | { type: 'copy_agent'; name: string; prefix: string; replace: boolean }
   | { type: 'validate_agent'; name: string }
   | { type: 'open_agent_file'; path: string; line: number | null }
+  | { type: 'review_agent'; name: string }
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }

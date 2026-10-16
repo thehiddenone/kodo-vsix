@@ -48,6 +48,13 @@ function AgentRow({ agent, onValidate }: RowProps) {
         </button>
         <button
           className="icon-btn secondary-btn"
+          title="Review with AI: a new session has Agent Critic check this agent against Kōdo's prompt-writing rules and lists each concern"
+          onClick={() => vscode.postMessage({ type: 'review_agent', name: agent.name })}
+        >
+          🤖
+        </button>
+        <button
+          className="icon-btn secondary-btn"
           title="Open this agent's folder in a new window"
           onClick={() => vscode.postMessage({ type: 'open_agent', path: agent.path })}
         >
