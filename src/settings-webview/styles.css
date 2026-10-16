@@ -368,6 +368,8 @@
     }
     .skill-header .skill-description { display: block; }
     .skill-error { color: var(--vscode-errorForeground, #f48771); }
+    /* The built-in pill sits on its own line under a skill's name. */
+    .skill-name .origin-tag { margin-left: 0; }
     .skill-pick-row {
       display: flex;
       align-items: flex-start;

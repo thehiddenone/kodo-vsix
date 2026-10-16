@@ -13,26 +13,60 @@ function SkillRow({ skill }: RowProps) {
   const detail = broken ? skill.error : skill.description;
   return (
     <div className="skill-row">
-      <div className="skill-name" title={skill.path}>{skill.name}</div>
+      <div className="skill-name" title={skill.path}>
+        {skill.name}
+        {skill.builtin && (
+          <div><span className="origin-tag built-in">built-in</span></div>
+        )}
+      </div>
       <div className={'skill-description' + (broken ? ' skill-error' : '')} title={detail}>
         {detail}
       </div>
-      <div className="session-icons">
-        <button
-          className="icon-btn secondary-btn"
-          title="Open this skill's folder in a new window"
-          onClick={() => vscode.postMessage({ type: 'open_skill', path: skill.path })}
-        >
-          📁
-        </button>
-        <button
-          className="icon-btn secondary-btn"
-          title="Delete this skill"
-          onClick={() => vscode.postMessage({ type: 'delete_skill', name: skill.name })}
-        >
-          🗑
-        </button>
-      </div>
+      {skill.builtin ? <BuiltinActions skill={skill} /> : <UserActions skill={skill} />}
+    </div>
+  );
+}
+
+/** A shipped skill is part of Kōdo: it can be read but not changed or removed.
+ * The disabled trash icon keeps the two-button column aligned with user rows. */
+function BuiltinActions({ skill }: RowProps) {
+  return (
+    <div className="session-icons">
+      <button
+        className="icon-btn secondary-btn"
+        title="View this built-in skill (read-only)"
+        onClick={() => vscode.postMessage({ type: 'view_skill', path: skill.path })}
+      >
+        👁
+      </button>
+      <button
+        className="icon-btn secondary-btn"
+        title="Built-in skills ship with Kōdo and cannot be deleted"
+        disabled
+      >
+        🗑
+      </button>
+    </div>
+  );
+}
+
+function UserActions({ skill }: RowProps) {
+  return (
+    <div className="session-icons">
+      <button
+        className="icon-btn secondary-btn"
+        title="Open this skill's folder in a new window"
+        onClick={() => vscode.postMessage({ type: 'open_skill', path: skill.path })}
+      >
+        📁
+      </button>
+      <button
+        className="icon-btn secondary-btn"
+        title="Delete this skill"
+        onClick={() => vscode.postMessage({ type: 'delete_skill', name: skill.name })}
+      >
+        🗑
+      </button>
     </div>
   );
 }
@@ -51,7 +85,8 @@ export function SkillsSection({ skills, onInstallClick }: SkillsSectionProps) {
         <code>SKILL.md</code> format. Install one from a git repository below, or by hand by
         copying its folder into <code>{skills.root || '~/.kodo/skills'}</code> — either way it
         takes effect immediately, with no restart. Use the folder icon to open a skill in a new
-        window, or the trash icon to delete it from disk.
+        window, or the trash icon to delete it from disk. Skills marked <em>built-in</em> ship
+        with Kōdo: the eye icon shows one read-only, and they cannot be deleted.
       </p>
       <p>
         <button className="secondary-btn" onClick={onInstallClick}>Install from a repository…</button>{' '}

@@ -157,6 +157,7 @@ function parseSkillsResponse(resp: Record<string, unknown>): SkillsState {
       description: String(s.description ?? ''),
       path: String(s.path ?? ''),
       error: String(s.error ?? ''),
+      builtin: s.builtin === true,
     })),
   };
 }
@@ -784,6 +785,20 @@ async function openSkillFolder(skillPath: string): Promise<void> {
   });
 }
 
+/** Open a shipped skill's `SKILL.md` read-only (Kōdo Settings → Skills, eye
+ * icon). A shipped skill lives inside the installed Kōdo package, where an edit
+ * would be lost on the next upgrade, so it is shown in a read-only editor
+ * rather than opened as a folder to work in. */
+async function viewSkillReadOnly(skillPath: string): Promise<void> {
+  if (!skillPath) {
+    return;
+  }
+  const uri = vscode.Uri.joinPath(vscode.Uri.file(skillPath), 'SKILL.md');
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document, { preview: true });
+  await vscode.commands.executeCommand('workbench.action.files.setActiveEditorReadonlyInSession');
+}
+
 /** Delete a skill from the Kōdo Settings panel's "Skills" list (trash icon).
  * Confirms with the same native modal shape as `deleteSessionFromSettingsPanel`
  * above, then sends `skills.delete` (kodo/doc/WS_PROTOCOL.md §7.6j). Both the
@@ -956,6 +971,10 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
   }
   if (msg.type === 'open_skill') {
     await openSkillFolder(msg.path);
+    return;
+  }
+  if (msg.type === 'view_skill') {
+    await viewSkillReadOnly(msg.path);
     return;
   }
   if (msg.type === 'delete_skill') {

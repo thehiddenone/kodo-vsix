@@ -68,6 +68,9 @@ export interface SkillEntry {
   path: string;
   /** Empty for a healthy skill; the load failure otherwise. */
   error: string;
+  /** A skill shipped with Kōdo (name prefix `kodo-`): viewed read-only, never
+   * deleted (kodo/doc/AGENT_BUILDER.md §7). */
+  builtin: boolean;
 }
 
 /** The "Skills" section's whole state. `root` is the server-reported skills
@@ -560,6 +563,7 @@ export type KodoSettingsMessage =
   | { type: 'fetch_session_rules'; sessionId: string }
   | { type: 'delete_session_rules'; sessionId: string; rules: GlobalRuleEntry[] }
   | { type: 'open_skill'; path: string }
+  | { type: 'view_skill'; path: string }
   | { type: 'delete_skill'; name: string }
   | { type: 'scan_skill_repo'; repoUrl: string }
   | { type: 'install_skills'; repoUrl: string; install: { name: string; overwrite: boolean }[] }
