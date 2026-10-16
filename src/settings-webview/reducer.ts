@@ -19,12 +19,13 @@ export const initial: KodoSettingsState = {
   skillScan: null,
   skillInstall: null,
   hfSearch: null,
-  agents: { root: '', agents: [], builtins: [] },
+  agents: { root: '', agents: [], builtins: [], topBuiltins: [] },
   agentScan: null,
   agentInstall: null,
   agentCopyScan: null,
   agentCopy: null,
   agentReport: null,
+  harborOptions: null,
   uiSettings: {
     showTimestamps: false, timezone: 'system', clockFormat: 'ymd_24h', enterSubmits: true, autoScroll: 'auto',
     showAllLocalLlmQuants: false,
@@ -112,6 +113,9 @@ export function reducer(state: KodoSettingsState, action: Action): KodoSettingsS
   }
   if (data.agentReport === null || (data.agentReport && typeof data.agentReport === 'object')) {
     next.agentReport = data.agentReport;
+  }
+  if (data.harborOptions === null || (data.harborOptions && typeof data.harborOptions === 'object')) {
+    next.harborOptions = data.harborOptions;
   }
   if (Array.isArray(data.hfTokens)) {
     next.hfTokens = data.hfTokens;

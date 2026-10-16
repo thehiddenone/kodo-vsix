@@ -86,6 +86,8 @@ export interface AgentEntry {
   /** How many lint warnings its prompt has (kodo/doc/AGENT_BUILDER.md §5.2);
    * `agents.validate` lists them. */
   warnings: number;
+  /** A top-level agent the picker offers — what Benchmark and Basics test run. */
+  selectable: boolean;
 }
 
 /** The "Agents" section's whole state. `root` is the server-reported agents
@@ -96,6 +98,64 @@ export interface AgentsState {
   agents: AgentEntry[];
   /** The built-ins "Copy a built-in agent…" offers. */
   builtins: BuiltinAgentEntry[];
+  /** The selectable built-in top-level agents, for the "Built-in agents" list. */
+  topBuiltins: TopBuiltinEntry[];
+}
+
+/** One selectable built-in top-level agent, for the Agents section's read-only
+ * "Built-in agents" list, where Benchmark, Basics test and Copy start for a
+ * built-in (kodo/doc/AGENT_BUILDER.md §8, D23). From every `agents.*` ack's
+ * `top_builtins`. */
+export interface TopBuiltinEntry {
+  name: string;
+  label: string;
+  description: string;
+}
+
+/** One model the Benchmark modal offers: a `kodo-harbor list-models --json`
+ * row from `harbor.options` (kodo/doc/AGENT_BUILDER.md §8). For a cloud model,
+ * `credential` is true when either the server's environment or the key stored
+ * in Kōdo's Cloud AI settings holds one (D37); `null` for a local model. */
+export interface HarborModelOption {
+  model: string;
+  kind: string;
+  description: string;
+  credential: boolean | null;
+  vendor: string;
+  thinkingTiers: string[];
+  defaultThinkingTier: string;
+  /** Whether a terminus-2 control arm can run this model. */
+  control: boolean;
+}
+
+export interface HarborSuiteOption {
+  name: string;
+  description: string;
+}
+
+/** The outcome of one `harbor.options` request: what the Benchmark and Basics
+ * test modal can offer, plus whether the server has a llama-server loaded
+ * (the GPU warning, D20). */
+export interface HarborOptionsResult {
+  ok: boolean;
+  error: string;
+  models: HarborModelOption[];
+  suites: HarborSuiteOption[];
+  basicsSuite: string;
+  controls: string[];
+  llamaRunning: boolean;
+  llamaModel: string;
+}
+
+/** What the modal asks the extension to run in a terminal. */
+export interface BenchmarkRequest {
+  agent: string;
+  model: string;
+  suite: string;
+  attempts: number;
+  /** `''` for the model's own default tier. */
+  thinkingLevel: string;
+  control: boolean;
 }
 
 /** One entry a source offers, from `agents.install_scan`
@@ -574,6 +634,8 @@ export interface KodoSettingsState {
   agentCopyScan: AgentCopyScanResult | null;
   agentCopy: AgentCopyResult | null;
   agentReport: AgentReportResult | null;
+  /** The latest `harbor.options` reply, for the Benchmark / Basics test modal. */
+  harborOptions: HarborOptionsResult | null;
   uiSettings: UiSettings;
   hfTokens: HfTokenEntry[];
   cloudRegistry: CloudRegistry;
@@ -739,6 +801,8 @@ export type OutboundMessage =
   | { type: 'validate_agent'; name: string }
   | { type: 'open_agent_file'; path: string; line: number | null }
   | { type: 'review_agent'; name: string }
+  | { type: 'fetch_harbor_options' }
+  | ({ type: 'run_benchmark' } & BenchmarkRequest)
   | { type: 'add_hf_token'; name: string; secret: string }
   | { type: 'remove_hf_token'; uuid: string }
   | { type: 'activate_hf_token'; uuid: string }

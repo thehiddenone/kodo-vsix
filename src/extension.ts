@@ -27,7 +27,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { initKodoDiagnostics, showKodoDiagnostics } from './diagnostics';
+import { initKodoDiagnostics, kodoDiagnostics, showKodoDiagnostics } from './diagnostics';
 import { makeRequest } from './envelope';
 import type { Envelope } from './envelope';
 import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-provider';
@@ -43,6 +43,7 @@ import {
   setCloudUniformEnabled,
   setCloudUniformModel,
 } from './extension/cloud-ai-settings';
+import { registerAgentSchemas } from './extension/agent-schemas';
 import { handleControlEnvelope } from './extension/control-channel';
 import { sendControl, sendControlHello } from './extension/control-send';
 import { createProject } from './extension/create-project';
@@ -77,6 +78,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   state.windowId = stableWindowId(context);
   consumeSerializerDead();
+
+  // Completion and inline errors for hand-edited user agent JSON files: map
+  // the schemas the server writes to ~/.kodo/etc/agent_schemas/ onto
+  // ~/.kodo/agents/** in the user's `json.schemas` (AGENT_BUILDER.md §4).
+  // Editing help only, so a failure is logged and never blocks activation.
+  registerAgentSchemas().catch((err: unknown) => {
+    kodoDiagnostics().appendLine(`could not register the agent JSON Schemas: ${String(err)}`);
+  });
 
   // Window-global, independent of the WS connection/session model — polls
   // manager-state.json directly off disk (see local-model-downloads.ts) so a

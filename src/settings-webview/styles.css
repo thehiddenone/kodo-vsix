@@ -299,7 +299,19 @@
       padding: 6px 10px;
     }
     .agent-header .skill-name { font-weight: 600; }
-    .agent-header .session-icons { width: 172px; }
+    .agent-header .session-icons { width: 258px; }
+    /* The read-only "Built-in agents" list above the Agents table: name,
+       description and the Basics test / Benchmark / Copy actions
+       (kodo/doc/AGENT_BUILDER.md §8). */
+    .builtin-agent-row {
+      display: grid;
+      grid-template-columns: minmax(110px, 20%) 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #444));
+    }
+    .builtin-agent-row:first-child { border-top: none; }
     .agent-kind,
     .agent-version,
     .agent-lint {

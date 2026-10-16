@@ -5,6 +5,8 @@ import { vscode } from './vscode';
 interface CopyAgentModalProps {
   /** The built-ins `agents.copy` accepts, from the Agents listing. */
   builtins: BuiltinAgentEntry[];
+  /** The built-in to preselect (a "Built-in agents" row's Copy); `''` = the first. */
+  initialName: string;
   /** Latest `agents.copy_scan` reply, or `null` before the first. Matched on
    * name + prefix against what this instance asked for, so a reply left over
    * from an earlier instance is never read as an answer to this one. */
@@ -24,8 +26,10 @@ type Step = 'pick' | 'review' | 'copying' | 'result';
  * `kodo_`. The review step shows that closure before anything is written, and,
  * when some of the new names are already taken, asks keep-or-replace once for
  * all of them in the server's own words, exactly as the install modal does. */
-export function CopyAgentModal({ builtins, scan, copy, onClose }: CopyAgentModalProps) {
-  const [name, setName] = useState(builtins[0]?.name ?? '');
+export function CopyAgentModal({ builtins, initialName, scan, copy, onClose }: CopyAgentModalProps) {
+  const [name, setName] = useState(
+    builtins.some((b) => b.name === initialName) ? initialName : (builtins[0]?.name ?? ''),
+  );
   const [prefix, setPrefix] = useState('');
   const [step, setStep] = useState<Step>('pick');
   const [scanning, setScanning] = useState(false);

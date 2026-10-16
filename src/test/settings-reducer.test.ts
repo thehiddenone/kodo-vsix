@@ -3,7 +3,7 @@ import * as assert from 'assert';
 import { reducer, initial } from '../settings-webview/reducer';
 import type {
   AgentCopyResult, AgentCopyScanResult, AgentInstallResult, AgentReportResult, AgentScanResult,
-  AgentsState, HfSearchResult,
+  AgentsState, HarborOptionsResult, HfSearchResult,
 } from '../settings-webview/types';
 
 // The Kōdo Settings panel is seeded and refreshed through one merge-patch
@@ -16,9 +16,10 @@ suite('settings reducer — agents', () => {
     agents: [{
       name: 'researcher', kind: 'agent', version: '0.1.0', label: 'Researcher',
       description: 'Read-only research.', path: '/home/u/.kodo/agents/researcher', error: '',
-      warnings: 2,
+      warnings: 2, selectable: true,
     }],
     builtins: [{ name: 'kodo_guide', kind: 'agent', label: 'Guide' }],
+    topBuiltins: [{ name: 'kodo_guide', label: 'Guide', description: 'Coordinates specialists.' }],
   };
 
   test('a patch carrying the agent listing reaches the state', () => {
@@ -104,5 +105,18 @@ suite('settings reducer — Hugging Face repo search', () => {
     assert.deepStrictEqual(filled.hfSearch, search);
     assert.deepStrictEqual(reducer(filled, { type: 'patch', data: { rules: [] } }).hfSearch, search);
     assert.strictEqual(reducer(filled, { type: 'patch', data: { hfSearch: null } }).hfSearch, null);
+  });
+});
+
+suite('settings reducer — harbor options', () => {
+  const options: HarborOptionsResult = {
+    ok: true, error: '', models: [], suites: [{ name: 'agent-basics', description: 'Seven tasks.' }],
+    basicsSuite: 'agent-basics', controls: ['terminus-2'], llamaRunning: false, llamaModel: '',
+  };
+
+  test('a harbor.options reply reaches the state, and null clears it', () => {
+    const seeded = reducer(initial, { type: 'patch', data: { harborOptions: options } });
+    assert.deepStrictEqual(seeded.harborOptions, options);
+    assert.strictEqual(reducer(seeded, { type: 'patch', data: { harborOptions: null } }).harborOptions, null);
   });
 });

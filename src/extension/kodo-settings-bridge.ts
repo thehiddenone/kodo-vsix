@@ -30,6 +30,7 @@ import {
   setMetaContributorTier,
   setOpenRouterAutoMode,
 } from './cloud-ai-settings';
+import { fetchHarborOptionsForPanel, runBenchmark } from './benchmark';
 import { sendControl, sendControlAwait } from './control-send';
 import { parseHfSearchReply } from './hf-search';
 import {
@@ -180,7 +181,7 @@ async function fetchAgentsForPanel(): Promise<AgentsState> {
     return parseAgentsResponse(resp);
   } catch {
     vscode.window.showErrorMessage('Kōdo: could not reach the server to list agents.');
-    return { root: '', agents: [], builtins: [] };
+    return { root: '', agents: [], builtins: [], topBuiltins: [] };
   }
 }
 
@@ -191,6 +192,9 @@ function parseAgentsResponse(resp: Record<string, unknown>): AgentsState {
   const list = Array.isArray(resp.agents) ? (resp.agents as Record<string, unknown>[]) : [];
   const builtins = Array.isArray(resp.builtins)
     ? (resp.builtins as Record<string, unknown>[])
+    : [];
+  const topBuiltins = Array.isArray(resp.top_builtins)
+    ? (resp.top_builtins as Record<string, unknown>[])
     : [];
   return {
     root: typeof resp.root === 'string' ? resp.root : '',
@@ -203,11 +207,17 @@ function parseAgentsResponse(resp: Record<string, unknown>): AgentsState {
       path: String(a.path ?? ''),
       error: String(a.error ?? ''),
       warnings: typeof a.warnings === 'number' ? a.warnings : 0,
+      selectable: a.selectable === true,
     })),
     builtins: builtins.map((b) => ({
       name: String(b.name ?? ''),
       kind: String(b.kind ?? 'agent'),
       label: String(b.label ?? ''),
+    })),
+    topBuiltins: topBuiltins.map((b) => ({
+      name: String(b.name ?? ''),
+      label: String(b.label ?? ''),
+      description: String(b.description ?? ''),
     })),
   };
 }
@@ -566,7 +576,7 @@ export async function openKodoSettings(
     {
       rules, stuckDetection, housekeeperLlm, defaultAgent, sessions, sessionRules: null, skills,
       agents, agentScan: null, agentInstall: null, agentCopyScan: null, agentCopy: null,
-      agentReport: null,
+      agentReport: null, harborOptions: null,
       llamaCpp: llamaCppInfoForPanel(),
       skillScan: null, skillInstall: null, hfSearch: null,
       uiSettings, hfTokens: hfTokens.listTokens(), ...localInference, ...cloudAi,
@@ -1036,6 +1046,15 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     // shows each concern as a callout. The user watches but cannot type; the
     // review changes nothing, so the panel needs no refresh when it ends.
     newSession({ name: AGENT_REVIEW_AGENT, prompt: msg.name });
+    return;
+  }
+  if (msg.type === 'fetch_harbor_options') {
+    void fetchHarborOptionsForPanel();
+    return;
+  }
+  if (msg.type === 'run_benchmark') {
+    const { type: _type, ...request } = msg;
+    void runBenchmark(request);
     return;
   }
   if (msg.type === 'pick_agent_source') {

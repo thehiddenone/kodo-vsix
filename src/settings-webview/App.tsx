@@ -11,6 +11,8 @@ import { ProfileModal } from './ProfileModal';
 import { GlobalRulesSection } from './GlobalRulesSection';
 import { AgentReportModal } from './AgentReportModal';
 import { AgentsSection } from './AgentsSection';
+import { BenchmarkModal } from './BenchmarkModal';
+import type { BenchmarkMode } from './BenchmarkModal';
 import { CopyAgentModal } from './CopyAgentModal';
 import { InstallAgentsModal } from './InstallAgentsModal';
 import { InstallSkillsModal } from './InstallSkillsModal';
@@ -40,6 +42,12 @@ export function App() {
   // skipped just because the source happened to be local.
   const [installAgentsSource, setInstallAgentsSource] = useState<string | null>(null);
   const [copyAgentModalOpen, setCopyAgentModalOpen] = useState(false);
+  // The built-in a row's Copy button preselects in the copy modal; '' = the first.
+  const [copyAgentName, setCopyAgentName] = useState('');
+  // The agent whose Benchmark / Basics test modal is open, or null.
+  const [benchmarkFor, setBenchmarkFor] = useState<
+    { agent: string; label: string; mode: BenchmarkMode } | null
+  >(null);
   // The agent whose Validate report is open, or null.
   const [reportAgentName, setReportAgentName] = useState<string | null>(null);
   // Which LLM's Configure (Default-profile knobs) modal is open, and which
@@ -112,19 +120,28 @@ export function App() {
       if (installAgentsSource !== null) { setInstallAgentsSource(null); }
       if (copyAgentModalOpen) { setCopyAgentModalOpen(false); }
       if (reportAgentName !== null) { setReportAgentName(null); }
+      if (benchmarkFor !== null) { setBenchmarkFor(null); }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     sessionSettingsFor, addTokenModalOpen, addKeyModalVendor, hfModalOpen, fileModalOpen,
     serverModalOpen, configureEntryName, profileEntryName, installSkillsModalOpen,
-    installAgentsSource, copyAgentModalOpen, reportAgentName,
+    installAgentsSource, copyAgentModalOpen, reportAgentName, benchmarkFor,
   ]);
 
-  function openCopyAgent() {
+  function openCopyAgent(name?: string) {
     // Drop any reply a previous copy left in state, so the modal starts clean.
     dispatch({ type: 'patch', data: { agentCopyScan: null, agentCopy: null } });
+    setCopyAgentName(name ?? '');
     setCopyAgentModalOpen(true);
+  }
+
+  function openBenchmark(agent: string, label: string, mode: BenchmarkMode) {
+    // Same staleness guard: the modal reads only the reply to this request.
+    dispatch({ type: 'patch', data: { harborOptions: null } });
+    setBenchmarkFor({ agent, label, mode });
+    vscode.postMessage({ type: 'fetch_harbor_options' });
   }
 
   function openAgentReport(name: string) {
@@ -167,6 +184,7 @@ export function App() {
             onInstallClick={() => setInstallAgentsSource('')}
             onCopyClick={openCopyAgent}
             onValidate={openAgentReport}
+            onBenchmark={openBenchmark}
           />
         )}
         {selectedKey === 'skills' && (
@@ -260,9 +278,19 @@ export function App() {
       {copyAgentModalOpen && (
         <CopyAgentModal
           builtins={state.agents.builtins}
+          initialName={copyAgentName}
           scan={state.agentCopyScan}
           copy={state.agentCopy}
           onClose={() => setCopyAgentModalOpen(false)}
+        />
+      )}
+      {benchmarkFor !== null && (
+        <BenchmarkModal
+          agent={benchmarkFor.agent}
+          label={benchmarkFor.label}
+          mode={benchmarkFor.mode}
+          options={state.harborOptions}
+          onClose={() => setBenchmarkFor(null)}
         />
       )}
       {reportAgentName !== null && (
