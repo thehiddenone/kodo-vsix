@@ -1,3 +1,5 @@
+import { ActionsMenu } from './ActionsMenu';
+import type { MenuAction } from './ActionsMenu';
 import type { BenchmarkMode } from './BenchmarkModal';
 import type { AgentEntry, AgentsState, TopBuiltinEntry } from './types';
 import { vscode } from './vscode';
@@ -11,35 +13,25 @@ interface RowProps {
   onBenchmark: OnBenchmark;
 }
 
-/** The Basics test and Benchmark buttons (kodo/doc/AGENT_BUILDER.md §8). Only a
- * selectable top-level agent can run alone; any other row gets them disabled,
- * so the action column stays aligned. */
-function BenchmarkButtons({ name, label, enabled, onBenchmark }: {
-  name: string; label: string; enabled: boolean; onBenchmark: OnBenchmark;
-}) {
-  const why = 'Only a top-level agent the picker offers can run alone; benchmark one that uses this';
-  return (
-    <>
-      <button
-        className="icon-btn secondary-btn"
-        disabled={!enabled}
-        title={enabled
-          ? 'Basics test: seven small tasks in Docker check that the prompt makes the agent follow instructions and use its tools'
-          : why}
-        onClick={() => onBenchmark(name, label, 'basics')}
-      >
-        🧪
-      </button>
-      <button
-        className="icon-btn secondary-btn"
-        disabled={!enabled}
-        title={enabled ? 'Benchmark: run a Harbor suite on this agent in a terminal' : why}
-        onClick={() => onBenchmark(name, label, 'benchmark')}
-      >
-        📊
-      </button>
-    </>
-  );
+/** The Basics test and Benchmark actions (kodo/doc/AGENT_BUILDER.md §8). Only
+ * a selectable top-level agent that loads can run alone, so for any other row
+ * the caller leaves these out of its menu. */
+function benchmarkActions(name: string, label: string, onBenchmark: OnBenchmark): MenuAction[] {
+  return [
+    {
+      glyph: '🧪',
+      label: 'Basics test',
+      description: 'Seven small tasks in Docker check that the prompt makes the agent follow '
+        + 'instructions and use its tools',
+      onSelect: () => onBenchmark(name, label, 'basics'),
+    },
+    {
+      glyph: '📊',
+      label: 'Benchmark',
+      description: 'Run a Harbor suite on this agent in a terminal',
+      onSelect: () => onBenchmark(name, label, 'benchmark'),
+    },
+  ];
 }
 
 /** The lint column: how many warnings the prompt has (kodo/doc/AGENT_BUILDER.md
@@ -63,10 +55,39 @@ function AgentRow({ agent, onValidate, onBenchmark }: RowProps) {
   // column instead — that is the whole reason broken entries are listed
   // (kodo/doc/USER_AGENTS.md §5): the user can see what is wrong and delete it.
   const detail = broken ? agent.error : agent.description;
+  const label = agent.label || agent.name;
+  const actions: MenuAction[] = [
+    ...(agent.selectable && !broken ? benchmarkActions(agent.name, label, onBenchmark) : []),
+    {
+      glyph: '🩺',
+      label: 'Validate',
+      description: 'Check that it loads, and see what the lint says about its prompt',
+      onSelect: () => onValidate(agent.name),
+    },
+    {
+      glyph: '🤖',
+      label: 'Review with AI',
+      description: "A new session has Agent Critic check this agent against Kōdo's "
+        + 'prompt-writing rules and list each concern',
+      onSelect: () => vscode.postMessage({ type: 'review_agent', name: agent.name }),
+    },
+    {
+      glyph: '📁',
+      label: 'Open folder',
+      description: "Open this agent's folder in a new window",
+      onSelect: () => vscode.postMessage({ type: 'open_agent', path: agent.path }),
+    },
+    {
+      glyph: '🗑',
+      label: 'Delete',
+      description: 'Delete this agent from disk, after you confirm',
+      onSelect: () => vscode.postMessage({ type: 'delete_agent', name: agent.name, kind: agent.kind }),
+    },
+  ];
   return (
     <div className="agent-row">
       <div className="skill-name" title={agent.path}>
-        {agent.label || agent.name}
+        {label}
       </div>
       <div className="agent-kind">{agent.kind}</div>
       <div className="agent-version">{agent.version || '—'}</div>
@@ -74,43 +95,8 @@ function AgentRow({ agent, onValidate, onBenchmark }: RowProps) {
       <div className={'skill-description' + (broken ? ' skill-error' : '')} title={detail}>
         {detail}
       </div>
-      <div className="session-icons">
-        <BenchmarkButtons
-          name={agent.name}
-          label={agent.label || agent.name}
-          enabled={agent.selectable && !broken}
-          onBenchmark={onBenchmark}
-        />
-        <button
-          className="icon-btn secondary-btn"
-          title="Validate: does it load, and what does the lint say about its prompt"
-          onClick={() => onValidate(agent.name)}
-        >
-          🩺
-        </button>
-        <button
-          className="icon-btn secondary-btn"
-          title="Review with AI: a new session has Agent Critic check this agent against Kōdo's prompt-writing rules and lists each concern"
-          onClick={() => vscode.postMessage({ type: 'review_agent', name: agent.name })}
-        >
-          🤖
-        </button>
-        <button
-          className="icon-btn secondary-btn"
-          title="Open this agent's folder in a new window"
-          onClick={() => vscode.postMessage({ type: 'open_agent', path: agent.path })}
-        >
-          📁
-        </button>
-        <button
-          className="icon-btn secondary-btn"
-          title="Delete this agent"
-          onClick={() =>
-            vscode.postMessage({ type: 'delete_agent', name: agent.name, kind: agent.kind })
-          }
-        >
-          🗑
-        </button>
+      <div className="agent-actions">
+        <ActionsMenu actions={actions} />
       </div>
     </div>
   );
@@ -125,27 +111,23 @@ function BuiltinRow({ agent, copyable, onBenchmark, onCopy }: {
   onBenchmark: OnBenchmark;
   onCopy: (name: string) => void;
 }) {
+  // Every row here is a selectable top-level agent (`top_builtins`), so it can
+  // always be benchmarked.
+  const actions = benchmarkActions(agent.name, agent.label || agent.name, onBenchmark);
+  if (copyable) {
+    actions.push({
+      glyph: '⧉',
+      label: 'Copy',
+      description: 'Make an editable copy of this agent, with every sub-agent it uses',
+      onSelect: () => onCopy(agent.name),
+    });
+  }
   return (
     <div className="builtin-agent-row">
       <div className="skill-name" title={agent.name}>{agent.label || agent.name}</div>
       <div className="skill-description" title={agent.description}>{agent.description}</div>
-      <div className="session-icons">
-        <BenchmarkButtons
-          name={agent.name}
-          label={agent.label || agent.name}
-          enabled
-          onBenchmark={onBenchmark}
-        />
-        <button
-          className="icon-btn secondary-btn"
-          disabled={!copyable}
-          title={copyable
-            ? 'Copy: make an editable copy of this agent, with every sub-agent it uses'
-            : 'This agent cannot be copied'}
-          onClick={() => onCopy(agent.name)}
-        >
-          ⧉
-        </button>
+      <div className="agent-actions">
+        <ActionsMenu actions={actions} />
       </div>
     </div>
   );
@@ -223,7 +205,7 @@ export function AgentsSection({
             <div className="agent-version">Version</div>
             <div className="agent-lint">Lint</div>
             <div className="skill-description">Description</div>
-            <div className="session-icons" />
+            <div className="agent-actions" />
           </div>
           {agents.agents.map((a) => (
             <AgentRow

@@ -299,9 +299,73 @@
       padding: 6px 10px;
     }
     .agent-header .skill-name { font-weight: 600; }
-    .agent-header .session-icons { width: 258px; }
+    /* The action column holds one Actions… button; the header's empty cell has
+       the same class, so its fixed width keeps header and rows aligned. */
+    .agent-actions {
+      width: 96px;
+      flex-shrink: 0;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .actions-btn {
+      display: inline-block;
+      width: 100%;
+      text-align: center;
+      white-space: nowrap;
+    }
+    /* The Actions… popup (ActionsMenu.tsx): a transparent full-window layer
+       makes it modal, and the menu is placed in window coordinates from the
+       button's position. */
+    .actions-menu-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+    }
+    .actions-menu {
+      position: fixed;
+      min-width: 260px;
+      max-width: min(380px, calc(100vw - 16px));
+      padding: 4px 0;
+      background: var(--vscode-menu-background, var(--vscode-editorWidget-background, var(--vscode-editor-background)));
+      color: var(--vscode-menu-foreground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border, var(--vscode-widget-border, #444)));
+      border-radius: 4px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      box-sizing: border-box;
+    }
+    /* Two lines per entry: the name, bold and larger, over a smaller
+       description; the glyph spans both. */
+    .actions-menu-item {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      column-gap: 8px;
+      align-items: center;
+      width: 100%;
+      padding: 6px 12px;
+      background: transparent;
+      color: inherit;
+      border-radius: 0;
+    }
+    .actions-menu-item:hover {
+      background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+      color: var(--vscode-menu-selectionForeground, inherit);
+    }
+    .actions-menu-glyph {
+      grid-row: span 2;
+      font-size: 1.5em;
+      text-align: center;
+    }
+    .actions-menu-label {
+      font-weight: 700;
+      font-size: 1.1em;
+    }
+    .actions-menu-desc {
+      font-size: 0.85em;
+      opacity: 0.8;
+      white-space: normal;
+    }
     /* The read-only "Built-in agents" list above the Agents table: name,
-       description and the Basics test / Benchmark / Copy actions
+       description and an Actions… menu with Basics test / Benchmark / Copy
        (kodo/doc/AGENT_BUILDER.md §8). */
     .builtin-agent-row {
       display: grid;
