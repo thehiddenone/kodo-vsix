@@ -1841,6 +1841,58 @@ export const styles = {
   // Read-only stand-in for composerRow in a session started by `agent.run`
   // (the agent takes no input): one line of status, then Stop and Delete at
   // the same 56px × 32px size they have in composerRight's grid.
+  // A benchmark session's view (BenchmarkPanel), in place of the chat feed.
+  benchmark: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '10px',
+    padding: '4px 4px 8px',
+  },
+  benchmarkHeader: {
+    fontSize: '12px',
+    color: 'var(--vscode-descriptionForeground)',
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '4px 14px',
+  },
+  benchmarkHeaderValue: {
+    color: 'var(--vscode-foreground)',
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+  },
+  benchmarkStatus: {
+    fontSize: '13px',
+    fontWeight: 600,
+  },
+  benchmarkLinks: {
+    display: 'flex',
+    gap: '14px',
+    fontSize: '12px',
+  },
+  benchmarkLink: {
+    color: 'var(--vscode-textLink-foreground)',
+    cursor: 'pointer',
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    font: 'inherit',
+  },
+  benchmarkDetail: {
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+    fontSize: '11px',
+    whiteSpace: 'pre-wrap' as const,
+    margin: 0,
+    padding: '6px 8px',
+    borderRadius: '4px',
+    background: 'var(--vscode-textCodeBlock-background, rgba(128,128,128,0.12))',
+    color: 'var(--vscode-errorForeground)',
+  },
+  benchmarkNumberCell: {
+    verticalAlign: 'top' as const,
+    padding: '3px 8px 3px 0',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+    textAlign: 'right' as const,
+    whiteSpace: 'nowrap' as const,
+  },
   lockedRow: {
     display: 'flex',
     alignItems: 'center',

@@ -28,7 +28,7 @@ function benchmarkActions(name: string, label: string, onBenchmark: OnBenchmark)
     {
       glyph: '📊',
       label: 'Benchmark',
-      description: 'Run a Harbor suite on this agent in a terminal',
+      description: 'Run a Harbor suite on this agent in a new session tab',
       onSelect: () => onBenchmark(name, label, 'benchmark'),
     },
   ];

@@ -29,11 +29,10 @@ function usable(model: HarborModelOption): boolean {
 }
 
 /** "Benchmark…" and "Basics test" on a top-level agent (kodo/doc/AGENT_BUILDER.md
- * §8). The modal only builds the run: the extension runs `kodo-harbor` in an
- * integrated terminal, which does every preflight and prints it, and opens the
- * job's summary when the command ends. If the chosen model is local and the
- * Kōdo server already has a llama-server loaded, the modal says the two may
- * not fit in memory together and lets the user decide (D20). */
+ * §8). The modal only builds the run: Run opens a new Kōdo session tab, where
+ * the server runs `kodo-harbor` and shows its progress and summary
+ * (kodo/doc/BENCHMARK_SESSIONS.md §5). A local model runs on the server's own
+ * llama-server, so there is no second copy to warn about (D6 retired D20). */
 export function BenchmarkModal({ agent, label, mode, options, onClose }: BenchmarkModalProps) {
   const basics = mode === 'basics';
   const models = (options?.models ?? []).filter(runnable);
@@ -44,7 +43,6 @@ export function BenchmarkModal({ agent, label, mode, options, onClose }: Benchma
   const [attempts, setAttempts] = useState(1);
   const [thinking, setThinking] = useState('');
   const [control, setControl] = useState(false);
-  const [confirmGpu, setConfirmGpu] = useState(false);
 
   // Defaults once the options land: the first model that can run, and the
   // first suite other than the basics test's own.
@@ -86,14 +84,6 @@ export function BenchmarkModal({ agent, label, mode, options, onClose }: Benchma
     onClose();
   }
 
-  function submit() {
-    if (chosen !== null && chosen.kind === 'local' && options?.llamaRunning) {
-      setConfirmGpu(true);
-      return;
-    }
-    start();
-  }
-
   const modelLabel = (m: HarborModelOption): string => {
     const name = m.description ? `${m.model} — ${m.description}` : m.model;
     return m.credential === false ? `${name} (no key)` : name;
@@ -116,7 +106,7 @@ export function BenchmarkModal({ agent, label, mode, options, onClose }: Benchma
           <p className="field-error">Could not read the benchmark options — {options.error}</p>
         )}
 
-        {options !== null && options.ok && !confirmGpu && (
+        {options !== null && options.ok && (
           <>
             <p className="modal-intro">
               {basics ? (
@@ -128,7 +118,9 @@ export function BenchmarkModal({ agent, label, mode, options, onClose }: Benchma
               ) : (
                 <>Runs a Harbor benchmark of this agent with <span className="value-code">kodo-harbor</span>.</>
               )}{' '}
-              It runs in a terminal and needs Docker; the summary opens when the run ends.
+              It runs in a new Kōdo session tab, which shows each finished trial and the summary,
+              and needs Docker. A local model runs on Kōdo's own llama.cpp: local chats in other
+              sessions wait until the run ends.
             </p>
             <div className="modal-field">
               <label for="bench-model">Model</label>
@@ -221,25 +213,9 @@ export function BenchmarkModal({ agent, label, mode, options, onClose }: Benchma
             )}
             <div className="modal-actions">
               <button className="secondary-btn" onClick={onClose}>Cancel</button>
-              <button onClick={submit} disabled={chosen === null || !usable(chosen) || !suite}>
-                Run in terminal
+              <button onClick={start} disabled={chosen === null || !usable(chosen) || !suite}>
+                Run
               </button>
-            </div>
-          </>
-        )}
-
-        {options !== null && options.ok && confirmGpu && (
-          <>
-            <p className="modal-intro">
-              The Kōdo server has a llama-server running
-              {options.llamaModel ? <> (<span className="value-code">{options.llamaModel}</span>)</> : null}.
-              {' '}<span className="value-code">kodo-harbor</span> starts a second one for{' '}
-              <span className="value-code">{model}</span>, and the two may not fit in memory together.
-              You can stop the running one from the sidebar first.
-            </p>
-            <div className="modal-actions">
-              <button className="secondary-btn" onClick={onClose}>Cancel</button>
-              <button onClick={start}>Continue</button>
             </div>
           </>
         )}

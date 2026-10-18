@@ -12,7 +12,7 @@ import * as cloudCredentials from '../cloud-credentials';
 import { kodoDiagnostics } from '../diagnostics';
 import { makeRequest } from '../envelope';
 import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from '../reconcile-policy';
-import type { AgentRunRequest, SessionDeps } from '../session/types';
+import type { SessionDeps, SessionLaunch } from '../session/types';
 import { SessionController } from '../session/controller';
 import { applyLlamaState } from './llamacpp';
 import { handleApiKeyRequest, pushCloudAiSettingsState } from './cloud-ai-settings';
@@ -129,11 +129,12 @@ function createPanel(): vscode.WebviewPanel {
 
 /**
  * Open a blank session in a new tab — interactive, on the server's default
- * agent, unless *agentRun* is given: then the session runs that one prompt on
- * a non-interactive agent and takes no input (doc/WS_PROTOCOL.md §7.4h).
+ * agent, unless *launch* says otherwise: an `agent_run` runs one prompt on a
+ * non-interactive agent (doc/WS_PROTOCOL.md §7.4h), a `benchmark` runs
+ * `kodo-harbor` in the session (§7.4j). Either way the tab takes no input.
  */
-export function newSession(agentRun?: AgentRunRequest): SessionController {
-  const controller = new SessionController(sessionDeps(), createPanel(), '', agentRun);
+export function newSession(launch?: SessionLaunch): SessionController {
+  const controller = new SessionController(sessionDeps(), createPanel(), '', launch);
   state.sessions.set(controller.key, controller);
   return controller;
 }

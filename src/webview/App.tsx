@@ -34,6 +34,9 @@ import { AgentButton } from './AgentButton';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { SamplingModal } from './SamplingModal';
 import { FooterButton } from './FooterButton';
+import { BenchmarkPanel } from './BenchmarkPanel';
+import type { BenchmarkView } from '../benchmark-view';
+import { benchmarkActive } from '../benchmark-view';
 /** How close to the bottom (px) counts as "at the bottom" for the auto-scroll
  *  feed — a small tolerance absorbs sub-pixel rounding from browser zoom. */
 const STREAM_BOTTOM_EPSILON = 4;
@@ -253,7 +256,11 @@ export function App() {
             waiting: Boolean(msg.waiting),
             reason: String(msg.reason ?? 'queued'),
             retryIn: typeof msg.retryIn === 'number' ? msg.retryIn : null,
+            title: String(msg.title ?? ''),
           });
+          break;
+        case 'benchmark':
+          dispatch({ type: 'benchmark', view: (msg.view as BenchmarkView | null) ?? null });
           break;
         case 'session_history':
           dispatch({
@@ -676,6 +683,9 @@ export function App() {
   // signal is dead — the server's `state` event no longer carries a `stage`
   // field, so it is always 'IDLE' and must not gate the Stop button.
   const isRunning = state.running;
+  // A benchmark's Stop means something until its run is stopping or over.
+  const benchmarkStoppable =
+    state.benchmark !== null && benchmarkActive(state.benchmark.job) && state.benchmark.job.status !== 'stopping';
   const isBlocked =
     state.pendingGate !== null ||
     state.pendingQuestion !== null ||
@@ -820,7 +830,8 @@ export function App() {
         onTouchMove={markUserScrollUp}
         onPointerDown={handleStreamPointerDown}
       >
-        {groupSessionEntries(state.session).map((block) =>
+        {state.benchmark !== null && <BenchmarkPanel view={state.benchmark} />}
+        {state.benchmark === null && groupSessionEntries(state.session).map((block) =>
           block.kind === 'entry' ? (
             renderEntry(block.entry, block.index)
           ) : (
@@ -930,15 +941,19 @@ export function App() {
         // strip. Stop and Delete are the two actions that still mean something.
         <div style={styles.lockedRow}>
           <span style={styles.lockedText}>
-            {isRunning
-              ? '🔒 An agent is working on its own in this session — it takes no input.'
-              : '🔒 This session ran an agent on its own — it takes no input.'}
+            {state.benchmark !== null
+              ? benchmarkStoppable
+                ? '🔒 A benchmark is running in this session — it takes no input.'
+                : '🔒 This session ran a benchmark — it takes no input.'
+              : isRunning
+                ? '🔒 An agent is working on its own in this session — it takes no input.'
+                : '🔒 This session ran an agent on its own — it takes no input.'}
           </span>
           <FooterButton
             style={{ ...styles.globalStopBtn, ...styles.lockedBtn }}
             onClick={handleStop}
-            disabled={!state.connected || !isRunning}
-            title="Stop the agent"
+            disabled={!state.connected || (state.benchmark !== null ? !benchmarkStoppable : !isRunning)}
+            title={state.benchmark !== null ? 'Stop the benchmark (the trials that finished are kept)' : 'Stop the agent'}
           >
             {'🛑'}
           </FooterButton>

@@ -249,6 +249,8 @@ export class ModeToggleController {
    *  own default (`resolve_top_agent`) and the follow-up `state` event
    *  (`applyStateEvent`) is what actually populates `topAgent`. */
   applyNewSessionDefaults(): void {
+    // Also what unlocks a tab whose `harbor.run` was refused (lockForJob).
+    this.interactive_ = true;
     this.topAgent = '';
     this.effectiveTopAgent = '';
     this.autonomous = false;
@@ -281,6 +283,19 @@ export class ModeToggleController {
     this.commandControl = 'smart';
     this.send(makeRequest('agent.run', { name, prompt }));
     this.syncEditCommandToServer();
+    this.postModeState();
+  }
+
+  /**
+   * About to `harbor.run` this brand-new session (kodo/doc/WS_PROTOCOL.md
+   * §7.4j): lock the composer now, so it never flashes interactive before the
+   * server's `state` confirms the lock. A refusal calls
+   * {@link applyNewSessionDefaults}, which unlocks it again.
+   */
+  lockForJob(): void {
+    this.interactive_ = false;
+    this.running = false;
+    this.awaitingLlm = false;
     this.postModeState();
   }
 

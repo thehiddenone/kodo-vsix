@@ -72,7 +72,9 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     // notification — the previous `withProgress` toast had no close affordance
     // (cancellable: false) and auto-dismissed after a hardcoded 60s regardless
     // of the actual retry delay.
-    post({ type: 'llm_waiting', waiting, reason, retryIn });
+    // `title`: the benchmark session a `benchmark` wait is for (kodo
+    // doc/WS_PROTOCOL.md §7.4j).
+    post({ type: 'llm_waiting', waiting, reason, retryIn, title: String(env.payload.title ?? '') });
     return true;
   }
 

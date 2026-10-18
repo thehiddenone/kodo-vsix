@@ -147,7 +147,8 @@ export interface HarborOptionsResult {
   llamaModel: string;
 }
 
-/** What the modal asks the extension to run in a terminal. */
+/** What the Benchmark modal asks for: the extension opens a benchmark session
+ *  tab that sends it to the server as `harbor.run`. */
 export interface BenchmarkRequest {
   agent: string;
   model: string;

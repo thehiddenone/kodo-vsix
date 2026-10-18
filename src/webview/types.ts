@@ -1,4 +1,5 @@
 // Shared data, state, and action types for the Kōdo WebView.
+import type { BenchmarkView } from '../benchmark-view';
 import type { SamplingParamSpec, SamplingValues, ThinkingFamily } from '../llm-registry-types';
 import type { ParamChange } from './paramChanges';
 
@@ -786,11 +787,18 @@ export interface State {
    * server-side from the session's agent, so it survives a reload.
    */
   interactive: boolean;
+  /**
+   * A benchmark session's run (kodo doc/BENCHMARK_SESSIONS.md §5), folded by
+   * the host from `state.job`, `harbor.trial`, `harbor.finished` and
+   * `session.history`; `null` for every other session. While set, the tab
+   * shows BenchmarkPanel in place of the chat feed.
+   */
+  benchmark: BenchmarkView | null;
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
   awaitingLlm: boolean;
   /** Gateway queue/throttle wait state, or null when not waiting. Transient. */
-  llmWaiting: { reason: string; retryIn: number | null } | null;
+  llmWaiting: { reason: string; retryIn: number | null; title: string } | null;
   /** Dismissible toast shown while `llmWaiting.reason === 'throttled'`; user-closeable independent of the underlying wait. Transient. */
   throttleToast: { retryIn: number | null } | null;
   /** Live tool-call argument text accumulating from the current call. Transient. */
@@ -863,7 +871,8 @@ export type Action =
   | { type: 'workspace_status'; hasWorkspace: boolean }
   | { type: 'status'; connected: boolean }
   | { type: 'llm_turn_start' }
-  | { type: 'llm_waiting'; waiting: boolean; reason: string; retryIn: number | null }
+  | { type: 'llm_waiting'; waiting: boolean; reason: string; retryIn: number | null; title: string }
+  | { type: 'benchmark'; view: BenchmarkView | null }
   | { type: 'tool_call'; toolName: string; description: string; toolCallId: string; timeoutSeconds: number | null }
   | { type: 'tool_call_in_progress'; toolCallId: string }
   | { type: 'web_search_note'; toolCallId: string; text: string }

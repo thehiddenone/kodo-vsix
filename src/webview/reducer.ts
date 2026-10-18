@@ -458,11 +458,13 @@ export function reducer(state: State, action: Action): State {
       // A new turn begins; clear any leftover toolgen indicator (e.g. from a
       // cancelled prior turn that never produced a tool_call entry).
       return { ...state, llmWaiting: null, throttleToast: null, awaitingLlm: true, thinkingStartedAt: null, streamingToolgen: '', toolgenActive: false, toolgenToolName: '', toolgenStartedAt: null };
+    case 'benchmark':
+      return { ...state, benchmark: action.view };
     case 'llm_waiting': {
       const throttled = action.waiting && action.reason === 'throttled';
       return {
         ...state,
-        llmWaiting: action.waiting ? { reason: action.reason, retryIn: action.retryIn } : null,
+        llmWaiting: action.waiting ? { reason: action.reason, retryIn: action.retryIn, title: action.title } : null,
         // Re-shown on every fresh throttle signal even if a prior one was dismissed;
         // cleared once the wait resolves (success or otherwise stops being 'throttled').
         throttleToast: throttled ? { retryIn: action.retryIn } : action.waiting ? state.throttleToast : null,
@@ -1425,6 +1427,7 @@ export const initial: State = {
   running: false,
   workspaceConnected: true,
   interactive: true,
+  benchmark: null,
   resumeSessionId: null,
   awaitingLlm: false,
   llmWaiting: null,

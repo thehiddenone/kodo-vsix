@@ -24,17 +24,21 @@ export function AwaitingIndicator() {
  * 429 backoff is in effect it reads "Getting throttled, waiting for X minutes";
  * while another session's turn keeps llama.cpp on a different LLM it reads
  * "Waiting for another session's turn to switch llama.cpp"
- * (kodo/doc/SESSION_LLM_BINDING.md §3).
+ * (kodo/doc/SESSION_LLM_BINDING.md §3); while a benchmark session holds
+ * llama.cpp for its whole run it names that session
+ * (kodo/doc/BENCHMARK_SESSIONS.md §4.6).
  */
-export function LlmWaitingIndicator({ waiting }: { waiting: { reason: string; retryIn: number | null } }) {
+export function LlmWaitingIndicator({ waiting }: { waiting: { reason: string; retryIn: number | null; title: string } }) {
   const label =
     waiting.reason === 'throttled'
       ? `Getting throttled, waiting for ${Math.max(1, Math.round((waiting.retryIn ?? 60) / 60))} minute${
           Math.max(1, Math.round((waiting.retryIn ?? 60) / 60)) === 1 ? '' : 's'
         } `
-      : waiting.reason === 'model_swap'
-        ? "Waiting for another session's turn to end before llama.cpp switches to this session's LLM "
-        : 'LLM is busy, waiting ';
+      : waiting.reason === 'benchmark'
+        ? `Waiting for the benchmark${waiting.title ? ` in “${waiting.title}”` : ''} to finish: it uses llama.cpp until it ends `
+        : waiting.reason === 'model_swap'
+          ? "Waiting for another session's turn to end before llama.cpp switches to this session's LLM "
+          : 'LLM is busy, waiting ';
   return (
     <div style={styles.awaitingLine}>
       {label}<BouncingDots />

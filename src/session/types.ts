@@ -259,6 +259,26 @@ export interface AgentRunRequest {
   prompt: string;
 }
 
+/**
+ * Make a brand-new session a benchmark session with `harbor.run`: the server
+ * runs `kodo-harbor` for this agent, model and suite and shows the run in the
+ * tab, which takes no input (kodo doc/WS_PROTOCOL.md §7.4j).
+ */
+export interface BenchmarkRunRequest {
+  agent: string;
+  model: string;
+  suite: string;
+  attempts: number;
+  control: boolean;
+  /** `null` for the model's own default tier. */
+  thinkingLevel: string | null;
+}
+
+/** How a brand-new tab starts, when it doesn't start as an ordinary chat. */
+export type SessionLaunch =
+  | { kind: 'agent_run'; run: AgentRunRequest }
+  | { kind: 'benchmark'; run: BenchmarkRunRequest };
+
 export interface SessionDeps {
   context: vscode.ExtensionContext;
   windowId: string;

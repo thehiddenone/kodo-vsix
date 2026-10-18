@@ -31,6 +31,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { BenchmarkProgress } from '../benchmark-view';
 import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import type { SamplingContext, SamplingValues, ThinkingContext } from '../llm-registry-types';
@@ -47,7 +48,7 @@ import { AttachmentManager } from './attachment-manager';
 import { ModeToggleController } from './mode-toggle-controller';
 import { PromptGateManager } from './prompt-gate-manager';
 import { ReviewGateController } from './review-gate-controller';
-import type { AgentRunRequest, SessionDeps, UiSettings } from './types';
+import type { AgentRunRequest, BenchmarkRunRequest, SessionDeps, SessionLaunch, UiSettings } from './types';
 import { buildHtml, generateNonce } from './webview-html';
 
 let _keySeq = 0;
@@ -72,6 +73,9 @@ export class SessionController {
   private readonly review: ReviewGateController;
   private readonly modeToggle: ModeToggleController;
   private readonly activity: ActivityCache;
+  /** A benchmark session's run (kodo doc/BENCHMARK_SESSIONS.md §4): fed by
+   *  `state.job`, `harbor.trial`, `harbor.finished` and `session.history`. */
+  private readonly benchmark = new BenchmarkProgress();
 
   private lastPrompt = '';
   private uiSettings: UiSettings;
@@ -97,9 +101,9 @@ export class SessionController {
     panel: vscode.WebviewPanel,
     sessionId: string,
     // Set only for a brand-new session opened to run a non-interactive agent
-    // (the Model Importer): sent as `agent.run` once the server assigns the
-    // session, in place of the usual new-session defaults.
-    private readonly agentRun?: AgentRunRequest,
+    // (`agent.run`) or a benchmark (`harbor.run`): sent once the server
+    // assigns the session, in place of the usual new-session defaults.
+    private readonly launch?: SessionLaunch,
   ) {
     this.key = `session-${++_keySeq}`;
     this.sessionId = sessionId;
@@ -253,10 +257,10 @@ export class SessionController {
     };
     if (this.sessionId) {
       payload.session_id = this.sessionId;
-    } else if (this.agentRun) {
-      // About to `agent.run` this session (_startAgentRun): nobody chats with
-      // a non-interactive agent, so ask the server for no opening greeting
-      // (kodo/doc/WS_PROTOCOL.md §4.1, §7.4h).
+    } else if (this.launch) {
+      // About to `agent.run` or `harbor.run` this session: nobody chats in
+      // it, so ask the server for no opening greeting (kodo/doc/WS_PROTOCOL.md
+      // §4.1, §7.4h, §7.4j).
       payload.greet = false;
     }
     this._sendStamped(makeRequest('hello', payload));
@@ -437,6 +441,28 @@ export class SessionController {
           () => undefined,
           (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`),
         );
+        break;
+      }
+      case 'open_path': {
+        // An absolute path the server reported (a benchmark's log, kodo
+        // doc/BENCHMARK_SESSIONS.md §5) — not a logical tool-call path.
+        const filePath = String(msg.path ?? '');
+        if (filePath) {
+          void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(filePath)).then(
+            () => undefined,
+            (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot open file — ${String(err)}`),
+          );
+        }
+        break;
+      }
+      case 'reveal_path': {
+        const target = String(msg.path ?? '');
+        if (target) {
+          void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(target)).then(
+            () => undefined,
+            (err: unknown) => vscode.window.showErrorMessage(`Kōdo: Cannot show ${target} — ${String(err)}`),
+          );
+        }
         break;
       }
       case 'open_file_preview': {
@@ -633,6 +659,9 @@ export class SessionController {
     this._postLlmState();
     this._post({ type: 'ui_settings', ...this.uiSettings });
     this.activity.rehydrateHistoryAndName();
+    if (this.benchmark.snapshot() !== null) {
+      this._postBenchmark();
+    }
     if (this.lastPrompt) {
       this._post({ type: 'restore_prompt', text: this.lastPrompt });
     }
@@ -700,6 +729,14 @@ export class SessionController {
         void vscode.window.showWarningMessage(`Kōdo: ${String(env.payload.message ?? code)}`);
         return;
       }
+      if (code === 'harbor_run_refused') {
+        // Nothing changed server-side: this is an ordinary blank session again.
+        void vscode.window.showErrorMessage(
+          `Kōdo: the benchmark was not started — ${String(env.payload.message ?? code)}`,
+        );
+        this.modeToggle.applyNewSessionDefaults();
+        return;
+      }
     }
 
     if (env.kind === 'response' && evtType === 'top_agents.list.ack') {
@@ -743,6 +780,7 @@ export class SessionController {
       }
       this._adoptSamplingValues(env.payload.sampling);
       this._adoptLlm(env.payload.llm);
+      this._adoptBenchmarkJob(env.payload.job);
       return;
     }
 
@@ -766,8 +804,25 @@ export class SessionController {
     if (env.kind === 'event' && evtType === 'session.history') {
       const entries = env.payload.entries;
       if (Array.isArray(entries)) {
+        if (this.benchmark.adoptHistory(entries as Record<string, unknown>[])) {
+          this._postBenchmark();
+        }
         this.activity.setSessionHistory(entries as Record<string, unknown>[], env.payload.subsessions);
       }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'harbor.trial') {
+      if (this.benchmark.addTrial(env.payload)) {
+        this._postBenchmark();
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'harbor.finished') {
+      this.benchmark.finish(env.payload);
+      this._postBenchmark();
+      this._notifyBenchmarkFinished(String(env.payload.outcome ?? ''));
       return;
     }
 
@@ -998,8 +1053,11 @@ export class SessionController {
       this.deps.onActivated(this);
     }
 
-    if (this.isNewSession && this.agentRun) {
-      void this._startAgentRun(this.agentRun);
+    this._adoptBenchmarkJob(state?.job);
+    if (this.isNewSession && this.launch?.kind === 'agent_run') {
+      void this._startAgentRun(this.launch.run);
+    } else if (this.isNewSession && this.launch?.kind === 'benchmark') {
+      this._startBenchmark(this.launch.run);
     } else if (this.isNewSession) {
       this.modeToggle.applyNewSessionDefaults();
     } else if (state) {
@@ -1022,6 +1080,57 @@ export class SessionController {
     this.activity.resetForSubmit();
     this.modeToggle.startAgentRun(run.name, run.prompt);
     this._post({ type: 'agent_run_started', text: run.prompt });
+  }
+
+  /**
+   * Make this brand-new session a benchmark session (`harbor.run`,
+   * kodo/doc/WS_PROTOCOL.md §7.4j). No llama.cpp launch confirmation: the
+   * user chose the model in the Benchmark modal, and the server loads it.
+   * The tab locks at once; a refusal unlocks it again (`_onEnvelope`).
+   */
+  private _startBenchmark(run: BenchmarkRunRequest): void {
+    this.modeToggle.lockForJob();
+    this._sendStamped(
+      makeRequest('harbor.run', {
+        agent: run.agent,
+        model: run.model,
+        suite: run.suite,
+        attempts: run.attempts,
+        control: run.control,
+        thinking_level: run.thinkingLevel,
+      }),
+    );
+  }
+
+  /** Adopt `state.job`; push the benchmark view when it changed. */
+  private _adoptBenchmarkJob(raw: unknown): void {
+    if (this.benchmark.adoptJob(raw)) {
+      this._postBenchmark();
+    }
+  }
+
+  private _postBenchmark(): void {
+    this._post({ type: 'benchmark', view: this.benchmark.snapshot() });
+  }
+
+  /** A run can take hours: say when it ends, unless its tab is in front. */
+  private _notifyBenchmarkFinished(outcome: string): void {
+    if (this.panel.active) {
+      return;
+    }
+    const ended: Record<string, string> = {
+      completed: 'finished',
+      failed: 'failed',
+      stopped: 'was stopped',
+      interrupted: 'was interrupted',
+    };
+    const message = `Kōdo: ${this.panel.title} ${ended[outcome] ?? 'ended'}.`;
+    const show = outcome === 'failed' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+    void show(message, 'Show').then((choice) => {
+      if (choice === 'Show') {
+        this.reveal();
+      }
+    });
   }
 
   /**

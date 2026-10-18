@@ -30,7 +30,7 @@ import {
   setMetaContributorTier,
   setOpenRouterAutoMode,
 } from './cloud-ai-settings';
-import { fetchHarborOptionsForPanel, runBenchmark } from './benchmark';
+import { fetchHarborOptionsForPanel } from './benchmark';
 import { sendControl, sendControlAwait } from './control-send';
 import { parseHfSearchReply } from './hf-search';
 import {
@@ -1045,7 +1045,7 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     // kodo/doc/WS_PROTOCOL.md §7.4h): it has Agent Critic review the files and
     // shows each concern as a callout. The user watches but cannot type; the
     // review changes nothing, so the panel needs no refresh when it ends.
-    newSession({ name: AGENT_REVIEW_AGENT, prompt: msg.name });
+    newSession({ kind: 'agent_run', run: { name: AGENT_REVIEW_AGENT, prompt: msg.name } });
     return;
   }
   if (msg.type === 'fetch_harbor_options') {
@@ -1053,8 +1053,19 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     return;
   }
   if (msg.type === 'run_benchmark') {
-    const { type: _type, ...request } = msg;
-    void runBenchmark(request);
+    // A new session tab runs it (harbor.run, kodo/doc/BENCHMARK_SESSIONS.md
+    // §4): the server runs kodo-harbor and the tab shows the run's progress.
+    newSession({
+      kind: 'benchmark',
+      run: {
+        agent: msg.agent,
+        model: msg.model,
+        suite: msg.suite,
+        attempts: msg.attempts,
+        control: msg.control,
+        thinkingLevel: msg.thinkingLevel || null,
+      },
+    });
     return;
   }
   if (msg.type === 'pick_agent_source') {
@@ -1225,7 +1236,7 @@ async function onLocalInferenceSettingsMessage(msg: KodoSettingsMessage): Promis
     // kodo/doc/WS_PROTOCOL.md §7.4h); the user watches it but cannot type. The
     // entries it writes reach this panel when that session's turn ends
     // (SessionDeps.refreshLocalRegistry → local_llm.registry_get).
-    newSession({ name: MODEL_IMPORTER_AGENT, prompt: msg.repo_id });
+    newSession({ kind: 'agent_run', run: { name: MODEL_IMPORTER_AGENT, prompt: msg.repo_id } });
   } else if (msg.type === 'hf_search') {
     void searchHfForPanel(msg.query);
   } else if (msg.type === 'add_file') {
