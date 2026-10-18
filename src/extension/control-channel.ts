@@ -17,6 +17,8 @@ import { sendControl } from './control-send';
 import { resumePendingCreateProjectPrompt } from './create-project';
 import { applyLlamaState, onLlamaProgress } from './llamacpp';
 import { mergeLocalRegistry, onLocalLlmRegistryState, onLocalLlmUpdatesAvailable, pushLocalInferenceState } from './local-llm-registry';
+import { flushCaptureAfterRegistry } from './session-llm-capture';
+import { onRegistriesLoaded } from './session-llm-sync';
 import { resumePendingResumeSession } from './session-resume';
 import { state } from './state';
 import {
@@ -123,6 +125,9 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
     void pruneMissingCloudKeys();
     broadcastThinkingContext();
     broadcastSamplingContext();
+    // A bound tab activated before the registries arrived can be checked and
+    // put into the sidebar now (kodo/doc/SESSION_LLM_BINDING.md §5).
+    onRegistriesLoaded();
     // The server is provably reachable now — reopen any of this window's
     // sessions that the panel serializer could not restore (see
     // window-sessions.ts's open-session-memory block).
@@ -154,6 +159,9 @@ export async function handleControlEnvelope(env: Envelope): Promise<void> {
 
   if (env.kind === 'event' && evtType === 'local_llm.registry_state') {
     onLocalLlmRegistryState(env.payload);
+    // A profile/knob edit is stored now: capture it into the active session.
+    flushCaptureAfterRegistry();
+    onRegistriesLoaded();
     return;
   }
 

@@ -21,7 +21,10 @@ export function AwaitingIndicator() {
 /**
  * Gateway queue/throttle indicator. While a request is queued behind the serial
  * local gate / a saturated cloud feed it reads "LLM is busy, waiting"; while a
- * 429 backoff is in effect it reads "Getting throttled, waiting for X minutes".
+ * 429 backoff is in effect it reads "Getting throttled, waiting for X minutes";
+ * while another session's turn keeps llama.cpp on a different LLM it reads
+ * "Waiting for another session's turn to switch llama.cpp"
+ * (kodo/doc/SESSION_LLM_BINDING.md §3).
  */
 export function LlmWaitingIndicator({ waiting }: { waiting: { reason: string; retryIn: number | null } }) {
   const label =
@@ -29,7 +32,9 @@ export function LlmWaitingIndicator({ waiting }: { waiting: { reason: string; re
       ? `Getting throttled, waiting for ${Math.max(1, Math.round((waiting.retryIn ?? 60) / 60))} minute${
           Math.max(1, Math.round((waiting.retryIn ?? 60) / 60)) === 1 ? '' : 's'
         } `
-      : 'LLM is busy, waiting ';
+      : waiting.reason === 'model_swap'
+        ? "Waiting for another session's turn to end before llama.cpp switches to this session's LLM "
+        : 'LLM is busy, waiting ';
   return (
     <div style={styles.awaitingLine}>
       {label}<BouncingDots />

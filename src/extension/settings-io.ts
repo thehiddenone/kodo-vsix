@@ -15,6 +15,7 @@ import { showTransientNotification } from './server-lifecycle';
 import { DEFAULT_BEDROCK_REGION, DEFAULT_CLOUD_VENDOR, DEFAULT_LOCAL_MODEL, state } from './state';
 import { broadcastSamplingContext } from './sampling-context';
 import { broadcastThinkingContext } from './thinking-context';
+import { captureIntoActiveSession } from './session-llm-capture';
 
 function kodoHomeDir(): string {
   return path.join(os.homedir(), '.kodo');
@@ -382,4 +383,5 @@ export function setMode(mode: 'cloud' | 'local'): void {
   showTransientNotification(`Kōdo: switched to ${label}.`);
   broadcastThinkingContext();
   broadcastSamplingContext();
+  captureIntoActiveSession();
 }

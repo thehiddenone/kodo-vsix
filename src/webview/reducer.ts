@@ -1,5 +1,21 @@
 import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, FileReviewFeedbackEntry } from './types';
 import { DEFAULT_UI_SETTINGS } from './types';
+import { coerceParamChanges } from './paramChanges';
+
+/**
+ * Put *entry* right before the feed's trailing user message, or at the end when
+ * the feed does not end in one. The change element (`session_params`) belongs
+ * before the prompt it applies to, but the server pushes it after the webview
+ * has already echoed that prompt; a turn the user never typed (a stuck-agent
+ * nudge) has no such message, and then the element simply lands last.
+ */
+export function insertBeforeLastUserMessage(session: SessionEntry[], entry: SessionEntry): SessionEntry[] {
+  const last = session[session.length - 1];
+  if (last?.type !== 'user_message') {
+    return [...session, entry];
+  }
+  return [...session.slice(0, -1), entry, last];
+}
 
 /** Parse a history entry's ISO-8601 `ts` (kodo doc/WS_PROTOCOL.md §5.11) into
  *  epoch ms, or null when absent/unparseable — never thrown from history
@@ -252,6 +268,16 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
     // renders, so a reload shows the session's original opening greeting
     // again instead of losing it.
     return { type: 'greeting', text: String(e.text ?? ''), exclude_from_context: true };
+  }
+  if (type === 'session_params') {
+    // Replay of the server's persisted "session_params" marker (see
+    // EngineEmitters.emit_session_params) — same element the live action adds.
+    return {
+      type: 'session_params',
+      first: e.first === true,
+      changes: coerceParamChanges(e.changes),
+      exclude_from_context: true,
+    };
   }
   if (type === 'review_findings') {
     // Replay of the server's persisted "review_findings" marker. The server
@@ -986,6 +1012,26 @@ export function reducer(state: State, action: Action): State {
         ...state,
         session: [...state.session, { type: 'greeting', text: action.text, exclude_from_context: true }],
       };
+    case 'session_params':
+      // What changed since the previous prompt (kodo/doc/SESSION_LLM_BINDING.md
+      // §4), placed before the prompt it applies to.
+      return {
+        ...state,
+        session: insertBeforeLastUserMessage(state.session, {
+          type: 'session_params',
+          first: action.first,
+          changes: action.changes,
+          exclude_from_context: true,
+        }),
+      };
+    case 'llm_state':
+      return {
+        ...state,
+        llmBound: action.bound,
+        llmLabel: action.label,
+        llmNextLabel: action.nextLabel,
+        thinkingFamilies: action.families,
+      };
     case 'review_findings':
       // The user-only findings table for one review round. A plain append: it
       // lands after the critic's collapsed subsession block, so each round
@@ -1367,6 +1413,10 @@ export const initial: State = {
   thinkingLevel: '',
   thinkingFamily: null,
   thinkingTiers: [],
+  llmBound: false,
+  llmLabel: '',
+  llmNextLabel: '',
+  thinkingFamilies: {},
   samplingModel: '',
   samplingSpecs: [],
   samplingDefaults: {},

@@ -571,6 +571,20 @@ export function coerceThinkingFamily(value: unknown): ThinkingFamily | null {
   return THINKING_FAMILIES.includes(value as ThinkingFamily) ? (value as ThinkingFamily) : null;
 }
 
+/** A `base_llm` → thinking-family map off the wire, dropping unknown families. */
+export function coerceThinkingFamilies(value: unknown): Record<string, ThinkingFamily> {
+  const out: Record<string, ThinkingFamily> = {};
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [baseLlm, family] of Object.entries(value as Record<string, unknown>)) {
+      const known = coerceThinkingFamily(family);
+      if (known !== null) {
+        out[baseLlm] = known;
+      }
+    }
+  }
+  return out;
+}
+
 export interface ThinkingFamilyInfo {
   family: ThinkingFamily;
   /** Ordered tier slugs, lowest intensity first, e.g. ["minimal", ..., "unlimited"]. */

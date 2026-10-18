@@ -1,8 +1,12 @@
 import { styles } from './styles';
 import type { LastCallTokens, ContextStats, SubsessionContextStats } from './types';
 import { formatTokens } from './format';
+import { sessionParamsLine } from './paramChanges';
+import type { SessionLineInput } from './paramChanges';
 interface UsagePanelProps {
   sessionName: string;
+  /** The LLM + Session Parameters line under the name (kodo/doc/SESSION_LLM_BINDING.md D13). */
+  sessionLine: SessionLineInput;
   cumulativeInputTokens: number;
   cumulativeInputTokensUncached: number;
   cumulativeOutputTokens: number;
@@ -13,7 +17,7 @@ interface UsagePanelProps {
   onCompact: () => void;
 }
 
-export function UsagePanel({ sessionName, cumulativeInputTokens, cumulativeInputTokensUncached, cumulativeOutputTokens, lastCallTokens, contextStats, subsessionContextStats, compacting, onCompact }: UsagePanelProps) {
+export function UsagePanel({ sessionName, sessionLine, cumulativeInputTokens, cumulativeInputTokensUncached, cumulativeOutputTokens, lastCallTokens, contextStats, subsessionContextStats, compacting, onCompact }: UsagePanelProps) {
   // Always render the header line so the session name is visible from the
   // very first frame — before a title is generated.
   return (
@@ -21,6 +25,7 @@ export function UsagePanel({ sessionName, cumulativeInputTokens, cumulativeInput
       <div style={styles.usageName}>
         Session name: <strong>{sessionName || 'Unnamed Session'}</strong>
       </div>
+      <div style={styles.usageLlmLine}>{sessionParamsLine(sessionLine)}</div>
       <div style={styles.usageStatsLine}>
         <span style={styles.usageTotals}>
           Total input/output tokens: <strong>{cumulativeInputTokens.toLocaleString()}/{cumulativeOutputTokens.toLocaleString()}</strong>

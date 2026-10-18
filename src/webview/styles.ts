@@ -177,6 +177,20 @@ export const styles = {
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
   usageName: { marginBottom: '2px', color: 'var(--vscode-foreground)' },
+  // The session's LLM + Session Parameters line under "Session name:"
+  // (kodo/doc/SESSION_LLM_BINDING.md D13).
+  usageLlmLine: { marginBottom: '2px', color: 'var(--vscode-foreground)', overflowWrap: 'anywhere' as const },
+  usageLlmNext: { opacity: 0.8 },
+  // The change element (`session_params` entry) placed before a prompt.
+  paramsCard: {
+    margin: '8px 0 4px',
+    padding: '4px 8px',
+    borderLeft: '2px solid var(--vscode-textLink-foreground)',
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+  },
+  paramsTitle: { color: 'var(--vscode-foreground)', fontWeight: 600, marginBottom: '2px' },
+  paramsRow: { overflowWrap: 'anywhere' as const },
   usageStatsLine: { display: 'flex', alignItems: 'center', flexWrap: 'wrap' as const, gap: '2px' },
   usageTotals: { fontVariantNumeric: 'tabular-nums' },
   usageDetail: { opacity: 0.8 },

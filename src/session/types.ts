@@ -7,7 +7,8 @@
 
 import type * as vscode from 'vscode';
 import type { Envelope } from '../envelope';
-import type { SamplingContext, ThinkingContext } from '../llm-registry-types';
+import type { SamplingContext, ThinkingContext, ThinkingFamily } from '../llm-registry-types';
+import type { LlmSelection } from '../session-llm';
 import type { SessionController } from './controller';
 import type { WorkspaceAttachResult } from '../extension/workspace-attach';
 
@@ -316,18 +317,27 @@ export interface SessionDeps {
   /** Called once the server assigns/confirms this session's id. */
   onSessionAssigned: (c: SessionController, sessionId: string) => void;
   /**
-   * The current thinking-tier context: which family (if any) the session's
-   * active *local* model belongs to, and its tiers/default. The active
-   * model is a machine-global selection, not per-session, so the host
-   * supplies this fresh (read at construction, then pushed on every change
-   * via {@link SessionController.updateThinkingContext}).
+   * The thinking-tier context for *selection* — which family (if any) its
+   * model belongs to, and its tiers/default — or for the sidebar's card when
+   * *selection* is `null` (an unbound session follows the sidebar). Read at
+   * construction, then again on every change via
+   * {@link SessionController.refreshLlmContexts}.
    */
-  getThinkingContext: () => ThinkingContext;
-  /** Window-global sampling context (active quant + its launch-arg values +
-   *  the server's parameter table) for the footer sampling button. The
-   *  session's own override VALUES are not here — those arrive per-session
-   *  on `state.sampling`. See kodo/doc/SAMPLING.md §9. */
-  getSamplingContext: () => SamplingContext;
+  getThinkingContext: (selection: LlmSelection | null) => ThinkingContext;
+  /** Sampling context (the quant + its launch-arg values + the server's
+   *  parameter table) for the footer sampling button, for *selection* or, when
+   *  `null`, for the sidebar's card. The session's own override VALUES are not
+   *  here — those arrive per-session on `state.sampling`. See
+   *  kodo/doc/SAMPLING.md §9. */
+  getSamplingContext: (selection: LlmSelection | null) => SamplingContext;
+  /** `base_llm` → thinking family, for naming tiers in a `session_params` entry. */
+  getThinkingFamilies: () => Record<string, ThinkingFamily>;
+  /**
+   * This session's tab came to the front (or was restored in front). A bound
+   * session puts its own LLM into the sidebar; an unbound one changes nothing
+   * (kodo/doc/SESSION_LLM_BINDING.md §5, D5).
+   */
+  onActivated: (c: SessionController) => void;
   /**
    * Current "Show Timestamps" flags, read fresh from
    * `~/.kodo/etc/ui-settings.json` (extension.ts's `_readUiSettings`) at

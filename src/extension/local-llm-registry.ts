@@ -23,6 +23,7 @@ import {
   parseSamplingSpecs,
 } from './sampling-context';
 import { broadcastThinkingContext, parseThinkingFamilies } from './thinking-context';
+import { captureAfterRegistryUpdate, captureIntoActiveSession } from './session-llm-capture';
 
 /** Merge server-reported local_registry entries with the client-authoritative
  * custom_file installed-state cache (see doc/LLM_REGISTRY.md §4). */
@@ -115,6 +116,7 @@ export function setActiveLocalModel(name: string): void {
   state.sidebarProvider?.update({ activeLocalModel: name });
   broadcastThinkingContext();
   broadcastSamplingContext();
+  captureIntoActiveSession();
 }
 
 /**
@@ -126,11 +128,13 @@ export function setActiveLocalModel(name: string): void {
  * check went away with flavors, and the entry-level memory warning that
  * replaced it is applied at *launch* time instead
  * (`confirmLocalLlamaLaunch`), which is where it actually matters. The server
- * restarts llama-server only if `name` is both the selected local model and
- * the one currently running.
+ * only stores the choice: llama-server switches when a prompt needs it
+ * (kodo/doc/SESSION_LLM_BINDING.md D1), and the active bound session takes the
+ * choice as its next one once the server has stored it (D7).
  */
 export function setActiveProfile(name: string, profileId: string): void {
   sendControl(makeRequest('local_llm.set_active_profile', { name, profile_id: profileId }));
+  captureAfterRegistryUpdate();
 }
 
 /**
@@ -140,10 +144,13 @@ export function setActiveProfile(name: string, profileId: string): void {
  * Sent whole rather than per-knob: `local_llm.set_knobs` replaces the entry's
  * entire selection, so a knob omitted here resets to its default and a modal
  * opened before another window changed something cannot resurrect half the
- * old state.
+ * old state. Like a profile pick, the active bound session takes the new
+ * values as its next ones once the server has stored them
+ * (kodo/doc/SESSION_LLM_BINDING.md D7).
  */
 export function setKnobs(name: string, knobs: Record<string, string>): void {
   sendControl(makeRequest('local_llm.set_knobs', { name, knobs }));
+  captureAfterRegistryUpdate();
 }
 
 /** The active local model entry plus its outstanding memory/llama.cpp-version

@@ -1,5 +1,6 @@
 // Shared data, state, and action types for the Kōdo WebView.
 import type { SamplingParamSpec, SamplingValues, ThinkingFamily } from '../llm-registry-types';
+import type { ParamChange } from './paramChanges';
 
 /** Edit Control posture the Edit toggle cycles through. `smart` is the default. */
 export type EditControl = 'review_all' | 'allow_all' | 'smart';
@@ -572,6 +573,13 @@ export type SessionEntry =
   // session_history on reload — the coding agent itself never sees it
   // (kodo/doc/WS_PROTOCOL.md §5.9i).
   | { type: 'greeting'; text: string; exclude_from_context: true }
+  // What changed in the session's parameters since its previous prompt — the
+  // LLM, agent, Mode, Edit/Tool Control, Thinking, local profile and flags,
+  // sampling overrides, cloud tier models — dropped in right before the prompt
+  // it applies to; `first` marks a session's first prompt ("Started on …").
+  // Persisted as a "session_params" marker and replayed on reload
+  // (kodo/doc/SESSION_LLM_BINDING.md §4).
+  | { type: 'session_params'; first: boolean; changes: ParamChange[]; exclude_from_context: true }
   // The user-only findings table for one review round of a Guided-mode work
   // product (kodo `doc/GUIDED_DEV_MODE.md`). Emitted after every round that
   // could change the backlog — each critic round, and each trip through the
@@ -732,6 +740,17 @@ export interface State {
   thinkingLevel: string;
   thinkingFamily: ThinkingFamily | null;
   thinkingTiers: string[];
+  /**
+   * This session's own LLM (kodo/doc/SESSION_LLM_BINDING.md), for the header
+   * line: `llmBound` false until the first prompt binds it; `llmLabel` names
+   * what it ran on, `llmNextLabel` what its next prompt will run on when that
+   * differs (else `''`).
+   */
+  llmBound: boolean;
+  llmLabel: string;
+  llmNextLabel: string;
+  /** `base_llm` → thinking family, to name the tiers in a `session_params` entry. */
+  thinkingFamilies: Record<string, ThinkingFamily>;
   /**
    * Request-level llama-server sampling state (kodo/doc/SAMPLING.md). All four
    * fields arrive together on `sampling_state`.
@@ -935,6 +954,14 @@ export type Action =
   | { type: 'interrupted' }
   | { type: 'runtime_error'; message: string; recoverable: boolean }
   | { type: 'greeting'; text: string }
+  | { type: 'session_params'; first: boolean; changes: ParamChange[] }
+  | {
+      type: 'llm_state';
+      bound: boolean;
+      label: string;
+      nextLabel: string;
+      families: Record<string, ThinkingFamily>;
+    }
   // The user-only findings table for one review round. Same field shape as the
   // `review_findings` session entry, so one reader in the reducer converts both
   // this and the replayed history entry.

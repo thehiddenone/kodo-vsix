@@ -16,6 +16,7 @@
 
 import type { KnobDefs, LlamaArgSpec, SamplingContext, SamplingParamSpec } from '../llm-registry-types';
 import { effectiveLlamaArgs, launchSamplingValues } from '../llm-registry-types';
+import type { LlmSelection } from '../session-llm';
 import { state } from './state';
 
 /** Parse the `sampling_specs` table off a `hello.ack`/`local_llm.registry_state`
@@ -49,9 +50,11 @@ export function parseLlamaArgCatalog(raw: unknown): LlamaArgSpec[] {
 }
 
 /**
- * Derive the current `SamplingContext`. `model: ''` (no footer button) whenever
- * the session is on a cloud model or the active local entry isn't in the
- * registry — these are llama-server parameters with no Anthropic equivalent.
+ * Derive the `SamplingContext` for *selection* — a bound session's own pending
+ * LLM (kodo/doc/SESSION_LLM_BINDING.md) — or, when `null`, for the sidebar's
+ * card. `model: ''` (no footer button) whenever that is a cloud model or a
+ * local entry the registry doesn't have — these are llama-server parameters
+ * with no Anthropic equivalent.
  *
  * `defaults` resolves through the same rule the server uses
  * (`resolve_effective_llama_config`, via `effectiveLlamaArgs`): the active
@@ -59,22 +62,31 @@ export function parseLlamaArgCatalog(raw: unknown): LlamaArgSpec[] {
  * profile's knob-resolved args — then read back out of those launch args
  * (sampling has no separate stored state, see `launchSamplingValues`).
  */
-export function currentSamplingContext(): SamplingContext {
-  const entry = state.localRegistryState.find((e) => e.name === state.activeLocalModelState);
-  if (state.modeState !== 'local' || !entry) {
+export function currentSamplingContext(selection: LlmSelection | null = null): SamplingContext {
+  const name =
+    selection === null
+      ? state.modeState === 'local' ? state.activeLocalModelState : ''
+      : selection.kind === 'local' ? selection.entry : '';
+  const entry = name ? state.localRegistryState.find((e) => e.name === name) : undefined;
+  if (!entry) {
     return { model: '', defaults: {}, specs: state.samplingSpecsState };
   }
-  const defaults = launchSamplingValues(effectiveLlamaArgs(entry), state.samplingSpecsState);
+  // A bound session's own user-defined profile launches with that profile's
+  // args; its Default profile with knob values the registry payload does not
+  // resolve per session, so those read the Default profile as the sidebar has it.
+  const profile =
+    selection?.kind === 'local' && selection.profileId
+      ? entry.profiles.find((p) => p.id === selection.profileId)
+      : undefined;
+  const args = profile ? profile.llama_args : selection?.kind === 'local' ? entry.default_profile_args : effectiveLlamaArgs(entry);
+  const defaults = launchSamplingValues(args, state.samplingSpecsState);
   return { model: entry.name, defaults, specs: state.samplingSpecsState };
 }
 
-/** Push the current `SamplingContext` to every open session tab. Called
- * whenever any of its inputs change (hello.ack, local_llm.registry_state, a
- * model/mode switch, a profile or knob change) — same trigger set as
- * `broadcastThinkingContext`. */
+/** Re-derive every open tab's sampling context — the same per-tab refresh as
+ * `broadcastThinkingContext`, which recomputes both. */
 export function broadcastSamplingContext(): void {
-  const ctx = currentSamplingContext();
   for (const s of state.sessions.values()) {
-    s.updateSamplingContext(ctx);
+    s.refreshLlmContexts();
   }
 }

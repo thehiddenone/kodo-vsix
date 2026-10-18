@@ -36,6 +36,8 @@ import type { Envelope } from '../envelope';
 import type { SamplingContext, SamplingValues, ThinkingContext } from '../llm-registry-types';
 import { parseSamplingValues } from '../llm-registry-types';
 import { resolveLogicalPath } from '../logical-path';
+import { parseSessionLlm, sameLlmSelection, UNBOUND_LLM } from '../session-llm';
+import type { LlmSelection, SessionLlm } from '../session-llm';
 import { attachResponsePayload } from '../extension/workspace-attach';
 import type { WorkspaceAttachResult } from '../extension/workspace-attach';
 import { WsClient } from '../ws-client';
@@ -77,6 +79,11 @@ export class SessionController {
   // launch-arg values, the parameter table) — refreshed by the host via
   // `updateSamplingContext` whenever the active model/registry changes.
   private samplingContext: SamplingContext;
+  // This session's own LLM (kodo/doc/SESSION_LLM_BINDING.md), straight off the
+  // server's `state.llm`. Once bound, the tab's thinking/sampling contexts
+  // describe its pending selection rather than the sidebar's.
+  private llm: SessionLlm = UNBOUND_LLM;
+
   // Per-session half: this session's own per-quant overrides, straight off
   // the server's `state.sampling`. Server-owned like `thinkingLevel` — never
   // optimistically updated here, so a parameter the server dropped or
@@ -99,14 +106,14 @@ export class SessionController {
     this.isNewSession = sessionId === '';
     this.panel = panel;
     this.uiSettings = deps.getUiSettings();
-    this.samplingContext = deps.getSamplingContext();
+    this.samplingContext = deps.getSamplingContext(null);
 
     const post = (msg: Record<string, unknown>) => this._post(msg);
     const send = (env: Envelope) => this._sendStamped(env);
     this.attachments = new AttachmentManager(post, deps.getProjectRoot);
     this.gates = new PromptGateManager(post);
     this.review = new ReviewGateController(panel, post);
-    this.modeToggle = new ModeToggleController(deps.getThinkingContext(), post, send);
+    this.modeToggle = new ModeToggleController(deps.getThinkingContext(null), post, send);
     this.activity = new ActivityCache(panel, post);
 
     panel.iconPath = vscode.Uri.file(
@@ -118,6 +125,13 @@ export class SessionController {
     panel.webview.html = buildHtml(webviewJsUri, generateNonce());
     panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => this._onWebviewMessage(msg));
     panel.onDidDispose(() => this._onDispose());
+    // A bound session puts its own LLM into the sidebar when its tab comes to
+    // the front (kodo/doc/SESSION_LLM_BINDING.md §5).
+    panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) {
+        this.deps.onActivated(this);
+      }
+    });
 
     this.ws = new WsClient(
       deps.wsUrl,
@@ -139,6 +153,41 @@ export class SessionController {
    */
   reconnectNow(): void {
     this.ws.reconnectNow();
+  }
+
+  /** This session's LLM binding, as the server last reported it. */
+  get sessionLlm(): SessionLlm {
+    return this.llm;
+  }
+
+  /** Whether this session's tab is the active one in its editor group. */
+  get isPanelActive(): boolean {
+    return this.panel.active;
+  }
+
+  /**
+   * Snapshot the sidebar's current card into this session's pending selection
+   * (`llm_selection.capture`, kodo/doc/SESSION_LLM_BINDING.md D7). A no-op
+   * server-side for an unbound session.
+   */
+  captureLlmSelection(): void {
+    if (this.connected && this.sessionId) {
+      this._sendStamped(makeRequest('llm_selection.capture', {}));
+    }
+  }
+
+  /**
+   * Recompute this tab's thinking and sampling contexts (the host calls this on
+   * every tab whenever the registry, the sidebar's card, or a profile/knob
+   * changes) and re-push them. A bound tab describes its own pending
+   * selection; an unbound one the sidebar's.
+   */
+  refreshLlmContexts(): void {
+    const selection = this._contextSelection();
+    this.modeToggle.updateThinkingContext(this.deps.getThinkingContext(selection));
+    this.samplingContext = this.deps.getSamplingContext(selection);
+    this._postSamplingState();
+    this._postLlmState();
   }
 
   /** True when this session's tab is the foreground tab and its connection is ready. */
@@ -581,6 +630,7 @@ export class SessionController {
     this.activity.rehydrateStage();
     this.modeToggle.postModeState();
     this._postSamplingState();
+    this._postLlmState();
     this._post({ type: 'ui_settings', ...this.uiSettings });
     this.activity.rehydrateHistoryAndName();
     if (this.lastPrompt) {
@@ -692,6 +742,7 @@ export class SessionController {
         this.deps.refreshLocalRegistry();
       }
       this._adoptSamplingValues(env.payload.sampling);
+      this._adoptLlm(env.payload.llm);
       return;
     }
 
@@ -940,6 +991,12 @@ export class SessionController {
     // present in `state` (empty `{}` for a session that never tuned anything),
     // for both a new and a resumed session.
     this._adoptSamplingValues(state?.sampling);
+    this._adoptLlm(state?.llm);
+    // A restored tab that is already in front fires no view-state change, so
+    // put its LLM into the sidebar now (a no-op while it is unbound).
+    if (this.panel.active) {
+      this.deps.onActivated(this);
+    }
 
     if (this.isNewSession && this.agentRun) {
       void this._startAgentRun(this.agentRun);
@@ -1025,26 +1082,35 @@ export class SessionController {
     this._post({ type: 'workspace_status', hasWorkspace });
   }
 
-  /**
-   * Apply a new window-global thinking-tier context (the host calls this on
-   * every session tab whenever the active local/cloud model changes) and
-   * re-push the mode-toggle snapshot so the webview's Thinking control
-   * updates immediately — e.g. disables itself the moment the user switches
-   * to a non-thinking model, without waiting for a server round trip.
-   */
-  updateThinkingContext(ctx: ThinkingContext): void {
-    this.modeToggle.updateThinkingContext(ctx);
+  /** The selection this tab's contexts describe: its pending one once bound,
+   *  `null` (the sidebar's) while unbound. */
+  private _contextSelection(): LlmSelection | null {
+    return this.llm.bound ? this.llm.selection : null;
   }
 
-  /**
-   * Apply a new window-global `SamplingContext` (the host calls this on every
-   * open tab whenever the active model, the registry, or a profile/knob changes) and
-   * re-push. Mirrors `updateThinkingContext`: the footer button appears,
-   * disappears (cloud model) or re-seeds its defaults without a round trip.
-   */
-  updateSamplingContext(ctx: SamplingContext): void {
-    this.samplingContext = ctx;
-    this._postSamplingState();
+  /** Adopt the server's `state.llm`; re-derive the contexts when what they
+   *  describe moved, else just re-post the header line. */
+  private _adoptLlm(raw: unknown): void {
+    const before = this._contextSelection();
+    const wasBound = this.llm.bound;
+    this.llm = parseSessionLlm(raw);
+    if (this.llm.bound !== wasBound || !sameLlmSelection(before, this._contextSelection())) {
+      this.refreshLlmContexts();
+    } else {
+      this._postLlmState();
+    }
+  }
+
+  /** Push the header line's LLM half, plus the family map that names the
+   *  thinking tiers in a `session_params` entry. */
+  private _postLlmState(): void {
+    this._post({
+      type: 'llm_state',
+      bound: this.llm.bound,
+      label: this.llm.label,
+      nextLabel: this.llm.nextLabel,
+      families: this.deps.getThinkingFamilies(),
+    });
   }
 
   /** Adopt the server's `state.sampling` map (all quants) and re-push. */

@@ -24,7 +24,8 @@ import { reconnectSessionWorkspace } from './session-resume';
 import { sendControl, sendControlAwait } from './control-send';
 import { buildFolderMap, codeWorkspaceFile, readUiSettings } from './settings-io';
 import { state } from './state';
-import { currentThinkingContext } from './thinking-context';
+import { currentThinkingContext, currentThinkingFamilies } from './thinking-context';
+import { onSessionActivated } from './session-llm-sync';
 import { armWindowIdContinuity } from './window-id';
 
 function sessionDeps(): SessionDeps {
@@ -42,6 +43,8 @@ function sessionDeps(): SessionDeps {
     reconnectWorkspace: reconnectSessionWorkspace,
     getThinkingContext: currentThinkingContext,
     getSamplingContext: currentSamplingContext,
+    getThinkingFamilies: currentThinkingFamilies,
+    onActivated: (c) => void onSessionActivated(c),
     getUiSettings: readUiSettings,
     handleApiKeyRequest: (vendor, requestId, send) => {
       // The `.catch` is load-bearing, not defensive: a rejection left in the

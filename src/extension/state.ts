@@ -161,6 +161,18 @@ interface WindowState {
   llamaProgressResolve: (() => void) | null;
   llamaProgressReject: ((err: Error) => void) | null;
   llamaLastPct: number;
+  // -- session ↔ LLM binding (kodo/doc/SESSION_LLM_BINDING.md §5) --
+  /** `key` of the session tab most recently brought to the front — where a
+   *  sidebar edit is captured. Kept while focus moves to the sidebar itself. */
+  lastActiveSessionKey: string;
+  /** True while a session's own card is being written into the sidebar, so
+   *  those writes are not captured straight back into a session. */
+  applyingSessionLlm: boolean;
+  /** A profile/knob edit is waiting for the server's `local_llm.registry_state`
+   *  before it can be captured (the write happens server-side). */
+  captureAfterRegistry: boolean;
+  /** `key` of a tab activated before the registries arrived; re-applied then. */
+  pendingActivationKey: string;
 }
 
 export const state: WindowState = {
@@ -230,4 +242,8 @@ export const state: WindowState = {
   llamaProgressResolve: null,
   llamaProgressReject: null,
   llamaLastPct: 0,
+  lastActiveSessionKey: '',
+  applyingSessionLlm: false,
+  captureAfterRegistry: false,
+  pendingActivationKey: '',
 };

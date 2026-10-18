@@ -23,6 +23,7 @@ import {
 } from './settings-io';
 import { state } from './state';
 import { broadcastThinkingContext } from './thinking-context';
+import { captureIntoActiveSession } from './session-llm-capture';
 
 /** Every vendor that can hold credentials -> its stored API keys.
  *
@@ -123,6 +124,7 @@ export function setActiveCloudVendor(vendor: string): void {
   // footer's Thinking Level toggle offers -- same reason setMode already
   // does this for the local/cloud switch.
   broadcastThinkingContext();
+  captureIntoActiveSession();
 }
 
 export function setCloudModel(vendor: string, effort: EffortLevel, modelId: string): void {
@@ -135,6 +137,7 @@ export function setCloudModel(vendor: string, effort: EffortLevel, modelId: stri
   writeSettings({ models });
   sendControl(makeRequest('config.reload'));
   pushCloudAiSettingsState();
+  captureIntoActiveSession();
 }
 
 /** Read-modify-write one vendor's entry in `models.cloud_uniform`, preserving
@@ -167,6 +170,7 @@ export function setCloudUniformEnabled(vendor: string, enabled: boolean): void {
   patchCloudUniform(vendor, { enabled });
   sendControl(makeRequest('config.reload'));
   pushCloudAiSettingsState();
+  captureIntoActiveSession();
 }
 
 /** The specific model `setCloudUniformEnabled`'s shortcut resolves to for
@@ -177,6 +181,7 @@ export function setCloudUniformModel(vendor: string, modelId: string): void {
   patchCloudUniform(vendor, { modelId });
   sendControl(makeRequest('config.reload'));
   pushCloudAiSettingsState();
+  captureIntoActiveSession();
 }
 
 /** Meta's account-wide "contributor" pricing tier (kodo/doc/SETTINGS.md
@@ -204,6 +209,7 @@ export function setOpenRouterAutoMode(enabled: boolean): void {
   writeSettings({ openrouter_auto_mode: enabled });
   sendControl(makeRequest('config.reload'));
   pushCloudAiSettingsState();
+  captureIntoActiveSession();
 }
 
 /** Re-fetch OpenRouter's model catalog on demand (kodo/doc/WS_PROTOCOL.md

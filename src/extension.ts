@@ -61,6 +61,7 @@ import {
   togglePinnedLocalModel,
 } from './extension/settings-io';
 import { pickSession } from './extension/session-resume';
+import { onWindowFocused } from './extension/session-llm-sync';
 import { state } from './extension/state';
 import { adoptPanel, consumeSerializerDead, newSession, openPanel } from './extension/window-sessions';
 import { stableWindowId } from './extension/window-id';
@@ -249,6 +250,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    // The sidebar's LLM selection is machine-wide, so another window may have
+    // moved it: put this window's front session back into it on focus
+    // (kodo/doc/SESSION_LLM_BINDING.md §5).
+    vscode.window.onDidChangeWindowState((e) => {
+      if (e.focused) {
+        onWindowFocused();
+      }
+    }),
     vscode.window.registerWebviewViewProvider('kodo.view', state.sidebarProvider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),

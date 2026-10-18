@@ -325,6 +325,13 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     return true;
   }
 
+  if (env.kind === 'event' && evtType === 'session.params') {
+    // What changed in the session's parameters since its previous prompt,
+    // pushed right before the prompt's turn (kodo/doc/SESSION_LLM_BINDING.md §4).
+    post({ type: 'session_params', first: env.payload.first === true, changes: env.payload.changes ?? [] });
+    return true;
+  }
+
   if (env.kind === 'event' && evtType === 'error') {
     const message = String(env.payload.message ?? 'Unknown server error');
     const recoverable = Boolean(env.payload.recoverable ?? true);

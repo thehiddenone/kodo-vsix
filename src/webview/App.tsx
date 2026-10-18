@@ -10,7 +10,7 @@ import {
   coerceAutoScrollMode,
 } from './types';
 import type { SamplingParamSpec } from '../llm-registry-types';
-import { coerceThinkingFamily, parseSamplingValues } from '../llm-registry-types';
+import { coerceThinkingFamilies, coerceThinkingFamily, parseSamplingValues } from '../llm-registry-types';
 import { reducer, initial } from './reducer';
 import { ResumeBanner } from './ResumeBanner';
 import { ThrottleToast } from './ThrottleToast';
@@ -28,6 +28,8 @@ import { PermissionPanel } from './PermissionPanel';
 import { StuckAlertPanel } from './StuckAlertPanel';
 import { FileReviewPanel } from './FileReviewPanel';
 import { ModeControls } from './ModeControls';
+import { SessionParamsView } from './SessionParamsView';
+import { coerceParamChanges } from './paramChanges';
 import { AgentButton } from './AgentButton';
 import { AttachedFilesArea } from './AttachedFilesArea';
 import { SamplingModal } from './SamplingModal';
@@ -189,6 +191,22 @@ export function App() {
           break;
         case 'greeting':
           dispatch({ type: 'greeting', text: String(msg.text ?? '') });
+          break;
+        case 'session_params':
+          dispatch({
+            type: 'session_params',
+            first: msg.first === true,
+            changes: coerceParamChanges(msg.changes),
+          });
+          break;
+        case 'llm_state':
+          dispatch({
+            type: 'llm_state',
+            bound: msg.bound === true,
+            label: String(msg.label ?? ''),
+            nextLabel: String(msg.nextLabel ?? ''),
+            families: coerceThinkingFamilies(msg.families),
+          });
           break;
         case 'security_rule_added': {
           const offer = (msg.offer ?? {}) as Record<string, unknown>;
@@ -737,6 +755,16 @@ export function App() {
         />
       );
     }
+    if (entry.type === 'session_params') {
+      return (
+        <SessionParamsView
+          key={key}
+          first={entry.first}
+          changes={entry.changes}
+          families={state.thinkingFamilies}
+        />
+      );
+    }
     return <SessionEntryView key={key} entry={entry} uiSettings={state.uiSettings} />;
   }
 
@@ -762,6 +790,16 @@ export function App() {
       {/* Usage panel */}
       <UsagePanel
         sessionName={state.sessionName}
+        sessionLine={{
+          bound: state.llmBound,
+          label: state.llmLabel,
+          nextLabel: state.llmNextLabel,
+          autonomous: state.autonomous,
+          editControl: state.editControl,
+          commandControl: state.commandControl,
+          thinkingLevel: state.thinkingLevel,
+          thinkingFamily: state.thinkingFamily,
+        }}
         cumulativeInputTokens={state.cumulativeInputTokens}
         cumulativeInputTokensUncached={state.cumulativeInputTokensUncached}
         cumulativeOutputTokens={state.cumulativeOutputTokens}
