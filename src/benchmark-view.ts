@@ -250,3 +250,68 @@ export function formatSeconds(seconds: number | null): string {
   }
   return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
 }
+
+/**
+ * One `kodo.jsonl` of a trial: the events `kodo-headless` wrote for one agent
+ * run (kodo doc/HEADLESS.md §2.1) — a multi-step trial has one per step.
+ * `events` is indexed by the event's position in the log, so it can hold
+ * holes for a moment when a live update arrives before the full read a
+ * reconnect sends.
+ */
+export interface ActivityLog {
+  log: string;
+  /** The step's name once Harbor has filed the log under `steps/`, else null. */
+  step: string | null;
+  /** `ts` of the log's first event; orders a trial's logs. */
+  started: string;
+  events: (Record<string, unknown> | undefined)[];
+}
+
+/** Every trial's agent activity, by trial name; each trial's logs in run order. */
+export type BenchmarkActivity = Record<string, ActivityLog[]>;
+
+/**
+ * Fold one `harbor.activity` chunk (kodo doc/WS_PROTOCOL.md §5.9m:
+ * `{trial, log, step, started, first, events}`) into `activity`. Events are
+ * placed by position, so a chunk that repeats what is there changes nothing.
+ * Returns the new value, or `null` when nothing changed.
+ */
+export function mergeActivity(activity: BenchmarkActivity, raw: Record<string, unknown>): BenchmarkActivity | null {
+  const trial = text(raw.trial);
+  const log = text(raw.log);
+  const first = numberOrNull(raw.first);
+  if (!trial || !log || first === null || first < 0 || !Array.isArray(raw.events)) {
+    return null;
+  }
+  const logs = activity[trial] ?? [];
+  const current = logs.find((l) => l.log === log);
+  const step = current?.step ?? (typeof raw.step === 'string' && raw.step ? raw.step : null);
+  const events = current ? [...current.events] : [];
+  let changed = current === undefined || step !== current.step;
+  raw.events.forEach((event, i) => {
+    if (events[first + i] === undefined && event !== null && typeof event === 'object') {
+      events[first + i] = event as Record<string, unknown>;
+      changed = true;
+    }
+  });
+  if (!changed) {
+    return null;
+  }
+  const next: ActivityLog = { log, step, started: current?.started || text(raw.started), events };
+  const others = logs.filter((l) => l.log !== log);
+  const merged = [...others, next].sort((a, b) => a.started.localeCompare(b.started));
+  return { ...activity, [trial]: merged };
+}
+
+/** The trials with activity, in the order their agents started. */
+export function activityTrials(activity: BenchmarkActivity): string[] {
+  const started = (trial: string) => activity[trial][0]?.started ?? '';
+  return Object.keys(activity).sort((a, b) => started(a).localeCompare(started(b)) || a.localeCompare(b));
+}
+
+/** A chunk per log carrying all of it — what a fresh webview is sent. */
+export function activityChunks(activity: BenchmarkActivity): Record<string, unknown>[] {
+  return activityTrials(activity).flatMap((trial) =>
+    activity[trial].map((l) => ({ trial, log: l.log, step: l.step, started: l.started, first: 0, events: l.events })),
+  );
+}

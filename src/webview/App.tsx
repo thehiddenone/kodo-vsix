@@ -262,6 +262,9 @@ export function App() {
         case 'benchmark':
           dispatch({ type: 'benchmark', view: (msg.view as BenchmarkView | null) ?? null });
           break;
+        case 'benchmark_activity':
+          dispatch({ type: 'benchmark_activity', chunk: (msg.chunk as Record<string, unknown>) ?? {} });
+          break;
         case 'session_history':
           dispatch({
             type: 'session_history',
@@ -830,7 +833,9 @@ export function App() {
         onTouchMove={markUserScrollUp}
         onPointerDown={handleStreamPointerDown}
       >
-        {state.benchmark !== null && <BenchmarkPanel view={state.benchmark} />}
+        {state.benchmark !== null && (
+          <BenchmarkPanel view={state.benchmark} activity={state.benchmarkActivity} uiSettings={state.uiSettings} />
+        )}
         {state.benchmark === null && groupSessionEntries(state.session).map((block) =>
           block.kind === 'entry' ? (
             renderEntry(block.entry, block.index)

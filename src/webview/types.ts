@@ -1,5 +1,5 @@
 // Shared data, state, and action types for the Kōdo WebView.
-import type { BenchmarkView } from '../benchmark-view';
+import type { BenchmarkActivity, BenchmarkView } from '../benchmark-view';
 import type { SamplingParamSpec, SamplingValues, ThinkingFamily } from '../llm-registry-types';
 import type { ParamChange } from './paramChanges';
 
@@ -794,6 +794,9 @@ export interface State {
    * shows BenchmarkPanel in place of the chat feed.
    */
   benchmark: BenchmarkView | null;
+  /** What the agent did in each trial of that run (`harbor.activity`), by
+   *  trial; `{}` for every other session. */
+  benchmarkActivity: BenchmarkActivity;
   resumeSessionId: string | null;
   /** True while waiting for the first token of an LLM call (shows AwaitingIndicator). Never stored in session. */
   awaitingLlm: boolean;
@@ -873,6 +876,7 @@ export type Action =
   | { type: 'llm_turn_start' }
   | { type: 'llm_waiting'; waiting: boolean; reason: string; retryIn: number | null; title: string }
   | { type: 'benchmark'; view: BenchmarkView | null }
+  | { type: 'benchmark_activity'; chunk: Record<string, unknown> }
   | { type: 'tool_call'; toolName: string; description: string; toolCallId: string; timeoutSeconds: number | null }
   | { type: 'tool_call_in_progress'; toolCallId: string }
   | { type: 'web_search_note'; toolCallId: string; text: string }

@@ -230,9 +230,12 @@ function openablePath(entry: Extract<SessionEntry, { type: 'tool_call' }>): stri
 interface SessionEntryViewProps {
   entry: SessionEntry;
   uiSettings: UiSettings;
+  /** False where a tool call's paths are not this machine's — a benchmark
+   *  trial's, which live in its container — so no "open file" link. */
+  fileLinks?: boolean;
 }
 
-export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
+export function SessionEntryView({ entry, uiSettings, fileLinks = true }: SessionEntryViewProps) {
   switch (entry.type) {
     case 'user_message': {
       const showTs = uiSettings.showTimestamps && entry.ts !== null;
@@ -300,7 +303,7 @@ export function SessionEntryView({ entry, uiSettings }: SessionEntryViewProps) {
         entry.startedAt !== null &&
         entry.timeoutSeconds !== null &&
         !resultArrived;
-      const openPath = openablePath(entry);
+      const openPath = fileLinks ? openablePath(entry) : null;
       return (
         <div>
           <TimestampLine ts={entry.ts} uiSettings={uiSettings} />

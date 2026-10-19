@@ -31,7 +31,8 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { BenchmarkProgress } from '../benchmark-view';
+import { BenchmarkProgress, activityChunks, mergeActivity } from '../benchmark-view';
+import type { BenchmarkActivity } from '../benchmark-view';
 import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import type { SamplingContext, SamplingValues, ThinkingContext } from '../llm-registry-types';
@@ -76,6 +77,10 @@ export class SessionController {
   /** A benchmark session's run (kodo doc/BENCHMARK_SESSIONS.md §4): fed by
    *  `state.job`, `harbor.trial`, `harbor.finished` and `session.history`. */
   private readonly benchmark = new BenchmarkProgress();
+  /** What the agent did in each of its trials (`harbor.activity`, kodo
+   *  doc/BENCHMARK_SESSIONS.md §4.8). The server sends all of it again on
+   *  every hello, so this only has to survive a webview reload. */
+  private benchmarkActivity: BenchmarkActivity = {};
 
   private lastPrompt = '';
   private uiSettings: UiSettings;
@@ -661,6 +666,9 @@ export class SessionController {
     this.activity.rehydrateHistoryAndName();
     if (this.benchmark.snapshot() !== null) {
       this._postBenchmark();
+      for (const chunk of activityChunks(this.benchmarkActivity)) {
+        this._post({ type: 'benchmark_activity', chunk });
+      }
     }
     if (this.lastPrompt) {
       this._post({ type: 'restore_prompt', text: this.lastPrompt });
@@ -815,6 +823,16 @@ export class SessionController {
     if (env.kind === 'event' && evtType === 'harbor.trial') {
       if (this.benchmark.addTrial(env.payload)) {
         this._postBenchmark();
+      }
+      return;
+    }
+
+    if (env.kind === 'event' && evtType === 'harbor.activity') {
+      const merged = mergeActivity(this.benchmarkActivity, env.payload);
+      if (merged !== null) {
+        this.benchmarkActivity = merged;
+        // The webview folds the same chunk the same way.
+        this._post({ type: 'benchmark_activity', chunk: env.payload });
       }
       return;
     }

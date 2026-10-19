@@ -1,6 +1,7 @@
 import type { State, Action, SessionEntry, ToolCallDetailRow, DiffLinkData, CheckpointData, AskUserQuestion, AskUserAnswer, FileReviewFeedbackEntry } from './types';
 import { DEFAULT_UI_SETTINGS } from './types';
 import { coerceParamChanges } from './paramChanges';
+import { mergeActivity } from '../benchmark-view';
 
 /**
  * Put *entry* right before the feed's trailing user message, or at the end when
@@ -460,6 +461,10 @@ export function reducer(state: State, action: Action): State {
       return { ...state, llmWaiting: null, throttleToast: null, awaitingLlm: true, thinkingStartedAt: null, streamingToolgen: '', toolgenActive: false, toolgenToolName: '', toolgenStartedAt: null };
     case 'benchmark':
       return { ...state, benchmark: action.view };
+    case 'benchmark_activity': {
+      const merged = mergeActivity(state.benchmarkActivity, action.chunk);
+      return merged === null ? state : { ...state, benchmarkActivity: merged };
+    }
     case 'llm_waiting': {
       const throttled = action.waiting && action.reason === 'throttled';
       return {
@@ -1428,6 +1433,7 @@ export const initial: State = {
   workspaceConnected: true,
   interactive: true,
   benchmark: null,
+  benchmarkActivity: {},
   resumeSessionId: null,
   awaitingLlm: false,
   llmWaiting: null,

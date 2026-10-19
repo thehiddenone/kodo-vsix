@@ -1886,6 +1886,15 @@ export const styles = {
     background: 'var(--vscode-textCodeBlock-background, rgba(128,128,128,0.12))',
     color: 'var(--vscode-errorForeground)',
   },
+  // A step's name above its activity inside a trial's block (BenchmarkPanel).
+  benchmarkStepDivider: {
+    fontSize: '12px',
+    fontWeight: 600,
+    color: 'var(--vscode-descriptionForeground)',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+    margin: '10px 0 6px',
+    padding: '2px 0',
+  },
   benchmarkNumberCell: {
     verticalAlign: 'top' as const,
     padding: '3px 8px 3px 0',
