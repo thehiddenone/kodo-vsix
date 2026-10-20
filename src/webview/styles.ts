@@ -1887,6 +1887,13 @@ export const styles = {
     color: 'var(--vscode-errorForeground)',
   },
   // A step's name above its activity inside a trial's block (BenchmarkPanel).
+  // A benchmark trial's name above its steps' prompts and activity blocks.
+  benchmarkTrialTitle: {
+    fontSize: '14px',
+    fontWeight: 700,
+    margin: '16px 0 4px',
+    padding: '4px 0',
+  },
   benchmarkStepDivider: {
     fontSize: '12px',
     fontWeight: 600,

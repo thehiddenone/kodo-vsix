@@ -21,9 +21,10 @@ interface BenchmarkPanelProps {
  * doc/BENCHMARK_SESSIONS.md §5): what runs, its status, one row per finished
  * trial, and — once it ends — the run's summary. The job directory and the
  * run's log (`kodo-harbor`'s output, never sent over the wire) open from here.
- * Below the trials, one collapsible block per trial shows what the agent did
- * in it (`harbor.activity`, §4.8). A trial without a Kōdo log (a terminus-2
- * control) has no block.
+ * Below the trials, each trial shows what the agent did in it
+ * (`harbor.activity`, §4.8): per step, the instruction it was given and a
+ * collapsible block of the agent's activity. A trial without a Kōdo log (a
+ * terminus-2 control) shows nothing there.
  */
 export function BenchmarkPanel({ view, activity, uiSettings }: BenchmarkPanelProps) {
   const { job, trials, finished } = view;
@@ -115,6 +116,10 @@ export function BenchmarkPanel({ view, activity, uiSettings }: BenchmarkPanelPro
   );
 }
 
+// A step's instruction: the chat's user bubble, with less space around it,
+// since its activity block follows right after.
+const promptStyle = { ...styles.userPrompt, marginTop: '8px', marginBottom: '4px' };
+
 interface TrialActivityViewProps {
   trial: string;
   /** The trial's logs in run order: one per step of a multi-step task. */
@@ -125,13 +130,45 @@ interface TrialActivityViewProps {
 }
 
 /**
- * One trial's agent activity as a collapsible block, like a subsession's
- * (SubsessionGroupView): open while the trial runs, folded when it finishes
- * — only on that transition, so a block opened by hand stays open — and
- * folded from the start for a trial that had already finished. A multi-step
- * trial's steps follow one another, each after a divider with its name.
+ * One trial's agent activity, laid out like chat turns: under the trial's
+ * name, each step (a multi-step trial's after a divider with its name) shows
+ * the instruction it was given as a user bubble, then what the agent did as
+ * its own collapsible block. Only the trial's last step can still be running.
  */
 function TrialActivityView({ trial, logs, running, uiSettings }: TrialActivityViewProps) {
+  const dividers = logs.length > 1 || logs.some((l) => l.step !== null);
+  return (
+    <div>
+      <div style={styles.benchmarkTrialTitle}>{trial}</div>
+      {logs.map((log, i) => (
+        <div key={log.log}>
+          {dividers && <div style={styles.benchmarkStepDivider}>{log.step ?? `Step ${i + 1}`}</div>}
+          {log.prompt !== null && (
+            <div style={promptStyle}>
+              <div style={styles.userPromptText}>{log.prompt.trim()}</div>
+            </div>
+          )}
+          <StepActivityView log={log} running={running && i === logs.length - 1} uiSettings={uiSettings} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface StepActivityViewProps {
+  log: ActivityLog;
+  /** Whether this step's agent is still going. */
+  running: boolean;
+  uiSettings: UiSettings;
+}
+
+/**
+ * What the agent did in one step as a collapsible block, like a subsession's
+ * (SubsessionGroupView): open while the step runs, folded when it finishes —
+ * only on that transition, so a block opened by hand stays open — and folded
+ * from the start for a step that had already finished.
+ */
+function StepActivityView({ log, running, uiSettings }: StepActivityViewProps) {
   const [collapsed, setCollapsed] = useState(!running);
   const wasRunning = useRef(running);
   useEffect(() => {
@@ -140,38 +177,32 @@ function TrialActivityView({ trial, logs, running, uiSettings }: TrialActivityVi
     }
     wasRunning.current = running;
   }, [running]);
-  const steps = useMemo(() => logs.map((l) => ({ log: l, entries: activityEntries(l.events) })), [logs]);
-  const dividers = logs.length > 1 || logs.some((l) => l.step !== null);
+  const entries = useMemo(() => activityEntries(log.events), [log.events]);
   return (
     <div>
       <div
         style={styles.subsessionBlockTitle}
         onClick={() => setCollapsed((c) => !c)}
         role="button"
-        title={collapsed ? "Click to see what the agent did in this trial" : 'Click to collapse it'}
+        title={collapsed ? 'Click to see what the agent did' : 'Click to collapse it'}
       >
         {collapsed ? '[+] ' : '[-] '}
-        {trial}: agent activity.
+        Agent activity.
         {collapsed && ' Click to see the details.'}
       </div>
       {!collapsed && (
         <div style={styles.subsessionBlockContent}>
-          {steps.map(({ log, entries }, i) => (
-            <div key={log.log}>
-              {dividers && <div style={styles.benchmarkStepDivider}>{log.step ?? `Step ${i + 1}`}</div>}
-              {groupSessionEntries(entries).map((block) =>
-                block.kind === 'entry' ? (
-                  <SessionEntryView key={block.index} entry={block.entry} uiSettings={uiSettings} fileLinks={false} />
-                ) : (
-                  <SubsessionGroupView key={block.index} group={block} uiSettings={uiSettings}>
-                    {block.inner.map((e, j) => (
-                      <SessionEntryView key={`${block.index}-${j}`} entry={e} uiSettings={uiSettings} fileLinks={false} />
-                    ))}
-                  </SubsessionGroupView>
-                ),
-              )}
-            </div>
-          ))}
+          {groupSessionEntries(entries).map((block) =>
+            block.kind === 'entry' ? (
+              <SessionEntryView key={block.index} entry={block.entry} uiSettings={uiSettings} fileLinks={false} />
+            ) : (
+              <SubsessionGroupView key={block.index} group={block} uiSettings={uiSettings}>
+                {block.inner.map((e, j) => (
+                  <SessionEntryView key={`${block.index}-${j}`} entry={e} uiSettings={uiSettings} fileLinks={false} />
+                ))}
+              </SubsessionGroupView>
+            ),
+          )}
         </div>
       )}
     </div>

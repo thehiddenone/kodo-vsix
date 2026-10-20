@@ -264,6 +264,8 @@ export interface ActivityLog {
   step: string | null;
   /** `ts` of the log's first event; orders a trial's logs. */
   started: string;
+  /** The instruction the run was given (its `instruction.md`), once known. */
+  prompt: string | null;
   events: (Record<string, unknown> | undefined)[];
 }
 
@@ -272,8 +274,9 @@ export type BenchmarkActivity = Record<string, ActivityLog[]>;
 
 /**
  * Fold one `harbor.activity` chunk (kodo doc/WS_PROTOCOL.md §5.9m:
- * `{trial, log, step, started, first, events}`) into `activity`. Events are
- * placed by position, so a chunk that repeats what is there changes nothing.
+ * `{trial, log, step, started, first, events, prompt}`) into `activity`.
+ * Events are placed by position, and a log keeps the first prompt it gets, so
+ * a chunk that repeats what is there changes nothing.
  * Returns the new value, or `null` when nothing changed.
  */
 export function mergeActivity(activity: BenchmarkActivity, raw: Record<string, unknown>): BenchmarkActivity | null {
@@ -287,7 +290,8 @@ export function mergeActivity(activity: BenchmarkActivity, raw: Record<string, u
   const current = logs.find((l) => l.log === log);
   const step = current?.step ?? (typeof raw.step === 'string' && raw.step ? raw.step : null);
   const events = current ? [...current.events] : [];
-  let changed = current === undefined || step !== current.step;
+  const prompt = current?.prompt ?? (typeof raw.prompt === 'string' ? raw.prompt : null);
+  let changed = current === undefined || step !== current.step || prompt !== current.prompt;
   raw.events.forEach((event, i) => {
     if (events[first + i] === undefined && event !== null && typeof event === 'object') {
       events[first + i] = event as Record<string, unknown>;
@@ -297,7 +301,7 @@ export function mergeActivity(activity: BenchmarkActivity, raw: Record<string, u
   if (!changed) {
     return null;
   }
-  const next: ActivityLog = { log, step, started: current?.started || text(raw.started), events };
+  const next: ActivityLog = { log, step, started: current?.started || text(raw.started), prompt, events };
   const others = logs.filter((l) => l.log !== log);
   const merged = [...others, next].sort((a, b) => a.started.localeCompare(b.started));
   return { ...activity, [trial]: merged };
@@ -312,6 +316,8 @@ export function activityTrials(activity: BenchmarkActivity): string[] {
 /** A chunk per log carrying all of it — what a fresh webview is sent. */
 export function activityChunks(activity: BenchmarkActivity): Record<string, unknown>[] {
   return activityTrials(activity).flatMap((trial) =>
-    activity[trial].map((l) => ({ trial, log: l.log, step: l.step, started: l.started, first: 0, events: l.events })),
+    activity[trial].map((l) => ({
+      trial, log: l.log, step: l.step, started: l.started, first: 0, events: l.events, prompt: l.prompt,
+    })),
   );
 }

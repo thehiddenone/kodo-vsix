@@ -12,9 +12,9 @@ import { initial, reducer } from '../webview/reducer';
 // once, whatever the order, and a trial's logs stay in run order.
 function chunk(
   trial: string, log: string, first: number, events: Record<string, unknown>[],
-  started = '2026-10-18T10:00:00.000+00:00', step: string | null = null,
+  started = '2026-10-18T10:00:00.000+00:00', step: string | null = null, prompt: string | null = null,
 ): Record<string, unknown> {
-  return { trial, log, step, started, first, events };
+  return { trial, log, step, started, first, events, prompt };
 }
 
 function ev(type: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
@@ -55,6 +55,18 @@ suite('benchmark activity', () => {
     assert.strictEqual(activity.t1[0].step, 's1-exact-output');
   });
 
+  test('each step keeps the instruction it was given, however late it arrives', () => {
+    // The server sends a log's prompt once, in the first chunk that finds it.
+    let activity = fold([
+      chunk('t1', 'a', 0, [ev('run.start')], '2026-10-18T10:00:00.000+00:00', 's1', 'step one'),
+      chunk('t1', 'b', 0, [ev('run.start')], '2026-10-18T10:05:00.000+00:00'),
+    ]);
+    assert.deepStrictEqual(activity.t1.map((l) => l.prompt), ['step one', null]);
+    activity = mergeActivity(activity, chunk('t1', 'b', 1, [], '', null, 'step two')) ?? activity;
+    activity = mergeActivity(activity, chunk('t1', 'a', 1, [ev('text', { text: 'x' })], '', 's1')) ?? activity;
+    assert.deepStrictEqual(activity.t1.map((l) => l.prompt), ['step one', 'step two']);
+  });
+
   test('a trial\'s logs and the trials themselves read in run order', () => {
     const activity = fold([
       chunk('t2', 'c', 0, [ev('run.start')], '2026-10-18T10:02:00.000+00:00'),
@@ -73,7 +85,7 @@ suite('benchmark activity', () => {
 
   test('a fresh webview rebuilds the same activity from the host\'s full chunks', () => {
     const activity = fold([
-      chunk('t1', 'a', 0, [ev('run.start'), ev('text', { text: 'one' })], undefined, 's1'),
+      chunk('t1', 'a', 0, [ev('run.start'), ev('text', { text: 'one' })], undefined, 's1', 'do it'),
       chunk('t2', 'c', 0, [ev('run.start')], '2026-10-18T10:02:00.000+00:00'),
     ]);
     const state = activityChunks(activity).reduce(
