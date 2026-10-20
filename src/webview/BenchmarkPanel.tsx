@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ActivityLog, BenchmarkActivity, BenchmarkView } from '../benchmark-view';
-import { activityTrials, benchmarkActive, benchmarkStatusLine, formatReward, formatSeconds } from '../benchmark-view';
+import {
+  activityTrials,
+  benchmarkActive,
+  benchmarkStatusLine,
+  benchmarkStopNotice,
+  formatReward,
+  formatSeconds,
+} from '../benchmark-view';
 import { activityEntries } from './benchmarkActivity';
 import { groupSessionEntries } from './groupSubsessions';
 import { Markdown } from './markdown';
@@ -24,13 +31,15 @@ interface BenchmarkPanelProps {
  * Below the trials, each trial shows what the agent did in it
  * (`harbor.activity`, §4.8): per step, the instruction it was given and a
  * collapsible block of the agent's activity. A trial without a Kōdo log (a
- * terminus-2 control) shows nothing there.
+ * terminus-2 control) shows nothing there. A Stop the user pressed shows as a
+ * red callout after the activity, as a stopped chat turn does.
  */
 export function BenchmarkPanel({ view, activity, uiSettings }: BenchmarkPanelProps) {
   const { job, trials, finished } = view;
   const active = benchmarkActive(job);
   const logPath = finished?.logPath || job.logPath;
   const jobDir = finished?.jobDir || job.jobDir;
+  const stopNotice = benchmarkStopNotice(job);
   return (
     <div style={styles.benchmark}>
       <div style={styles.benchmarkHeader}>
@@ -89,6 +98,8 @@ export function BenchmarkPanel({ view, activity, uiSettings }: BenchmarkPanelPro
           uiSettings={uiSettings}
         />
       ))}
+
+      {stopNotice !== null && <Markdown content={stopNotice} />}
 
       {finished !== null && finished.summaryMarkdown && <Markdown content={finished.summaryMarkdown} />}
 

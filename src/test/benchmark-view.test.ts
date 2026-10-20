@@ -4,6 +4,7 @@ import {
   BenchmarkProgress,
   benchmarkActive,
   benchmarkStatusLine,
+  benchmarkStopNotice,
   formatReward,
   formatSeconds,
   parseBenchmarkJob,
@@ -72,6 +73,15 @@ suite('benchmark view', () => {
     ]);
     assert.strictEqual(held, true);
     assert.deepStrictEqual(progress.snapshot()!.trials.map((t) => t.trial), ['t1', 't2', 't3']);
+  });
+
+  test('a Stop the user pressed shows a red callout; a shutdown\'s stop shows none', () => {
+    assert.strictEqual(benchmarkStopNotice(parseBenchmarkJob(JOB)!), null);
+    const byUser = benchmarkStopNotice(parseBenchmarkJob({ ...JOB, status: 'stopping', stopped_by: 'user' })!);
+    assert.ok(byUser !== null);
+    assert.ok(byUser.startsWith('<kodo_crit>') && byUser.endsWith('</kodo_crit>'), byUser);
+    assert.ok(byUser.includes('stopped by user'));
+    assert.strictEqual(benchmarkStopNotice(parseBenchmarkJob({ ...JOB, status: 'stopped', stopped_by: 'server' })!), null);
   });
 
   test('history without a run changes nothing', () => {

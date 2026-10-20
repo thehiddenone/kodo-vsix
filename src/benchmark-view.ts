@@ -26,6 +26,8 @@ export interface BenchmarkJob {
   jobDir: string;
   logPath: string;
   startedAt: string;
+  /** Whether the user pressed Stop (`stopped_by: "user"`); a shutdown's stop is `server`. */
+  stoppedByUser: boolean;
 }
 
 export interface BenchmarkTrial {
@@ -86,6 +88,7 @@ export function parseBenchmarkJob(raw: unknown): BenchmarkJob | null {
     jobDir: text(job.job_dir),
     logPath: text(job.log_path),
     startedAt: text(job.started_at),
+    stoppedByUser: job.stopped_by === 'user',
   };
 }
 
@@ -229,6 +232,18 @@ export function benchmarkStatusLine(view: BenchmarkView): string {
     default:
       return view.job.status;
   }
+}
+
+/**
+ * The red callout a benchmark tab shows once the user pressed Stop, as the
+ * chat feed does for a stopped turn: from the click (`stopping`) on, and
+ * after a reload. `null` while nobody stopped the run, or a shutdown did.
+ */
+export function benchmarkStopNotice(job: BenchmarkJob): string | null {
+  if (!job.stoppedByUser) {
+    return null;
+  }
+  return '<kodo_crit>Benchmark stopped by user — the trials still running were cancelled and have no result; the trials that had finished are kept.</kodo_crit>';
 }
 
 /** A reward as the trials table shows it; `—` when the verifier gave none. */
