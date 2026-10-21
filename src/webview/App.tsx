@@ -195,6 +195,9 @@ export function App() {
         case 'greeting':
           dispatch({ type: 'greeting', text: String(msg.text ?? '') });
           break;
+        case 'agent_review':
+          dispatch({ type: 'agent_review', text: String(msg.text ?? '') });
+          break;
         case 'session_params':
           dispatch({
             type: 'session_params',
@@ -952,7 +955,11 @@ export function App() {
                 : '🔒 This session ran a benchmark — it takes no input.'
               : isRunning
                 ? '🔒 An agent is working on its own in this session — it takes no input.'
-                : '🔒 This session ran an agent on its own — it takes no input.'}
+                : state.pendingQuestion !== null
+                  ? // Agent Review's "open Agent Builder?" question, which the
+                    // engine asks once the review is over (kodo/doc/AGENT_BUILDER.md §5.3).
+                    '🔒 Answer the question above — this session takes no other input.'
+                  : '🔒 This session ran an agent on its own — it takes no input.'}
           </span>
           <FooterButton
             style={{ ...styles.globalStopBtn, ...styles.lockedBtn }}

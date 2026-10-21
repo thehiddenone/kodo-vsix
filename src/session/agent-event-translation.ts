@@ -327,6 +327,13 @@ export function handleStatelessEnvelope(env: Envelope, evtType: string, post: Po
     return true;
   }
 
+  if (env.kind === 'event' && evtType === 'agent_review.report') {
+    // Agent Review's verdict, rendered by the engine as callouts
+    // (kodo/doc/AGENT_BUILDER.md §5.3).
+    post({ type: 'agent_review', text: String(env.payload.text ?? '') });
+    return true;
+  }
+
   if (env.kind === 'event' && evtType === 'session.params') {
     // What changed in the session's parameters since its previous prompt,
     // pushed right before the prompt's turn (kodo/doc/SESSION_LLM_BINDING.md §4).

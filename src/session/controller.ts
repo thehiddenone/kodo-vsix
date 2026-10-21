@@ -49,7 +49,14 @@ import { AttachmentManager } from './attachment-manager';
 import { ModeToggleController } from './mode-toggle-controller';
 import { PromptGateManager } from './prompt-gate-manager';
 import { ReviewGateController } from './review-gate-controller';
-import type { AgentRunRequest, BenchmarkRunRequest, SessionDeps, SessionLaunch, UiSettings } from './types';
+import type {
+  AgentRunRequest,
+  AgentStartRequest,
+  BenchmarkRunRequest,
+  SessionDeps,
+  SessionLaunch,
+  UiSettings,
+} from './types';
 import { buildHtml, generateNonce } from './webview-html';
 
 let _keySeq = 0;
@@ -792,6 +799,18 @@ export class SessionController {
       return;
     }
 
+    // The user agreed to fix an Agent Review's concerns in Agent Builder
+    // (kodo/doc/AGENT_BUILDER.md §5.3): open that session in a tab of its own.
+    // Live only — the server never replays it, so a reload opens nothing.
+    if (env.kind === 'event' && evtType === 'agent.handoff') {
+      const name = String(env.payload.name ?? '');
+      const prompt = String(env.payload.prompt ?? '');
+      if (name && prompt) {
+        this.deps.openAgentSession({ name, prompt });
+      }
+      return;
+    }
+
     if (env.kind === 'event' && evtType === 'workspace.add_folder') {
       const folderPath = String(env.payload.path ?? '');
       const name = String(env.payload.name ?? '');
@@ -1074,6 +1093,8 @@ export class SessionController {
     this._adoptBenchmarkJob(state?.job);
     if (this.isNewSession && this.launch?.kind === 'agent_run') {
       void this._startAgentRun(this.launch.run);
+    } else if (this.isNewSession && this.launch?.kind === 'agent_start') {
+      void this._startAgentSession(this.launch.run);
     } else if (this.isNewSession && this.launch?.kind === 'benchmark') {
       this._startBenchmark(this.launch.run);
     } else if (this.isNewSession) {
@@ -1098,6 +1119,20 @@ export class SessionController {
     this.activity.resetForSubmit();
     this.modeToggle.startAgentRun(run.name, run.prompt);
     this._post({ type: 'agent_run_started', text: run.prompt });
+  }
+
+  /**
+   * Start this brand-new, interactive session on *run.name* with *run.prompt*
+   * as its first prompt (`agent.handoff`, kodo/doc/AGENT_BUILDER.md §5.3). The
+   * prompt goes through the ordinary submit path — same llama.cpp launch
+   * confirmation, same bubble — so it reads and runs like one the user typed.
+   * A declined launch leaves the session open on that agent, with the prompt
+   * shown but not sent, as a declined typed prompt is.
+   */
+  private async _startAgentSession(run: AgentStartRequest): Promise<void> {
+    this.modeToggle.applyNewSessionDefaults(run.name);
+    this._post({ type: 'agent_run_started', text: run.prompt });
+    await this._submitPrompt(run.prompt);
   }
 
   /**

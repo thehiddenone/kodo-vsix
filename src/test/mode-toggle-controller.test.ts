@@ -79,3 +79,24 @@ suite('ModeToggleController — agent.run sessions', () => {
     assert.strictEqual(toggle.isRunning, false);
   });
 });
+
+// The Agent Builder session an Agent Review hands off to
+// (kodo/doc/AGENT_BUILDER.md §5.3) starts interactive on a named agent.
+suite('ModeToggleController — new session on a named agent', () => {
+  test('applyNewSessionDefaults with an agent selects it, interactive and not autonomous', () => {
+    const sent: Envelope[] = [];
+    const posted: Record<string, unknown>[] = [];
+    const toggle = new ModeToggleController(
+      { family: null, tiers: [], defaultTier: '' },
+      (msg) => posted.push(msg),
+      (env) => sent.push(env),
+    );
+    toggle.applyNewSessionDefaults('kodo_agent_builder');
+    const set = sent.find((env) => env.payload.type === 'agent.set');
+    assert.strictEqual(set?.payload.name, 'kodo_agent_builder');
+    const states = posted.filter((m) => m.type === 'mode_state');
+    const state = states[states.length - 1];
+    assert.strictEqual(state.interactive, true);
+    assert.strictEqual(state.autonomous, false);
+  });
+});

@@ -39,6 +39,7 @@ function sessionDeps(): SessionDeps {
     buildFolderMap,
     getCodeWorkspaceFile: codeWorkspaceFile,
     addWorkspaceFolder,
+    openAgentSession: (run) => void newSession({ kind: 'agent_start', run }),
     confirmWorkspaceFolder,
     reconnectWorkspace: reconnectSessionWorkspace,
     getThinkingContext: currentThinkingContext,
@@ -130,8 +131,11 @@ function createPanel(): vscode.WebviewPanel {
 /**
  * Open a blank session in a new tab — interactive, on the server's default
  * agent, unless *launch* says otherwise: an `agent_run` runs one prompt on a
- * non-interactive agent (doc/WS_PROTOCOL.md §7.4h), a `benchmark` runs
- * `kodo-harbor` in the session (§7.4j). Either way the tab takes no input.
+ * non-interactive agent (doc/WS_PROTOCOL.md §7.4h) and a `benchmark` runs
+ * `kodo-harbor` in the session (§7.4j), both in a tab that takes no input; an
+ * `agent_start` submits a first prompt on a chosen interactive agent
+ * (`agent.handoff`, kodo/doc/AGENT_BUILDER.md §5.3), and the tab stays open
+ * for the conversation.
  */
 export function newSession(launch?: SessionLaunch): SessionController {
   const controller = new SessionController(sessionDeps(), createPanel(), '', launch);

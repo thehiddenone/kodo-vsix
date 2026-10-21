@@ -574,6 +574,12 @@ export type SessionEntry =
   // session_history on reload — the coding agent itself never sees it
   // (kodo/doc/WS_PROTOCOL.md §5.9i).
   | { type: 'greeting'; text: string; exclude_from_context: true }
+  // One agent review, posted by the engine when Agent Review reports its
+  // verdict (kodo/doc/AGENT_BUILDER.md §5.3): Markdown holding a <kodo_warn>
+  // per concern and a closing summary callout. Persisted as an
+  // "agent_review" marker and replayed via session_history; never part of
+  // any LLM context.
+  | { type: 'agent_review'; text: string; exclude_from_context: true }
   // What changed in the session's parameters since its previous prompt — the
   // LLM, agent, Mode, Edit/Tool Control, Thinking, local profile and flags,
   // sampling overrides, cloud tier models — dropped in right before the prompt
@@ -967,6 +973,7 @@ export type Action =
   | { type: 'interrupted' }
   | { type: 'runtime_error'; message: string; recoverable: boolean }
   | { type: 'greeting'; text: string }
+  | { type: 'agent_review'; text: string }
   | { type: 'session_params'; first: boolean; changes: ParamChange[] }
   | {
       type: 'llm_state';

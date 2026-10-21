@@ -274,9 +274,22 @@ export interface BenchmarkRunRequest {
   thinkingLevel: string | null;
 }
 
+/**
+ * Start a brand-new *interactive* session on the top-level agent *name* and
+ * submit *prompt* as its first prompt, exactly as if the user had picked the
+ * agent and typed it. The server asks for one with `agent.handoff`, when the
+ * user agrees to fix an Agent Review's concerns in Agent Builder
+ * (kodo/doc/AGENT_BUILDER.md §5.3).
+ */
+export interface AgentStartRequest {
+  name: string;
+  prompt: string;
+}
+
 /** How a brand-new tab starts, when it doesn't start as an ordinary chat. */
 export type SessionLaunch =
   | { kind: 'agent_run'; run: AgentRunRequest }
+  | { kind: 'agent_start'; run: AgentStartRequest }
   | { kind: 'benchmark'; run: BenchmarkRunRequest };
 
 export interface SessionDeps {
@@ -301,6 +314,11 @@ export interface SessionDeps {
    * registers it as a VS Code workspace folder (no-op if already present).
    */
   addWorkspaceFolder: (folderPath: string, name: string) => void;
+  /**
+   * Open a new tab that starts an interactive session on *run.name* with
+   * *run.prompt* (`agent.handoff`, kodo/doc/AGENT_BUILDER.md §5.3).
+   */
+  openAgentSession: (run: AgentStartRequest) => void;
   /**
    * Add a server-scaffolded project directory to the open workspace AND report
    * back whether it really landed there — the `workspace.confirm_folder`

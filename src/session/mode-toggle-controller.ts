@@ -247,19 +247,21 @@ export class ModeToggleController {
    *  longer tracks a default agent of its own (the catalog is fetched lazily,
    *  not at connect — doc/WS_PROTOCOL.md §7.4g), so the server resolves its
    *  own default (`resolve_top_agent`) and the follow-up `state` event
-   *  (`applyStateEvent`) is what actually populates `topAgent`. */
-  applyNewSessionDefaults(): void {
+   *  (`applyStateEvent`) is what actually populates `topAgent`. *agent*
+   *  starts the session on a named agent instead — the Agent Builder session
+   *  an Agent Review hands off to (kodo/doc/AGENT_BUILDER.md §5.3). */
+  applyNewSessionDefaults(agent = ''): void {
     // Also what unlocks a tab whose `harbor.run` was refused (lockForJob).
     this.interactive_ = true;
-    this.topAgent = '';
-    this.effectiveTopAgent = '';
+    this.topAgent = agent;
+    this.effectiveTopAgent = agent;
     this.autonomous = false;
     this.effectiveAutonomous = false;
     this.running = false;
     this.awaitingLlm = false;
     this.editControl = 'smart';
     this.commandControl = 'smart';
-    this.send(makeRequest('agent.set', { name: '' }));
+    this.send(makeRequest('agent.set', { name: agent }));
     this.syncEditCommandToServer();
     this.postModeState();
   }

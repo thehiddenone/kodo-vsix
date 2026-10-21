@@ -567,3 +567,45 @@ suite('reducer — agent.run sessions', () => {
     assert.strictEqual(reducer(locked, modeState(true)).interactive, true);
   });
 });
+
+// Agent Review's findings and its "open Agent Builder?" question
+// (kodo/doc/AGENT_BUILDER.md §5.3): the review is one engine-posted entry, and
+// the answered question replays as an ordinary ask_user panel.
+suite('reducer — agent review', () => {
+  const review = '<kodo_warn>**L4 purpose**</kodo_warn>\n\n<kodo_info>`acme_x`: 1 concern.</kodo_info>';
+
+  test('the live review is appended as its own entry', () => {
+    const next = reducer(initial, { type: 'agent_review', text: review });
+    assert.deepStrictEqual(next.session, [{ type: 'agent_review', text: review, exclude_from_context: true }]);
+  });
+
+  test('a reload replays the review and the answered question', () => {
+    const questions = [{ question: 'Open Agent Builder?', kind: 'single_choice', options: ['No'] }];
+    const answers = [{ selected: ['No'], free_text: null }];
+    const next = reducer(initial, {
+      type: 'session_history',
+      entries: [
+        { type: 'agent_review', text: review },
+        { type: 'ask_user', toolCallId: 'agent-handoff-1', questions, answers },
+      ],
+      subsessions: {},
+    });
+    assert.deepStrictEqual(next.session[0], { type: 'agent_review', text: review, exclude_from_context: true });
+    const panel = next.session[1];
+    assert.strictEqual(panel.type, 'ask_user');
+    assert.ok(panel.type === 'ask_user');
+    assert.strictEqual(panel.toolCallId, 'agent-handoff-1');
+    assert.deepStrictEqual(panel.answers, answers);
+  });
+
+  test('the engine-fired question opens a panel of its own in the feed', () => {
+    const next = reducer(initial, {
+      type: 'question_request',
+      requestId: 'req-1',
+      toolCallId: 'agent-handoff-1',
+      questions: [{ question: 'Open Agent Builder?', kind: 'single_choice', options: ['Yes, open Agent Builder', 'No'] }],
+    });
+    assert.strictEqual(next.pendingQuestion?.toolCallId, 'agent-handoff-1');
+    assert.strictEqual(next.session[0].type, 'ask_user');
+  });
+});

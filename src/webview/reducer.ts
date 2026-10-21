@@ -270,6 +270,12 @@ function wireEntryToSessionEntry(e: Record<string, unknown>, ctx: HistoryConvers
     // again instead of losing it.
     return { type: 'greeting', text: String(e.text ?? ''), exclude_from_context: true };
   }
+  if (type === 'agent_review') {
+    // Replay of the server's persisted "agent_review" marker (see
+    // EngineEmitters.emit_agent_review) — the same callouts the live
+    // 'agent_review' action adds.
+    return { type: 'agent_review', text: String(e.text ?? ''), exclude_from_context: true };
+  }
   if (type === 'session_params') {
     // Replay of the server's persisted "session_params" marker (see
     // EngineEmitters.emit_session_params) — same element the live action adds.
@@ -1018,6 +1024,14 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         session: [...state.session, { type: 'greeting', text: action.text, exclude_from_context: true }],
+      };
+    case 'agent_review':
+      // Agent Review's findings (kodo/doc/AGENT_BUILDER.md §5.3), posted by the
+      // engine when the agent reports its verdict — a plain append, like
+      // 'greeting'.
+      return {
+        ...state,
+        session: [...state.session, { type: 'agent_review', text: action.text, exclude_from_context: true }],
       };
     case 'session_params':
       // What changed since the previous prompt (kodo/doc/SESSION_LLM_BINDING.md

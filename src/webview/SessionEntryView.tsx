@@ -445,6 +445,10 @@ export function SessionEntryView({ entry, uiSettings, fileLinks = true }: Sessio
       // since it's meant to read as Kodo speaking, just with no timestamp
       // line (it isn't a real conversational turn).
       return <div style={styles.agentTokens}><Markdown content={entry.text} /></div>;
+    case 'agent_review':
+      // Agent Review's findings (kodo/doc/AGENT_BUILDER.md §5.3): one callout
+      // per concern and a summary callout, rendered like Kodo speaking.
+      return <div style={styles.agentTokens}><Markdown content={entry.text} /></div>;
     case 'review_findings':
       // The user-only findings table for one review round (kodo
       // doc/GUIDED_DEV_MODE.md). Lands after the critic's collapsed subsession
