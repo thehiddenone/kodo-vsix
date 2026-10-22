@@ -112,7 +112,7 @@ type ArchiveExt = 'zip' | 'tar.gz';
 
 const UV_SPEC: UtilSpec = {
   name: 'uv',
-  version: '0.11.24',
+  version: '0.13.5',
   binary: 'uv',
   targets: {
     'darwin-x86_64': 'x86_64-apple-darwin',
