@@ -10,6 +10,9 @@
  *      view onto this control state.
  *   2. "Start new Kōdo session" / "Open Kōdo Panel": create a session tab. Each
  *      tab connects independently and is routed by its own session_id.
+ *   2b. The Secondary Side Bar's docked session view (`kodo.sessionView`,
+ *      VS Code 1.106+) shows one more session, outside the editor area — see
+ *      `src/extension/session-dock.ts`.
  *   3. Sticky tabs: a registerWebviewPanelSerializer restores open tabs on
  *      window reload / workspace reopen and resumes each from disk. Closed tabs
  *      are not restored (they are released and free for any window).
@@ -32,6 +35,7 @@ import { makeRequest } from './envelope';
 import type { Envelope } from './envelope';
 import { FileReviewContentProvider, KODO_REVIEW_SCHEME } from './file-review-provider';
 import { startLocalDownloadPolling } from './local-model-downloads';
+import { supportsSecondarySideBar } from './secondary-side-bar';
 import { SidebarProvider } from './sidebar-provider';
 import { DEFAULT_PORT, ServerLauncher, readServerDiscovery } from './server-launcher';
 import { WsClient } from './ws-client';
@@ -61,6 +65,7 @@ import {
   togglePinnedLocalModel,
 } from './extension/settings-io';
 import { pickSession } from './extension/session-resume';
+import { SESSION_VIEW_ID, SessionDock } from './extension/session-dock';
 import { onWindowFocused } from './extension/session-llm-sync';
 import { state } from './extension/state';
 import { adoptPanel, consumeSerializerDead, newSession, openPanel } from './extension/window-sessions';
@@ -79,6 +84,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   state.windowId = stableWindowId(context);
   consumeSerializerDead();
+
+  // Hides the docked session view where the Secondary Side Bar cannot host it
+  // (see `supportsSecondarySideBar`). Negative on purpose, as the Codex and
+  // Claude Code extensions do it: unset — before activation — means "show".
+  void vscode.commands.executeCommand('setContext', 'kodo.dockUnsupported', !supportsSecondarySideBar(vscode.version));
 
   // Completion and inline errors for hand-edited user agent JSON files: map
   // the schemas the server writes to ~/.kodo/etc/agent_schemas/ onto
@@ -261,6 +271,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider('kodo.view', state.sidebarProvider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
+    vscode.window.registerWebviewViewProvider(SESSION_VIEW_ID, (state.sessionDock = new SessionDock()), {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     vscode.window.registerWebviewPanelSerializer('kodoPanel', {
       // Sticky tabs: VS Code persists every open panel and restores it on
       // reload / workspace reopen. The webview stashed its session_id via
@@ -281,6 +294,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('kodo.useCloudLLMs', () => setMode('cloud')),
     vscode.commands.registerCommand('kodo.useLocalLLM', () => setMode('local')),
     vscode.commands.registerCommand('kodo.pickSession', () => pickSession()),
+    // The docked view's title-bar buttons (session-dock.ts).
+    vscode.commands.registerCommand('kodo.dock.newSession', () => state.sessionDock?.openSession('')),
+    vscode.commands.registerCommand('kodo.dock.pickSession', () => pickSession('dock')),
+    vscode.commands.registerCommand('kodo.dock.moveToTab', () => state.sessionDock?.moveToTab()),
     vscode.commands.registerCommand('kodo.showDiagnostics', () => showKodoDiagnostics()),
   );
 
@@ -333,4 +350,5 @@ export function deactivate(): void {
   state.controlClient = null;
   state.launcher = null;
   state.sidebarProvider = null;
+  state.sessionDock = null;
 }

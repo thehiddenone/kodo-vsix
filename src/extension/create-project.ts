@@ -299,7 +299,7 @@ async function promptReconnectForCreateProject(active: SessionController): Promi
     return null;
   }
   await armPendingCreateProjectPrompt();
-  await reloadWindowIntoTarget(sessionId, target);
+  await reloadWindowIntoTarget(sessionId, target, active.placement);
   return null;
 }
 

@@ -11,6 +11,7 @@ import type { BedrockModelInfo, CloudRegistry, KnobDefs, LlamaArgSpec, LocalDown
 import type { LaunchOutcome } from '../server-attach-policy';
 import type { ServerLauncher } from '../server-launcher';
 import type { SessionController } from '../session/controller';
+import type { SessionDock } from './session-dock';
 import type { SidebarProvider } from '../sidebar-provider';
 import type { WsClient } from '../ws-client';
 
@@ -38,9 +39,12 @@ interface WindowState {
   controlClient: WsClient | null;
   controlConnected: boolean;
   sidebarProvider: SidebarProvider | null;
+  // The Secondary Side Bar's docked session view (session-dock.ts).
+  sessionDock: SessionDock | null;
   deactivating: boolean;
 
-  // Open session tabs in this window, keyed by the controller's internal key.
+  // Open sessions in this window — every tab plus the docked one — keyed by
+  // the controller's internal key.
   sessions: Map<string, SessionController>;
 
   // Consecutive genuine start failures since the last successful control
@@ -185,6 +189,7 @@ export const state: WindowState = {
   controlClient: null,
   controlConnected: false,
   sidebarProvider: null,
+  sessionDock: null,
   deactivating: false,
 
   sessions: new Map(),

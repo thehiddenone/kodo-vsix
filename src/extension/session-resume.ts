@@ -7,6 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { SessionPlacement } from '../session/session-host';
 import type { ResumeTarget, RememberedWorkspace } from '../workspace-resume-policy';
 import {
   missingResumeTargetPaths,
@@ -76,7 +77,25 @@ function formatTimestamp(iso: string): string {
   });
 }
 
-export async function pickSession(): Promise<void> {
+/**
+ * Open a session in *placement* — an editor tab, or the docked view in the
+ * Secondary Side Bar (session-dock.ts), which moves a session open in a tab
+ * here into the dock.
+ */
+function openIn(placement: SessionPlacement, sessionId: string): void {
+  if (placement === 'dock' && state.sessionDock) {
+    state.sessionDock.openSession(sessionId);
+  } else {
+    openExistingSession(sessionId);
+  }
+}
+
+/**
+ * The session picker. *placement* is where the pick opens: `'tab'` (the
+ * sidebar's and Command Palette's picker) or `'dock'` (the docked view's
+ * "Open Session from History…" button).
+ */
+export async function pickSession(placement: SessionPlacement = 'tab'): Promise<void> {
   let resp: Record<string, unknown>;
   try {
     resp = await sendControlAwait('session.list', currentWorkspaceShapeForList());
@@ -87,7 +106,11 @@ export async function pickSession(): Promise<void> {
   const list = Array.isArray(resp.sessions) ? (resp.sessions as Record<string, unknown>[]) : [];
 
   const items: SessionPickItem[] = [
-    { label: '$(add) New session', isNew: true, detail: 'Start a fresh session in this window' },
+    {
+      label: '$(add) New session',
+      isNew: true,
+      detail: placement === 'dock' ? 'Start a fresh session in the side bar' : 'Start a fresh session in this window',
+    },
   ];
   for (const s of list) {
     const id = String(s.id ?? '');
@@ -96,7 +119,8 @@ export async function pickSession(): Promise<void> {
     // carries both so this side needs no mapping of its own.
     const agentLabel = typeof s.agent_label === 'string' ? s.agent_label : null;
     const taken = Boolean(s.taken);
-    const openHere = findBySessionId(id) !== undefined;
+    const openHereIn = findBySessionId(id)?.placement;
+    const openHere = openHereIn !== undefined;
     const remembered = parseRememberedWorkspace(s.workspace);
 
     // Opened in another window is the only thing that still blocks picking a
@@ -112,7 +136,9 @@ export async function pickSession(): Promise<void> {
     const timeLabel = `created ${formatTimestamp(created)}, last modified ${formatTimestamp(lastModified)}${remembered ? ', in workspace' : ''}`;
     items.push({
       label: (disabledReason ? '$(circle-slash) ' : '$(comment-discussion) ') + name,
-      description: openHere ? `${kindLabel} · (opened here)` : kindLabel,
+      description: openHereIn === 'dock'
+        ? `${kindLabel} · (in the side bar)`
+        : openHere ? `${kindLabel} · (opened here)` : kindLabel,
       detail: disabledReason ? `${disabledReason} · ${timeLabel}` : timeLabel,
       sessionId: id,
       disabledReason,
@@ -121,7 +147,7 @@ export async function pickSession(): Promise<void> {
   }
 
   const choice = await vscode.window.showQuickPick(items, {
-    placeHolder: 'Open a Kōdo session',
+    placeHolder: placement === 'dock' ? 'Open a Kōdo session in the side bar' : 'Open a Kōdo session',
     matchOnDetail: true,
   });
   if (!choice) {
@@ -129,18 +155,23 @@ export async function pickSession(): Promise<void> {
   }
   if (choice.disabledReason) {
     void vscode.window.showInformationMessage(`Cannot open this session: ${choice.disabledReason}.`);
-    return pickSession();
+    return pickSession(placement);
   }
   if (choice.isNew) {
-    newSession();
+    if (placement === 'dock' && state.sessionDock) {
+      state.sessionDock.openSession('');
+    } else {
+      newSession();
+    }
     return;
   }
   if (choice.sessionId) {
     if (findBySessionId(choice.sessionId)) {
-      // Already open here — just reveal the live tab, no workspace dance.
-      openExistingSession(choice.sessionId);
+      // Already open here — no workspace dance: a tab pick reveals the live
+      // tab (or the dock), a dock pick moves it into the dock.
+      openIn(placement, choice.sessionId);
     } else {
-      await resumeSessionIntoWorkspace(choice.sessionId, choice.remembered ?? null);
+      await resumeSessionIntoWorkspace(choice.sessionId, choice.remembered ?? null, placement);
     }
   }
 }
@@ -215,7 +246,11 @@ export function ensureResumeTargetExists(target: ResumeTarget): boolean {
  * disk (the error is reported to the user) or if there's nothing to reload
  * into (`'none'`).
  */
-export async function reloadWindowIntoTarget(sessionId: string, target: ResumeTarget): Promise<boolean> {
+export async function reloadWindowIntoTarget(
+  sessionId: string,
+  target: ResumeTarget,
+  placement: SessionPlacement = 'tab',
+): Promise<boolean> {
   // A remembered folder can be renamed, moved or deleted between sessions.
   // Check before touching anything: `vscode.openFolder`/
   // `updateWorkspaceFolders` on a path that isn't there reloads the window
@@ -229,7 +264,7 @@ export async function reloadWindowIntoTarget(sessionId: string, target: ResumeTa
   // `reloadWipesSerializerState` guards (the whole folder set or the
   // workspace file changes) — always arm the dead-serializer marker, and
   // stash which session to resume opening on the other side.
-  await armPendingResumeSession(sessionId);
+  await armPendingResumeSession(sessionId, placement);
   await armSerializerDead();
 
   if (target.kind === 'file') {
@@ -285,10 +320,13 @@ export async function reloadWindowIntoTarget(sessionId: string, target: ResumeTa
  * reloads as above, "Open session only" opens the session disconnected/
  * isolated without touching this window's workspace, and Cancel (explicit
  * button, dismiss, or Escape) opens nothing at all.
+ *
+ * *placement* is where the session opens, here or after the reload.
  */
 export async function resumeSessionIntoWorkspace(
   sessionId: string,
   remembered: RememberedWorkspace | null,
+  placement: SessionPlacement = 'tab',
 ): Promise<void> {
   const codeWorkspaceFileExists = Boolean(
     remembered?.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
@@ -303,7 +341,7 @@ export async function resumeSessionIntoWorkspace(
   };
 
   if ((remembered?.compatible ?? false) || resumeTargetMatchesCurrent(target, current)) {
-    openExistingSession(sessionId);
+    openIn(placement, sessionId);
     return;
   }
 
@@ -336,7 +374,7 @@ export async function resumeSessionIntoWorkspace(
     if (choice === openSessionOnly) {
       // Open the session disconnected/isolated, operating against its
       // bound directories, without touching this window's workspace.
-      openExistingSession(sessionId);
+      openIn(placement, sessionId);
       return;
     }
     if (choice !== openBoth) {
@@ -345,7 +383,7 @@ export async function resumeSessionIntoWorkspace(
     }
   }
 
-  await reloadWindowIntoTarget(sessionId, target);
+  await reloadWindowIntoTarget(sessionId, target, placement);
 }
 
 /**
@@ -373,9 +411,13 @@ export async function fetchRememberedWorkspaceFor(sessionId: string): Promise<Re
  * the manual reconnect-workspace button's mechanism (`session-controller.ts`'s
  * `reconnect_workspace` webview message, wired via `SessionDeps.reconnectWorkspace`).
  * A no-op if nothing is remembered (shouldn't happen — the button only shows
- * for a locked, disconnected session).
+ * for a locked, disconnected session). *placement* is where the session
+ * reopens after the reload: where it is shown now.
  */
-export async function reconnectSessionWorkspace(sessionId: string): Promise<void> {
+export async function reconnectSessionWorkspace(
+  sessionId: string,
+  placement: SessionPlacement = 'tab',
+): Promise<void> {
   const remembered = await fetchRememberedWorkspaceFor(sessionId);
   if (!remembered) {
     return;
@@ -384,7 +426,7 @@ export async function reconnectSessionWorkspace(sessionId: string): Promise<void
     remembered.codeWorkspaceFile && fs.existsSync(remembered.codeWorkspaceFile),
   );
   const target = resumeTarget(remembered, codeWorkspaceFileExists);
-  await reloadWindowIntoTarget(sessionId, target);
+  await reloadWindowIntoTarget(sessionId, target, placement);
 }
 
 // `globalState`, mirroring create-project.ts's `PENDING_CREATE_PROJECT_KEY`
@@ -397,9 +439,10 @@ export async function reconnectSessionWorkspace(sessionId: string): Promise<void
 const PENDING_RESUME_SESSION_KEY = 'kodo.pendingResumeSessionId';
 const PENDING_RESUME_SESSION_TTL_MS = 30_000;
 
-async function armPendingResumeSession(sessionId: string): Promise<void> {
+async function armPendingResumeSession(sessionId: string, placement: SessionPlacement): Promise<void> {
   await state.extensionContext?.globalState.update(PENDING_RESUME_SESSION_KEY, {
     sessionId,
+    placement,
     armedAt: Date.now(),
   });
 }
@@ -413,9 +456,11 @@ async function armPendingResumeSession(sessionId: string): Promise<void> {
  * workspace is loaded.
  */
 export async function resumePendingResumeSession(): Promise<void> {
-  const pending = state.extensionContext?.globalState.get<{ sessionId: string; armedAt: number }>(
-    PENDING_RESUME_SESSION_KEY,
-  );
+  const pending = state.extensionContext?.globalState.get<{
+    sessionId: string;
+    placement?: SessionPlacement;
+    armedAt: number;
+  }>(PENDING_RESUME_SESSION_KEY);
   if (!pending) {
     return;
   }
@@ -423,5 +468,6 @@ export async function resumePendingResumeSession(): Promise<void> {
   if (Date.now() - pending.armedAt > PENDING_RESUME_SESSION_TTL_MS || !state.hasWorkspace) {
     return;
   }
-  openExistingSession(pending.sessionId);
+  // A marker armed before docked sessions existed carries no placement.
+  openIn(pending.placement === 'dock' ? 'dock' : 'tab', pending.sessionId);
 }

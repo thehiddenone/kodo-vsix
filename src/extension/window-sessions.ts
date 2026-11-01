@@ -14,6 +14,7 @@ import { makeRequest } from '../envelope';
 import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from '../reconcile-policy';
 import type { SessionDeps, SessionLaunch } from '../session/types';
 import { SessionController } from '../session/controller';
+import { PanelSessionHost } from '../session/session-host';
 import { applyLlamaState } from './llamacpp';
 import { handleApiKeyRequest, pushCloudAiSettingsState } from './cloud-ai-settings';
 import { handleChooseProjectFolder } from './create-project';
@@ -28,7 +29,13 @@ import { currentThinkingContext, currentThinkingFamilies } from './thinking-cont
 import { onSessionActivated } from './session-llm-sync';
 import { armWindowIdContinuity } from './window-id';
 
-function sessionDeps(): SessionDeps {
+/**
+ * The dependencies every session controller in this window shares. *overrides*
+ * replaces the tab-specific bookkeeping for a session shown somewhere else —
+ * the docked view (`session-dock.ts`) remembers its session on its own key,
+ * not in this window's open-tab list.
+ */
+export function sessionDeps(overrides: Partial<SessionDeps> = {}): SessionDeps {
   return {
     context: state.extensionContext!,
     windowId: state.windowId,
@@ -97,6 +104,7 @@ function sessionDeps(): SessionDeps {
       }
     },
     isDeactivating: () => state.deactivating,
+    ...overrides,
   };
 }
 
@@ -128,6 +136,18 @@ function createPanel(): vscode.WebviewPanel {
   });
 }
 
+function tabHost(panel: vscode.WebviewPanel = createPanel()): PanelSessionHost {
+  return new PanelSessionHost(
+    panel,
+    vscode.Uri.file(path.join(state.extensionContext!.extensionPath, 'images', 'kodo16px.png')),
+  );
+}
+
+/** The open sessions shown in editor tabs (every one but the docked one). */
+function tabSessions(): SessionController[] {
+  return [...state.sessions.values()].filter((s) => s.placement === 'tab');
+}
+
 /**
  * Open a blank session in a new tab — interactive, on the server's default
  * agent, unless *launch* says otherwise: an `agent_run` runs one prompt on a
@@ -138,14 +158,14 @@ function createPanel(): vscode.WebviewPanel {
  * for the conversation.
  */
 export function newSession(launch?: SessionLaunch): SessionController {
-  const controller = new SessionController(sessionDeps(), createPanel(), '', launch);
+  const controller = new SessionController(sessionDeps(), tabHost(), '', launch);
   state.sessions.set(controller.key, controller);
   return controller;
 }
 
-/** Reveal the most recent open session, or start a new one if none are open. */
+/** Reveal the most recent open session tab, or start a new one if none are open. */
 export function openPanel(): void {
-  const last = [...state.sessions.values()].pop();
+  const last = tabSessions().pop();
   if (last) {
     last.reveal();
   } else {
@@ -153,14 +173,15 @@ export function openPanel(): void {
   }
 }
 
-/** Open an existing session id in a tab (revealing it if already open). */
+/** Open an existing session id in a tab (revealing it if already open, in a
+ *  tab or the docked view). */
 export function openExistingSession(sessionId: string): void {
   const existing = findBySessionId(sessionId);
   if (existing) {
     existing.reveal();
     return;
   }
-  const controller = new SessionController(sessionDeps(), createPanel(), sessionId);
+  const controller = new SessionController(sessionDeps(), tabHost(), sessionId);
   state.sessions.set(controller.key, controller);
 }
 
@@ -171,7 +192,7 @@ export function adoptPanel(panel: vscode.WebviewPanel, sessionId: string): void 
     panel.dispose();
     return;
   }
-  const controller = new SessionController(sessionDeps(), panel, sessionId);
+  const controller = new SessionController(sessionDeps(), tabHost(panel), sessionId);
   state.sessions.set(controller.key, controller);
 }
 
@@ -300,7 +321,7 @@ async function closeGhostKodoTabs(): Promise<void> {
  * as inert placeholders (already showing their cached title/icon) until clicked.
  * `tabGroups.all` reflects those placeholders too, since the tab strip is
  * layout state independent of the extension host's webview objects — so this
- * count can exceed `sessions.size` even though no duplicate exists yet.
+ * count can exceed the tab-session count even though no duplicate exists yet.
  */
 function kodoPanelTabCount(): number {
   let count = 0;
@@ -357,7 +378,9 @@ export async function reconcileOpenSessions(): Promise<void> {
     state.reconciledOpenSessions = true;
     return;
   }
-  const tabAction = reconcileTabAction(state.serializerStateIsDead, kodoPanelTabCount(), state.sessions.size);
+  // Tab sessions only: the docked session has no native tab, and counting it
+  // would hide a still-pending sticky placeholder from the guard.
+  const tabAction = reconcileTabAction(state.serializerStateIsDead, kodoPanelTabCount(), tabSessions().length);
   if (tabAction === 'defer') {
     return; // un-revived sticky placeholders — the serializer will adopt them
   }

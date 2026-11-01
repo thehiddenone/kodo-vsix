@@ -6,7 +6,7 @@
  * send anything.
  */
 
-import type * as vscode from 'vscode';
+import type { SessionHost } from './session-host';
 import type { FileEventData, LastCallTokens, UsageSummary } from './types';
 
 const TOKEN_BUFFER_MAX = 64 * 1024;
@@ -50,7 +50,7 @@ export class ActivityCache {
   private resumeSessionId: string | null = null;
 
   constructor(
-    private readonly panel: vscode.WebviewPanel,
+    private readonly host: SessionHost,
     private readonly post: Post,
   ) {}
 
@@ -94,7 +94,7 @@ export class ActivityCache {
 
   setSessionName(name: string): void {
     this.sessionName = name;
-    this.panel.title = name || 'Kōdo';
+    this.host.setSessionName(name);
     this.post({ type: 'session_name', name });
   }
 

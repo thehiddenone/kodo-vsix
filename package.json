@@ -28,6 +28,13 @@
           "title": "Kōdo",
           "icon": "images/kodo24px.png"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "kodo-session",
+          "title": "Kōdo",
+          "icon": "images/kodo24px.png"
+        }
       ]
     },
     "views": {
@@ -37,6 +44,15 @@
           "name": "Kōdo",
           "type": "webview",
           "icon": "images/kodo16px.png"
+        }
+      ],
+      "kodo-session": [
+        {
+          "id": "kodo.sessionView",
+          "name": "Kōdo",
+          "type": "webview",
+          "icon": "images/kodo16px.png",
+          "when": "!kodo.dockUnsupported"
         }
       ]
     },
@@ -77,6 +93,21 @@
         "icon": "images/kodo16px.png"
       },
       {
+        "command": "kodo.dock.newSession",
+        "title": "Kōdo: New Session in Side Bar",
+        "icon": "$(add)"
+      },
+      {
+        "command": "kodo.dock.pickSession",
+        "title": "Kōdo: Open Session in Side Bar…",
+        "icon": "$(history)"
+      },
+      {
+        "command": "kodo.dock.moveToTab",
+        "title": "Kōdo: Move Side Bar Session to Editor Tab",
+        "icon": "$(link-external)"
+      },
+      {
         "command": "kodo.addFeedback",
         "title": "Kōdo: Add Feedback"
       },
@@ -91,6 +122,21 @@
           "command": "kodo.openSettings",
           "when": "view == kodo.view",
           "group": "navigation"
+        },
+        {
+          "command": "kodo.dock.newSession",
+          "when": "view == kodo.sessionView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "kodo.dock.pickSession",
+          "when": "view == kodo.sessionView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kodo.dock.moveToTab",
+          "when": "view == kodo.sessionView",
+          "group": "navigation@3"
         }
       ],
       "editor/title": [
@@ -104,6 +150,20 @@
           "command": "kodo.addFeedback",
           "when": "resourceScheme == kodo-review && editorHasSelection",
           "group": "kodo"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "kodo.dock.newSession",
+          "when": "!kodo.dockUnsupported"
+        },
+        {
+          "command": "kodo.dock.pickSession",
+          "when": "!kodo.dockUnsupported"
+        },
+        {
+          "command": "kodo.dock.moveToTab",
+          "when": "!kodo.dockUnsupported"
         }
       ]
     }

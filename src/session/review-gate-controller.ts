@@ -10,6 +10,7 @@ import * as vscode from 'vscode';
 import type { Envelope } from '../envelope';
 import { makeResponse } from '../envelope';
 import { buildReviewUris, clearReviewContent, setReviewContent } from '../file-review-provider';
+import type { SessionHost } from './session-host';
 import type { FileReviewData } from './types';
 
 type Post = (msg: Record<string, unknown>) => void;
@@ -34,7 +35,7 @@ export class ReviewGateController {
   private uris: { oldUri?: vscode.Uri; newUri: vscode.Uri } | null = null;
 
   constructor(
-    private readonly panel: vscode.WebviewPanel,
+    private readonly host: SessionHost,
     private readonly post: Post,
   ) {}
 
@@ -90,9 +91,11 @@ export class ReviewGateController {
 
   /**
    * Open the pending review's companion tab: a plain read-only doc for a new
-   * file, a native diff for a modification. Reveals this session's panel
-   * first so `ViewColumn.Beside` lands the tab next to it regardless of what
-   * the user was previously looking at. Closes any tab a *previous* review
+   * file, a native diff for a modification. Reveals this session's host
+   * first so a tab session's `ViewColumn.Beside` lands the companion next to
+   * it regardless of what the user was previously looking at (a docked
+   * session opens it in the active editor group instead —
+   * `SessionHost.reviewColumn`). Closes any tab a *previous* review
    * in this same session left open first, so reviews don't accumulate
    * editor splits (e.g. a crash-resume re-fire for the same call).
    */
@@ -110,7 +113,7 @@ export class ReviewGateController {
     }
     this.uris = uris;
 
-    this.panel.reveal();
+    this.host.reveal();
     try {
       if (review.mode === 'modification' && uris.oldUri) {
         await vscode.commands.executeCommand(
@@ -118,11 +121,11 @@ export class ReviewGateController {
           uris.oldUri,
           uris.newUri,
           `${review.path} (Review)`,
-          { viewColumn: vscode.ViewColumn.Beside, preview: false },
+          { viewColumn: this.host.reviewColumn, preview: false },
         );
       } else {
         await vscode.window.showTextDocument(uris.newUri, {
-          viewColumn: vscode.ViewColumn.Beside,
+          viewColumn: this.host.reviewColumn,
           preview: false,
         });
       }

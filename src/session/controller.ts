@@ -1,9 +1,10 @@
 /**
- * SessionController — one Kōdo session bound to one WebView panel (a native VS
- * Code editor tab) and its own WebSocket connection to the singleton server.
+ * SessionController — one Kōdo session bound to one webview host (a native VS
+ * Code editor tab, or the Secondary Side Bar's docked session view — see
+ * {@link SessionHost}) and its own WebSocket connection to the singleton server.
  *
  * A VS Code window hosts many of these at once. Each owns:
- *   - a `WebviewPanel` (the visible tab),
+ *   - a {@link SessionHost} (the visible tab or docked view),
  *   - a dedicated `WsClient` (one session == one connection, so the server
  *     detects this session's disconnect via the socket closing, exactly as
  *     before — see SessionManager.drop_connection),
@@ -49,6 +50,7 @@ import { AttachmentManager } from './attachment-manager';
 import { ModeToggleController } from './mode-toggle-controller';
 import { PromptGateManager } from './prompt-gate-manager';
 import { ReviewGateController } from './review-gate-controller';
+import type { SessionHost, SessionPlacement } from './session-host';
 import type {
   AgentRunRequest,
   AgentStartRequest,
@@ -68,10 +70,13 @@ export class SessionController {
   /** True when opened blank (no id) → apply new-session defaults on hello.ack. */
   private readonly isNewSession: boolean;
 
-  private readonly panel: vscode.WebviewPanel;
+  private readonly host: SessionHost;
   private readonly ws: WsClient;
   private connected = false;
   private disposed = false;
+  /** Leaving this host for another one in this window (`handOff`): close
+   *  without releasing, so the next host reclaims the session. */
+  private handingOff = false;
 
   private deleting = false;
   private resolveDeleteProgress: (() => void) | null = null;
@@ -110,7 +115,7 @@ export class SessionController {
 
   constructor(
     private readonly deps: SessionDeps,
-    panel: vscode.WebviewPanel,
+    host: SessionHost,
     sessionId: string,
     // Set only for a brand-new session opened to run a non-interactive agent
     // (`agent.run`) or a benchmark (`harbor.run`): sent once the server
@@ -120,7 +125,7 @@ export class SessionController {
     this.key = `session-${++_keySeq}`;
     this.sessionId = sessionId;
     this.isNewSession = sessionId === '';
-    this.panel = panel;
+    this.host = host;
     this.uiSettings = deps.getUiSettings();
     this.samplingContext = deps.getSamplingContext(null);
 
@@ -128,26 +133,19 @@ export class SessionController {
     const send = (env: Envelope) => this._sendStamped(env);
     this.attachments = new AttachmentManager(post, deps.getProjectRoot);
     this.gates = new PromptGateManager(post);
-    this.review = new ReviewGateController(panel, post);
+    this.review = new ReviewGateController(host, post);
     this.modeToggle = new ModeToggleController(deps.getThinkingContext(null), post, send);
-    this.activity = new ActivityCache(panel, post);
+    this.activity = new ActivityCache(host, post);
 
-    panel.iconPath = vscode.Uri.file(
-      path.join(deps.context.extensionPath, 'images', 'kodo16px.png'),
-    );
-    const webviewJsUri = panel.webview.asWebviewUri(
+    const webviewJsUri = host.webview.asWebviewUri(
       vscode.Uri.file(path.join(deps.context.extensionPath, 'dist', 'webview.js')),
     );
-    panel.webview.html = buildHtml(webviewJsUri, generateNonce());
-    panel.webview.onDidReceiveMessage((msg: Record<string, unknown>) => this._onWebviewMessage(msg));
-    panel.onDidDispose(() => this._onDispose());
+    host.webview.html = buildHtml(webviewJsUri, generateNonce());
+    host.onMessage((msg) => this._onWebviewMessage(msg));
+    host.onClosed(() => this._onDispose());
     // A bound session puts its own LLM into the sidebar when its tab comes to
-    // the front (kodo/doc/SESSION_LLM_BINDING.md §5).
-    panel.onDidChangeViewState((e) => {
-      if (e.webviewPanel.active) {
-        this.deps.onActivated(this);
-      }
-    });
+    // the front, or its webview takes focus (kodo/doc/SESSION_LLM_BINDING.md §5).
+    host.onActivated(() => this.deps.onActivated(this));
 
     this.ws = new WsClient(
       deps.wsUrl,
@@ -157,9 +155,39 @@ export class SessionController {
     this.ws.connect();
   }
 
-  /** Bring this session's tab to the foreground. */
+  /** Bring this session's tab (or the docked view) to the foreground. */
   reveal(): void {
-    this.panel.reveal();
+    this.host.reveal();
+  }
+
+  /** Where this session is shown. */
+  get placement(): SessionPlacement {
+    return this.host.placement;
+  }
+
+  /** Close this session's tab (or lease on the docked view) and release the
+   *  session — back to history, free for any window. */
+  close(): void {
+    this.host.close();
+  }
+
+  /**
+   * Close this session here WITHOUT releasing it, so a new host in this window
+   * picks it straight back up — moving a session between an editor tab and
+   * the docked view (`src/extension/session-dock.ts`). The dropped connection
+   * leaves the session reserved for this window, exactly as across a reload,
+   * and the server replays whatever is still pending (an approval, an edit
+   * review) to the next host's connection.
+   *
+   * The review companion tab is closed and awaited first: the next host
+   * reopens the replayed review under the same URIs, and this host's close
+   * landing after that would read to it as the user closing the review tab —
+   * an implicit reject.
+   */
+  async handOff(): Promise<void> {
+    this.handingOff = true;
+    await this.review.disposeReviewTab();
+    this.host.close();
   }
 
   /**
@@ -176,9 +204,10 @@ export class SessionController {
     return this.llm;
   }
 
-  /** Whether this session's tab is the active one in its editor group. */
+  /** Whether this session's tab is the active one in its editor group, or
+   *  its docked view is visible. */
   get isPanelActive(): boolean {
-    return this.panel.active;
+    return this.host.active;
   }
 
   /**
@@ -206,9 +235,10 @@ export class SessionController {
     this._postLlmState();
   }
 
-  /** True when this session's tab is the foreground tab and its connection is ready. */
+  /** True when this session's tab is the foreground tab (or its docked view is
+   *  visible) and its connection is ready. */
   get isActiveAndReady(): boolean {
-    return this.panel.active && this.connected && this.sessionId !== '';
+    return this.host.active && this.connected && this.sessionId !== '';
   }
 
   /** Mirrors the private field's doc comment — read by `createProject()`'s
@@ -257,7 +287,7 @@ export class SessionController {
     } else if (this.deleting) {
       // The server closed the socket after deleting the session → success.
       // Close the tab (the progress notification clears as the panel disposes).
-      this.panel.dispose();
+      this.host.close();
     }
   }
 
@@ -290,7 +320,7 @@ export class SessionController {
   }
 
   private _post(msg: Record<string, unknown>): void {
-    void this.panel.webview.postMessage(msg);
+    this.host.post(msg);
   }
 
   // ------------------------------------------------------------------
@@ -308,9 +338,10 @@ export class SessionController {
       this.resolveDeleteProgress();
       this.resolveDeleteProgress = null;
     }
-    if (!this.deps.isDeactivating() && this.sessionId && !this.deleting) {
+    if (!this.deps.isDeactivating() && this.sessionId && !this.deleting && !this.handingOff) {
       // Explicit user close: free immediately (skip the disconnect grace).
-      // (When deleting, the session is already gone — no release needed.)
+      // (When deleting, the session is already gone — no release needed;
+      // when handing off, the next host in this window is about to reclaim it.)
       this._sendStamped(makeRequest('session.release', { session_id: this.sessionId }));
     }
     // Best-effort: don't leave an orphaned review companion tab behind for a
@@ -579,7 +610,7 @@ export class SessionController {
 
     if (!this.sessionId) {
       // Nothing persisted on the server yet — just close the tab.
-      this.panel.dispose();
+      this.host.close();
       return;
     }
 
@@ -1044,7 +1075,7 @@ export class SessionController {
       void vscode.window.showWarningMessage(
         'This Kōdo session is open in another window. Close it there first to reopen it here.',
       );
-      this.panel.dispose();
+      this.host.close();
       return;
     }
 
@@ -1086,7 +1117,7 @@ export class SessionController {
     this._adoptLlm(state?.llm);
     // A restored tab that is already in front fires no view-state change, so
     // put its LLM into the sidebar now (a no-op while it is unbound).
-    if (this.panel.active) {
+    if (this.host.active) {
       this.deps.onActivated(this);
     }
 
@@ -1168,7 +1199,7 @@ export class SessionController {
 
   /** A run can take hours: say when it ends, unless its tab is in front. */
   private _notifyBenchmarkFinished(outcome: string): void {
-    if (this.panel.active) {
+    if (this.host.active) {
       return;
     }
     const ended: Record<string, string> = {
@@ -1177,7 +1208,7 @@ export class SessionController {
       stopped: 'was stopped',
       interrupted: 'was interrupted',
     };
-    const message = `Kōdo: ${this.panel.title} ${ended[outcome] ?? 'ended'}.`;
+    const message = `Kōdo: ${this.host.label} ${ended[outcome] ?? 'ended'}.`;
     const show = outcome === 'failed' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
     void show(message, 'Show').then((choice) => {
       if (choice === 'Show') {
