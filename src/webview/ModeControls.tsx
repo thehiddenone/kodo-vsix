@@ -69,7 +69,7 @@ interface ModeControlsProps {
 }
 
 /**
- * The "Session Parameters" button and the popup it opens, holding the four
+ * The "Session" button and the popup it opens, holding the four
  * per-session single-choice groups (Mode, Edit Control, Tool Control,
  * Thinking). It replaced a stack of five cycling toggle buttons — the
  * groups, their values and the messages they post are unchanged, so there is no
@@ -85,7 +85,7 @@ interface ModeControlsProps {
  *
  * This renders only the button and its popup, NOT the composer's left column:
  * the column (`styles.sessionCol`) is App.tsx's, because the other buttons
- * beside this one — Agent and Sampling Parameters — are driven by state and
+ * beside this one — Agent and Sampling — are driven by state and
  * handlers that live there (or, for Agent, in `AgentButton.tsx`).
  */
 export function ModeControls({
@@ -124,7 +124,7 @@ export function ModeControls({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        Session Parameters
+        Session
       </button>
       {open && (
         <div style={menuStyle} role="menu" aria-label="Session settings">

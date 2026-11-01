@@ -699,7 +699,7 @@ export function App() {
     state.pendingStuckAlert !== null ||
     state.pendingFileReview !== null;
   const inputDisabled = !state.connected || isRunning || isBlocked;
-  // The Sampling Parameters button in the composer's left column: shown always,
+  // The Sampling button in the composer's left column: shown always,
   // disabled when the active model exposes nothing to tune, so the column never
   // changes shape as models come and go.
   const samplingDisabled = !state.connected || state.samplingModel === '';
@@ -980,12 +980,12 @@ export function App() {
         </div>
       ) : (
         <div style={styles.composerRow}>
-          {/* Left column: three 242px buttons, each level with a row of the
-              right-hand grid. Agent and Session Parameters each open their own
-              anchored popup (AgentButton / ModeControls); Sampling Parameters
-              opens a modal instead. The column itself lives here rather than
-              in either button's own component because Sampling Parameters is
-              driven by App's own state and handlers. */}
+          {/* Left column: three buttons, each level with a row of the
+              right-hand grid. Agent and Session each open their own anchored
+              popup (AgentButton / ModeControls); Sampling opens a modal
+              instead. The column itself lives here rather than in either
+              button's own component because Sampling is driven by App's own
+              state and handlers. */}
           <div style={styles.sessionCol}>
             <AgentButton
               topAgent={state.topAgent}
@@ -1024,7 +1024,7 @@ export function App() {
                   : `Sampling parameters for ${state.samplingModel}`
               }
             >
-              Sampling Parameters
+              Sampling
             </button>
           </div>
           {/* Centre column: the prompt box (the only part that grows) over a
@@ -1058,8 +1058,8 @@ export function App() {
 
               So send gives up its bottom row to reconnect rather than the grid
               carrying a third column that is empty almost all the time. Both
-              states occupy the same 124px × 112px footprint, so nothing beside
-              the grid moves when the workspace opens or closes. */}
+              states occupy the same footprint, so nothing beside the grid
+              moves when the workspace opens or closes. */}
           <div style={styles.composerRight}>
             <FooterButton
               style={{

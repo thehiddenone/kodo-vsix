@@ -14,7 +14,7 @@ import type { SessionController } from '../session/controller';
 import { ensureResumeTargetExists, fetchRememberedWorkspaceFor, reloadWindowIntoTarget } from './session-resume';
 import { state } from './state';
 import { armWindowIdContinuity } from './window-id';
-import { addWorkspaceFolder, findActiveSession, newSession } from './window-sessions';
+import { addWorkspaceFolder, findActiveSession, startBlankSession } from './window-sessions';
 import { resumeTarget } from '../workspace-resume-policy';
 
 /**
@@ -52,21 +52,24 @@ async function pickCodeWorkspaceFile(): Promise<string | null> {
 }
 
 /**
- * Poll `controller.isActiveAndReady` until it's true (WS connected + the
- * server's `hello.ack` assigned a session id) or `timeoutMs` elapses. Used
- * right after `newSession()` to know when a freshly opened tab is actually
- * usable for `project.create`, since both connecting and the id assignment
- * are async.
+ * Poll `findActiveSession` until it finds a session that is in front, connected
+ * and assigned a session id by the server's `hello.ack`, or `timeoutMs`
+ * elapses. Used right after `startBlankSession()` to know when the freshly
+ * started session is actually usable for `project.create`, since showing it
+ * (in the docked view or a tab), connecting and the id assignment are all
+ * async — and the docked view's controller is created asynchronously too, so
+ * there is no controller to watch until then.
  */
-async function waitForSessionReady(controller: SessionController, timeoutMs = 15_000): Promise<boolean> {
+async function waitForActiveSession(timeoutMs = 15_000): Promise<SessionController | undefined> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (controller.isActiveAndReady) {
-      return true;
+    const active = findActiveSession();
+    if (active) {
+      return active;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return controller.isActiveAndReady;
+  return findActiveSession();
 }
 
 /**
@@ -78,15 +81,17 @@ async function waitForSessionReady(controller: SessionController, timeoutMs = 15
  * the identical placement `CreateNewProjectTool`'s has-workspace branch uses
  * (`EngineCore._create_project`, doc/WS_PROTOCOL.md).
  *
- * `project.create` needs an open, foreground, ready session tab to route the
- * request through. If none is open, one is opened here (rather than failing)
- * so "Create Project" works from a bare window with no session tab yet.
+ * `project.create` needs an open, foreground, ready session to route the
+ * request through. If none is, one is started here (rather than failing), in
+ * the docked view or a tab like any user-started session (`startBlankSession`),
+ * so "Create Project" works from a bare window with no session yet.
  */
 async function promptCreateProjectName(): Promise<string | null> {
   let active = findActiveSession();
   if (!active) {
-    active = newSession();
-    if (!(await waitForSessionReady(active))) {
+    startBlankSession();
+    active = await waitForActiveSession();
+    if (!active) {
       vscode.window.showErrorMessage(
         'Kōdo: could not start a new session to create the project in — try again.',
       );

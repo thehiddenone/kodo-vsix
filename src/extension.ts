@@ -68,7 +68,7 @@ import { pickSession } from './extension/session-resume';
 import { SESSION_VIEW_ID, SessionDock } from './extension/session-dock';
 import { onWindowFocused } from './extension/session-llm-sync';
 import { state } from './extension/state';
-import { adoptPanel, consumeSerializerDead, newSession, openPanel } from './extension/window-sessions';
+import { adoptPanel, consumeSerializerDead, openPanel, startBlankSession } from './extension/window-sessions';
 import { stableWindowId } from './extension/window-id';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -210,7 +210,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (msg.type === 'list_sessions') {
         void pickSession();
       } else if (msg.type === 'new_session') {
-        newSession();
+        startBlankSession();
       } else if (msg.type === 'set_mode') {
         setMode(msg.mode);
       } else if (msg.type === 'set_active_model') {
@@ -289,7 +289,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // kodo-settings-bridge.ts directly without a circular import) jump
     // straight to a tab; the Command Palette invocation passes none.
     vscode.commands.registerCommand('kodo.openSettings', (selectSection?: string) => void openKodoSettings(selectSection)),
-    vscode.commands.registerCommand('kodo.newSession', () => newSession()),
+    vscode.commands.registerCommand('kodo.newSession', () => startBlankSession()),
     vscode.commands.registerCommand('kodo.createProject', () => createProject()),
     vscode.commands.registerCommand('kodo.useCloudLLMs', () => setMode('cloud')),
     vscode.commands.registerCommand('kodo.useLocalLLM', () => setMode('local')),

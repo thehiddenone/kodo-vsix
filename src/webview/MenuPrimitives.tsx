@@ -4,9 +4,10 @@ import { styles } from './styles';
 
 /**
  * Popup open/close state and dismissal mechanics shared by every composer
- * button that opens an anchored menu (Agent, Session Parameters): tracks
- * whether the popup is open, measures how much room it has above the button
- * (it grows upward out of the bottom of the WebView), and closes it on an
+ * button that opens an anchored menu (Agent, Session): tracks whether the
+ * popup is open, measures how much room it has above the button (it grows
+ * upward out of the bottom of the WebView) and to the right of the button's
+ * left edge (where it is anchored), and closes it on an
  * outside click, Escape, focus moving elsewhere, or the session disconnecting.
  * Extracted from ModeControls.tsx when the Agent group moved into its own
  * button/popup, so both share identical dismissal behavior rather than two
@@ -14,16 +15,17 @@ import { styles } from './styles';
  */
 export function useMenuPopup(connected: boolean) {
   const [open, setOpen] = useState(false);
-  // Null until measured (the first paint of a freshly opened menu), which is
-  // also what a `null` maxHeight renders as: uncapped.
-  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  // Null until measured (the first layout of a freshly opened menu), which
+  // renders as the stylesheet's own caps: none on height, a viewport-wide one
+  // on width.
+  const [room, setRoom] = useState<{ maxHeight: number; maxWidth: number } | null>(null);
   // Wraps button + popup; every close rule below is "did this happen outside
   // *this* element?".
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     if (!open) {
-      setMaxHeight(null);
+      setRoom(null);
       return;
     }
     const el = wrapRef.current;
@@ -32,7 +34,14 @@ export function useMenuPopup(connected: boolean) {
     }
     // The popup's bottom edge sits on the button's top edge, so the room it has
     // is everything above that, less a small margin off the top of the view.
-    setMaxHeight(Math.max(120, el.getBoundingClientRect().top - 12));
+    // Its left edge sits on the button's left edge — wherever composerRow's
+    // centring has put it — so its width is capped at the room right of that,
+    // less the same margin.
+    const rect = el.getBoundingClientRect();
+    setRoom({
+      maxHeight: Math.max(120, rect.top - 12),
+      maxWidth: Math.max(rect.width, document.documentElement.clientWidth - rect.left - 12),
+    });
   }, [open]);
 
   useEffect(() => {
@@ -80,7 +89,9 @@ export function useMenuPopup(connected: boolean) {
   }, [connected]);
 
   const menuStyle =
-    maxHeight === null ? styles.sessionMenu : { ...styles.sessionMenu, maxHeight: `${maxHeight}px` };
+    room === null
+      ? styles.sessionMenu
+      : { ...styles.sessionMenu, maxHeight: `${room.maxHeight}px`, maxWidth: `${room.maxWidth}px` };
 
   return { open, setOpen, wrapRef, menuStyle };
 }

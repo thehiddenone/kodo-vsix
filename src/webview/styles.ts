@@ -1,4 +1,14 @@
 // Inline style objects shared across the Kōdo WebView components.
+
+// COMPOSER_SIDE_WIDTH — the width of *both* outer button clusters of the prompt
+// composer: the left column's Agent / Session / Sampling buttons and the right
+// column's 2×3 grid. Equal on purpose: `composerRow` centres the whole
+// [left | prompt | right] group once the prompt hits its 800px cap, and equal
+// sides are what keep the prompt itself centred in the panel. 150px fits the
+// longest left label — a 16-character agent name plus "…" (AgentButton.tsx) —
+// at 14px with the button's 8px padding.
+const COMPOSER_SIDE_WIDTH = '150px';
+
 export const styles = {
   root: {
     fontFamily: 'var(--vscode-editor-font-family, monospace)',
@@ -218,22 +228,14 @@ export const styles = {
     flexShrink: 0,
   },
   // Left column of the composer (composerRow): the Agent button
-  // (AgentButton.tsx), the Session Parameters button (ModeControls.tsx, which
+  // (AgentButton.tsx), the Session button (ModeControls.tsx, which
   // holds the four remaining per-session controls that used to be a stack of
-  // five cycling toggles before Agent had its own popup), and Sampling
-  // Parameters.
+  // five cycling toggles before Agent had its own popup), and the Sampling
+  // button.
   sessionCol: {
-    // 290px = SESSION_BTN_WIDTH (242px) + 24px of slack either side. This used
-    // to equal composerRight's own fixed 240px (both were "the same
-    // COMPOSER_SIDE_WIDTH"), but the two were deliberately decoupled when the
-    // buttons were widened by 50px to fit "Agent: <name>" without truncating —
-    // composerRight's own 56px-glyph buttons had no such problem and were left
-    // at 240px, so only this column grew. `composerCenter`'s `flex: 1 1 auto`
-    // absorbs the extra 50px on its own, and the 24px-of-slack symmetry with
-    // composerRight's inset (see that key's comment) is preserved because both
-    // the column and the buttons inside it grew by the same 50px — see
-    // `sessionBtn`.
-    flex: '0 0 290px',
+    // COMPOSER_SIDE_WIDTH, filled edge to edge by its buttons: no slack either
+    // side, so the 32px `composerRow` gap is the whole distance to the prompt.
+    flex: `0 0 ${COMPOSER_SIDE_WIDTH}`,
     boxSizing: 'border-box' as const,
     // COMPOSER_GRID_HEIGHT: deliberately the same height as composerRight's
     // button grid (3 rows of 32px + 2 gaps of 8px = 112px), written as the same
@@ -245,17 +247,12 @@ export const styles = {
     height: 'calc(3 * 32px + 2 * 8px)',
     display: 'flex',
     flexDirection: 'column' as const,
-    // The three buttons — Agent, Session Parameters, Sampling Parameters —
-    // are 32px tall with an 8px gap, i.e. exactly composerRight's
-    // row track and row gap, so 3 × 32 + 2 × 8 fills this 112px box precisely
-    // and each left button sits level with the grid row beside it. There is no
-    // paddingRight (the old toggle column had one to line its ⓘ markers up with
-    // the right column's inset): the 242px buttons are centred in the 290px
-    // column, leaving 24px of slack either side, which is exactly the inset
-    // composerRight uses — that symmetry is the point, and is why the column
-    // grew by the same 50px as the buttons rather than only the buttons.
+    // The three buttons — Agent, Session, Sampling — are 32px tall with an
+    // 8px gap, i.e. exactly composerRight's row track and row gap, so
+    // 3 × 32 + 2 × 8 fills this 112px box precisely and each left button sits
+    // level with the grid row beside it.
     justifyContent: 'flex-start' as const,
-    alignItems: 'center' as const,
+    alignItems: 'stretch' as const,
     gap: '8px',
   },
   // Wraps only the button, and is the popup's positioning context: the popup is
@@ -263,22 +260,16 @@ export const styles = {
   // button's top-left corner whatever the column around it does.
   sessionBtnWrap: {
     position: 'relative' as const,
-    // SESSION_BTN_WIDTH — must equal `sessionBtn`'s own width (this element
-    // wraps one of them: Agent and Session Parameters each anchor a popup).
-    // 242px = the original 192px + 50px, widened so "Agent: <name>" fits
-    // without ellipsis-truncating for the longer built-in agent names. It must
-    // stay under the column's 290px — `sessionCol` centres it, and the popup's
-    // maxWidth below is derived from the slack either side.
-    width: '242px',
+    // COMPOSER_SIDE_WIDTH — must equal `sessionBtn`'s own width (this element
+    // wraps one of them: Agent and Session each anchor a popup).
+    width: COMPOSER_SIDE_WIDTH,
     flex: 'none' as const,
   },
   sessionBtn: {
-    // SESSION_BTN_WIDTH, stated outright rather than as `100%`: one of the
-    // three buttons that uses this style (Sampling Parameters) sits directly
-    // in `sessionCol` (a 290px flex column), where `100%` would stretch it to
-    // 290px. Agent and Session Parameters are each wrapped in a 242px
-    // `sessionBtnWrap` instead, since each anchors its own popup.
-    width: '242px',
+    // COMPOSER_SIDE_WIDTH, the full width of `sessionCol`. Sampling sits
+    // directly in the column; Agent and Session are each wrapped in a
+    // `sessionBtnWrap` of the same width, since each anchors its own popup.
+    width: COMPOSER_SIDE_WIDTH,
     // Matches composerRight's 32px grid row, so the three left buttons line up
     // with the three button rows across the textarea.
     height: '32px',
@@ -325,14 +316,13 @@ export const styles = {
     // option descriptions get a comfortable measure instead of wrapping every
     // few words.
     width: '960px',
-    // The popup's left edge sits at the button's left edge, which is 36px into
-    // the viewport (12px of `root` padding + 24px of slack left of the 242px
-    // button inside the 290px column) — unchanged by the 50px widening, since
-    // both grew together and centring keeps the slack itself fixed at 24px. So
-    // cap on that offset plus a 12px right margin, not on a blanket `90vw` —
-    // which would overhang the right edge of a narrow panel. Re-derive this if
-    // the button's width changes without the column also growing to match.
-    maxWidth: 'calc(100vw - 48px)',
+    // The popup's left edge sits at the button's left edge, which moves once
+    // `composerRow` centres a wide composer, so the real cap — the room from
+    // that edge to the viewport's right edge, less a 12px margin — is measured
+    // on open by `useMenuPopup` and applied inline. This is only the bound for
+    // the unmeasured first layout: the button's leftmost position (12px of
+    // `root` padding) plus the same 12px margin.
+    maxWidth: 'calc(100vw - 24px)',
     boxSizing: 'border-box' as const,
     overflowY: 'auto' as const,
     padding: '6px 0',
@@ -1835,12 +1825,13 @@ export const styles = {
   },
   // Prompt composer — three columns: the fixed-width Session button column
   // (sessionCol), the responsive centre (composerCenter: textarea +
-  // attachment row), and the fixed button grid (composerRight). `flex-end`
-  // keeps the two fixed columns pinned to the bottom of the WebView while
-  // only the textarea in the middle grows upward.
+  // attachment row, capped at 800px), and the fixed button grid
+  // (composerRight). `flex-end` keeps the two fixed columns pinned to the
+  // bottom of the WebView while only the textarea in the middle grows upward.
   // Read-only stand-in for composerRow in a session started by `agent.run`
-  // (the agent takes no input): one line of status, then Stop and Delete at
-  // the same 56px × 32px size they have in composerRight's grid.
+  // (the agent takes no input): one line of status, then 56px × 32px Stop and
+  // Delete buttons. Deliberately not given composerRow's 800px cap and
+  // centring (user's choice).
   // A benchmark session's view (BenchmarkPanel), in place of the chat feed.
   benchmark: {
     display: 'flex',
@@ -1929,7 +1920,12 @@ export const styles = {
   composerRow: {
     display: 'flex',
     alignItems: 'flex-end',
-    gap: '10px',
+    // Centres the [left | prompt | right] group once the prompt reaches its
+    // 800px cap (composerCenter); below that the group fills the row, so the
+    // two clusters sit at the panel's edges. Either way each cluster stays
+    // exactly this 32px gap away from the prompt.
+    justifyContent: 'center' as const,
+    gap: '32px',
     paddingTop: '6px',
     // Never squeezed by the transcript above it, however long that grows.
     flexShrink: 0,
@@ -1946,63 +1942,38 @@ export const styles = {
     // fixed columns never shrink, so this one must be free to (`minWidth: 0`,
     // overriding the textarea's content-based minimum).
     minWidth: 0,
+    // Past this the extra width goes to composerRow's centring, not the prompt.
+    maxWidth: '800px',
     alignSelf: 'stretch',
     display: 'flex',
     flexDirection: 'column' as const,
   },
-  // Right column: its own fixed `0 0 240px` — no longer the same width as
-  // `sessionCol` (290px, widened 50px for the Agent/Session Parameters
-  // buttons; see that key's comment), since nothing here has a text-fitting
-  // problem to solve — holding a 2×3 grid of 56px × 32px cells inset from the
-  // centre column by 24px. Each button is explicitly placed (gridColumn/
-  // gridRow on its own style) rather than flowed.
+  // Right column: a 2×3 grid filling COMPOSER_SIDE_WIDTH, the same width as
+  // `sessionCol`, so the two clusters mirror each other across the prompt.
+  // Each button is explicitly placed (gridColumn/gridRow on its own style)
+  // rather than flowed.
   //
   // Column 1 is the send button, spanning every row that reconnect does not
-  // need; column 2 stacks attach / stop / delete. There is **no third column**:
-  // reconnect, the one conditional button, now shares column 1 with send —
-  // taking its bottom row and shortening send from a 3-row span to a 2-row one
-  // while the session's workspace is closed. That keeps the grid's footprint
-  // identical either way, which is what a reserved-but-empty third column used
-  // to buy at the cost of a column's width.
+  // need; column 2 stacks attach / stop / delete. Reconnect, the one
+  // conditional button, shares column 1 with send — taking its bottom row and
+  // shortening send from a 3-row span to a 2-row one while the session's
+  // workspace is closed — so the grid's footprint is identical either way.
   //
   // Its 3 × 32 + 2 × 8 = 112px height is the whole composer's at-rest height,
   // and `sessionCol` mirrors it (COMPOSER_GRID_HEIGHT) so each left-hand button
-  // lands on a grid row. There is no bottom padding: the old
-  // `calc((5 * 26px + 4 * 6px) - …)` existed only to stretch this grid to a
-  // five-toggle stack that no longer exists.
+  // lands on a grid row.
   //
-  // **What is symmetric here is the 24px inset, not the total width.** The grid
-  // measures 2 × 56 + 1 × 12 = 124px, well short of the left column's 242px of
-  // buttons, and the remaining ~92px is slack at the far right edge of the
-  // panel — where there is nothing to align against, so it costs nothing. The
-  // inset is what matters: it mirrors the 24px of slack left of the left
-  // column's buttons, so the textarea is flanked by two identical 34px gutters
-  // (24px + composerRow's 10px gap). **That is the symmetry to preserve** —
-  // and it is preserved regardless of `sessionCol`'s own total width, since
-  // that gutter is entirely a function of the 24px inset on each side, not of
-  // how wide the fixed columns are relative to each other.
-  //
-  // The buttons were briefly widened (90px cells, three-column 56px before
-  // that) to make the grid's total width literally equal the left column's own
-  // button width. They looked oversized and were reverted; the options then
-  // were to spread them with an 80px column gap or to narrow the whole column
-  // and give the space to the textarea, and the user chose neither. So:
-  // **don't re-derive the cell width from the left column's button width** —
-  // size the cells for the buttons and keep the inset at 24px.
+  // The cells are (150 − 12) / 2 = 69px wide. They were 56px while the grid
+  // was narrower than the left column; widening them to match the left
+  // buttons was once rejected as oversized (at 90px cells), and the user
+  // chose it at this narrower width.
   composerRight: {
-    flex: '0 0 240px',
-    // border-box so the padding below eats *into* the 240px basis instead of
-    // adding to it.
-    boxSizing: 'border-box' as const,
+    flex: `0 0 ${COMPOSER_SIDE_WIDTH}`,
     display: 'grid',
-    gridTemplateColumns: 'repeat(2, 56px)',
+    gridTemplateColumns: 'repeat(2, 1fr)',
     gridTemplateRows: 'repeat(3, 32px)',
     // row gap, column gap
     gap: '8px 12px',
-    justifyContent: 'start' as const,
-    // Mirrors the 24px of slack left of the left column's buttons, so the
-    // textarea sits between two equal gutters.
-    paddingLeft: '24px',
   },
   input: {
     width: '100%',

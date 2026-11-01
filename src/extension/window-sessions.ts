@@ -12,6 +12,7 @@ import * as cloudCredentials from '../cloud-credentials';
 import { kodoDiagnostics } from '../diagnostics';
 import { makeRequest } from '../envelope';
 import { reconcileSessionAction, reconcileTabAction, reloadWipesSerializerState } from '../reconcile-policy';
+import { supportsSecondarySideBar } from '../secondary-side-bar';
 import type { SessionDeps, SessionLaunch } from '../session/types';
 import { SessionController } from '../session/controller';
 import { PanelSessionHost } from '../session/session-host';
@@ -163,11 +164,38 @@ export function newSession(launch?: SessionLaunch): SessionController {
   return controller;
 }
 
-/** Reveal the most recent open session tab, or start a new one if none are open. */
+/** Whether this window shows sessions in the docked view (VS Code 1.106+,
+ *  `supportsSecondarySideBar`) — and so starts the user's new sessions there. */
+function dockAvailable(): boolean {
+  return state.sessionDock !== null && supportsSecondarySideBar(vscode.version);
+}
+
+/**
+ * Start a blank session the user asked for (the sidebar's New Session, the
+ * `kodo.newSession` command, "New session" in the history picker, Create
+ * Project with no session to run in): in the docked view where this VS Code
+ * has one, releasing the session docked there into history, as the dock's own
+ * New Session does — the user can move the new one out with Move to Editor
+ * Tab. Elsewhere, in a new tab. Agent runs, benchmarks and the Agent Builder
+ * hand-off still open tabs (`newSession`), by the user's choice.
+ */
+export function startBlankSession(): void {
+  if (dockAvailable()) {
+    state.sessionDock!.openSession('');
+  } else {
+    newSession();
+  }
+}
+
+/** Reveal the most recent open session tab. With none open, reveal the docked
+ *  view where there is one — keeping the session it shows, or starting one if
+ *  it has none — and otherwise start a new session in a tab. */
 export function openPanel(): void {
   const last = tabSessions().pop();
   if (last) {
     last.reveal();
+  } else if (dockAvailable()) {
+    state.sessionDock!.show();
   } else {
     newSession();
   }

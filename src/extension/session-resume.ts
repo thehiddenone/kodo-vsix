@@ -20,7 +20,7 @@ import { resolveFutureWindowKeyForCodeWorkspace } from './create-project';
 import { buildFolderMap } from './settings-io';
 import { state } from './state';
 import { armWindowIdContinuity } from './window-id';
-import { armSerializerDead, findBySessionId, newSession, openExistingSession } from './window-sessions';
+import { armSerializerDead, findBySessionId, openExistingSession, startBlankSession } from './window-sessions';
 
 interface SessionPickItem extends vscode.QuickPickItem {
   sessionId?: string;
@@ -158,11 +158,8 @@ export async function pickSession(placement: SessionPlacement = 'tab'): Promise<
     return pickSession(placement);
   }
   if (choice.isNew) {
-    if (placement === 'dock' && state.sessionDock) {
-      state.sessionDock.openSession('');
-    } else {
-      newSession();
-    }
+    // Either picker: a new session goes where every user-started one does.
+    startBlankSession();
     return;
   }
   if (choice.sessionId) {

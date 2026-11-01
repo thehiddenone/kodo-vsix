@@ -724,7 +724,7 @@ export interface State {
   // for the next prompt"; otherwise it is "in effect".
   autonomous: boolean;
   effectiveAutonomous: boolean;
-  /** Per-session top-level agent; picked in this tab's Session Parameters. */
+  /** Per-session top-level agent; picked in this tab's Agent button. */
   topAgent: string;
   effectiveTopAgent: string;
   /** The selectable agents the server offers, in picker order. The picker

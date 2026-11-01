@@ -3,6 +3,7 @@ import { styles } from './styles';
 import { vscode } from './vscode';
 import type { AgentRow } from './types';
 import { MenuGroup, MenuOption, frozenNote, useMenuPopup } from './MenuPrimitives';
+import { shortAgentLabel } from './agentLabel';
 
 /** A top-level agent's picker label, or `null` if `name` isn't in the catalog
  *  yet (or ever — `judge` is registered but deliberately left out of it since
@@ -32,8 +33,9 @@ interface AgentButtonProps {
 }
 
 /**
- * The "Agent: <name>" button and its single-group popup — split out of
- * Session Parameters so the picker's own catalog fetch (doc/WS_PROTOCOL.md
+ * The agent button — labelled with the selected agent's name alone, shortened
+ * by `shortAgentLabel`, with the full "Agent: <name>" as its tooltip — and its
+ * single-group popup, split out of the Session button so the picker's own catalog fetch (doc/WS_PROTOCOL.md
  * §7.4g `top_agents.list`) is scoped to opening *this* button, not bundled
  * into the unrelated Mode/Edit/Tool/Thinking groups.
  *
@@ -66,10 +68,9 @@ export function AgentButton({ topAgent, effectiveTopAgent, agents, connected, ru
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
+        title={label === null ? 'Agent' : `Agent: ${label}`}
       >
-        {/* No colon-plus-name form for the `null` case: "Agent: Agent" would
-            read as a mistake rather than a placeholder. */}
-        {label === null ? 'Agent' : `Agent: ${label}`}
+        {label === null ? 'Agent' : shortAgentLabel(label)}
       </button>
       {open && (
         <div style={menuStyle} role="menu" aria-label="Agent settings">

@@ -13,7 +13,9 @@
  *     in globalState, like the open-tab list in window-sessions.ts but on a
  *     key of its own, so the reconcile pass never reopens it as a tab — and
  *     a new session when there is none;
- *   - "New Session": a new session; the previous one is released into history;
+ *   - "New Session" — the view's own button, and every new session the user
+ *     starts elsewhere (`startBlankSession` in window-sessions.ts): a new
+ *     session; the previous one is released into history;
  *   - "Open Session from History…": the picked one (`pickSession('dock')`). A
  *     session open in an editor tab here is moved into the dock;
  *   - "Move to Editor Tab": the docked session moves out into a tab and the
@@ -92,6 +94,16 @@ export class SessionDock implements vscode.WebviewViewProvider {
     }
     this.view.show(false);
     this.enqueue(sessionId);
+  }
+
+  /** Reveal the view, keeping the session it shows. Resolving the view the
+   *  first time loads the remembered docked session, or a new one. */
+  show(): void {
+    if (this.view) {
+      this.view.show(false);
+    } else {
+      void vscode.commands.executeCommand(`${SESSION_VIEW_ID}.focus`);
+    }
   }
 
   /** Move the docked session into an editor tab, and start a new one here. */
