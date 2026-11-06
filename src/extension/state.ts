@@ -7,7 +7,7 @@
  */
 
 import type * as vscode from 'vscode';
-import type { BedrockModelInfo, CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, OpenRouterModelInfo, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
+import type { BedrockModelInfo, BedrockTokenStatus, CloudRegistry, KnobDefs, LlamaArgSpec, LocalDownloadState, LocalRegistryEntry, OpenRouterModelInfo, SamplingParamSpec, ThinkingFamilies } from '../llm-registry-types';
 import type { LaunchOutcome } from '../server-attach-policy';
 import type { ServerLauncher } from '../server-launcher';
 import type { SessionController } from '../session/controller';
@@ -91,6 +91,12 @@ interface WindowState {
   // reply. Empty means "not fetched for the configured region yet", which is
   // what triggers `maybeRefreshBedrockCatalog`.
   bedrockCatalogState: BedrockModelInfo[];
+  // The AWS profiles the server can see, for the Bedrock tab's dropdown. Asked
+  // for each time that tab opens, so a profile added to ~/.aws shows up.
+  bedrockProfilesState: string[];
+  // What the Bedrock tab shows about the token in SecretStorage, never the
+  // token itself. Written by extension/bedrock-token.ts.
+  bedrockTokenState: BedrockTokenStatus;
   activeCloudVendorState: string;
   localRegistryState: LocalRegistryEntry[];
   activeLocalModelState: string;
@@ -212,6 +218,8 @@ export const state: WindowState = {
   cloudRegistryState: {},
   openRouterCatalogState: [],
   bedrockCatalogState: [],
+  bedrockProfilesState: [],
+  bedrockTokenState: { hasToken: false, expiresAt: 0, error: '' },
   activeCloudVendorState: DEFAULT_CLOUD_VENDOR,
   localRegistryState: [],
   activeLocalModelState: '',

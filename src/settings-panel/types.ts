@@ -15,6 +15,7 @@ import type {
   LocalDownloadState,
   LocalRegistryEntry,
   BedrockModelInfo,
+  BedrockTokenStatus,
   OpenRouterModelInfo,
   SamplingParamSpec,
 } from '../llm-registry-types';
@@ -573,6 +574,13 @@ export interface KodoSettingsState {
    * A plain setting, not part of the stored credential -- a region is not a
    * secret, and the catalog above is scoped to it. */
   bedrockRegion: string;
+  /** The AWS profile Bedrock's token is minted from; `''` for botocore's
+   * default credential chain (kodo/doc/SETTINGS.md §2.2c). */
+  bedrockProfile: string;
+  /** The AWS profiles the server can see, for the dropdown. */
+  bedrockProfiles: string[];
+  /** The state of the stored token; never the token itself. */
+  bedrockToken: BedrockTokenStatus;
   /** vendor -> its "use one model for all effort levels" shortcut state
    * (kodo/doc/SETTINGS.md's `models.cloud_uniform`). See CloudUniformEntry. */
   cloudUniform: Record<string, CloudUniformEntry>;
@@ -652,6 +660,8 @@ export type KodoSettingsMessage =
   | { type: 'set_openrouter_auto_mode'; enabled: boolean }
   | { type: 'refresh_openrouter_catalog' }
   | { type: 'set_bedrock_region'; region: string }
+  | { type: 'set_bedrock_profile'; profile: string }
+  | { type: 'refresh_bedrock_profiles' }
   | { type: 'refresh_bedrock_catalog' }
   | { type: 'set_cloud_uniform_enabled'; vendor: string; enabled: boolean }
   | { type: 'set_cloud_uniform_model'; vendor: string; model_id: string }

@@ -46,6 +46,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { appendDiag as append, logDiag as log } from './diagnostics';
+import { ProxyTunnelAgent, proxyForUrl } from './https-proxy';
 import { state } from './extension/state';
 
 const IS_WINDOWS = process.platform === 'win32';
@@ -243,12 +244,20 @@ function writeUtilJson(data: UtilJson): void {
 // Download (https, follows redirects)
 // ---------------------------------------------------------------------------
 
+/**
+ * A download fails once no byte has moved for this long — connecting or
+ * mid-transfer. Without it, a host whose egress silently drops packets left
+ * the bootstrap waiting forever with nothing in any log.
+ */
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+
 function downloadToFile(url: string, dest: string, out: vscode.OutputChannel): Promise<void> {
   return new Promise((resolve, reject) => {
     const follow = (u: string, hops = 0): void => {
       if (hops > 10) { reject(new Error('Too many HTTP redirects')); return; }
-      log(out, `[utils] Downloading ${u}`);
-      https.get(u, (res) => {
+      const proxy = proxyForUrl(new URL(u), process.env);
+      log(out, `[utils] Downloading ${u}${proxy ? ` via proxy ${proxy.host}` : ''}`);
+      const req = https.get(u, proxy ? { agent: new ProxyTunnelAgent(proxy) } : {}, (res) => {
         const loc = res.headers.location;
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && loc) {
           log(out, `[utils] HTTP ${res.statusCode} redirect -> ${loc}`);
@@ -266,7 +275,12 @@ function downloadToFile(url: string, dest: string, out: vscode.OutputChannel): P
         file.on('finish', () => file.close(() => { log(out, `[utils] Downloaded to ${dest}`); resolve(); }));
         file.on('error', (e) => { try { fs.unlinkSync(dest); } catch { /* ignore */ } reject(e); });
         res.on('error', reject);
-      }).on('error', reject);
+      });
+      req.on('error', reject);
+      req.setTimeout(DOWNLOAD_IDLE_TIMEOUT_MS, () => {
+        log(out, `[utils] Download stalled: nothing received for ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s from ${u}`);
+        req.destroy(new Error(`no data for ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s from ${u}`));
+      });
     };
     follow(url);
   });

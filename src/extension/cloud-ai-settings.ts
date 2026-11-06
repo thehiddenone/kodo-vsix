@@ -9,10 +9,12 @@ import { kodoDiagnostics } from '../diagnostics';
 import { makeRequest, makeResponse } from '../envelope';
 import type { Envelope } from '../envelope';
 import { KodoSettingsPanel } from '../settings-panel/panel';
-import type { CloudRegistry, CloudUniformEntry, EffortLevel } from '../llm-registry-types';
+import type { BedrockTokenStatus, CloudRegistry, CloudUniformEntry, EffortLevel } from '../llm-registry-types';
 import type { SidebarState } from '../sidebar-provider';
+import { getBedrockToken, isBedrockInUse, syncBedrockToken } from './bedrock-token';
 import { sendControl, sendControlAwait } from './control-send';
 import {
+  readBedrockProfile,
   readBedrockRegion,
   readCloudModels,
   readCloudUniform,
@@ -25,22 +27,22 @@ import { state } from './state';
 import { broadcastThinkingContext } from './thinking-context';
 import { captureIntoActiveSession } from './session-llm-capture';
 
-/** Every vendor that can hold credentials -> its stored API keys.
+/** Every vendor that takes a stored API key -> its keys.
  *
- *  The two aggregators are special-cased in: neither has a
- *  `cloudRegistryState` entry (kodo has no compiled-in model tuple for
- *  either — kodo/doc/LLM_REGISTRY.md §3a/§3b), yet both are real vendors an
- *  API key can be added for, so both must always come back with a
- *  (possibly empty) list rather than `undefined`. */
+ *  OpenRouter is special-cased in: it has no `cloudRegistryState` entry (kodo
+ *  has no compiled-in model tuple for it — kodo/doc/LLM_REGISTRY.md §3a), yet
+ *  it is a real vendor an API key can be added for, so it must always come
+ *  back with a (possibly empty) list rather than `undefined`. Bedrock is left
+ *  out: it has no stored keys, only a token minted from an AWS profile (§3b). */
 function cloudKeysByVendor(): Record<string, cloudCredentials.ApiKeyEntry[]> {
   const keysByVendor: Record<string, cloudCredentials.ApiKeyEntry[]> = {};
   for (const vendor of Object.keys(state.cloudRegistryState)) {
-    keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
-  }
-  for (const vendor of ['openrouter', 'bedrock']) {
-    if (!(vendor in keysByVendor)) {
+    if (vendor !== 'bedrock') {
       keysByVendor[vendor] = cloudCredentials.listKeys(vendor);
     }
+  }
+  if (!('openrouter' in keysByVendor)) {
+    keysByVendor.openrouter = cloudCredentials.listKeys('openrouter');
   }
   return keysByVendor;
 }
@@ -64,6 +66,7 @@ export function cloudModelStateForSidebar(): Pick<
   for (const [vendor, keys] of Object.entries(cloudKeysByVendor())) {
     cloudHasKey[vendor] = keys.length > 0;
   }
+  cloudHasKey.bedrock = state.bedrockTokenState.hasToken;
   return {
     cloudModels: readCloudModels(),
     cloudUniform: readCloudUniform(),
@@ -84,6 +87,9 @@ export function cloudAiStateForPanel(): {
   openRouterAutoMode: boolean;
   bedrockCatalog: import('../llm-registry-types').BedrockModelInfo[];
   bedrockRegion: string;
+  bedrockProfile: string;
+  bedrockProfiles: string[];
+  bedrockToken: BedrockTokenStatus;
   cloudUniform: Record<string, CloudUniformEntry>;
 } {
   return {
@@ -95,6 +101,9 @@ export function cloudAiStateForPanel(): {
     openRouterAutoMode: readOpenRouterAutoMode(),
     bedrockCatalog: state.bedrockCatalogState,
     bedrockRegion: readBedrockRegion(),
+    bedrockProfile: readBedrockProfile(),
+    bedrockProfiles: state.bedrockProfilesState,
+    bedrockToken: state.bedrockTokenState,
     cloudUniform: readCloudUniform(),
   };
 }
@@ -119,6 +128,9 @@ export function setActiveCloudVendor(vendor: string): void {
   sendControl(makeRequest('config.reload'));
   state.activeCloudVendorState = vendor;
   state.sidebarProvider?.update({ activeCloudVendor: vendor });
+  if (vendor === 'bedrock') {
+    void maybeRefreshBedrockCatalog();
+  }
   // Each cloud vendor has its own thinking-tier family (kodo/doc/
   // LLM_REGISTRY.md §4.5a), so switching vendors changes which tiers the
   // footer's Thinking Level toggle offers -- same reason setMode already
@@ -234,12 +246,41 @@ export async function refreshOpenRouterCatalog(): Promise<void> {
 export function setBedrockRegion(region: string): void {
   writeSettings({ bedrock_region: region });
   sendControl(makeRequest('config.reload'));
-  // The cached catalog belongs to the old region — drop it immediately so the
-  // picker doesn't offer models that may not exist in the new one while the
-  // refresh is in flight.
+  void reloadForNewBedrockIdentity();
+}
+
+/** The AWS profile Bedrock's token is minted from (kodo/doc/SETTINGS.md §2.2c),
+ *  `''` for botocore's default credential chain. The catalog is fetched per
+ *  account, so a new profile can offer different models. */
+export function setBedrockProfile(profile: string): void {
+  writeSettings({ bedrock_profile: profile });
+  sendControl(makeRequest('config.reload'));
+  void reloadForNewBedrockIdentity();
+}
+
+/** After a profile or region change: the stored token and the cached catalog
+ *  both belong to the old pair, and the user just picked this one, so mint now
+ *  rather than at the next turn. A failure shows on the Bedrock tab. */
+async function reloadForNewBedrockIdentity(): Promise<void> {
+  // Dropped immediately so the picker doesn't offer models that may not exist
+  // for the new pair while the refresh is in flight.
   state.bedrockCatalogState = [];
+  await syncBedrockToken();
+  try {
+    await refreshBedrockCatalog();
+  } catch {
+    // recordFailure already put a token failure on the tab, and a catalog that
+    // failed to load stays empty for the Refresh button.
+  }
+}
+
+/** The AWS profiles on the server's machine, for the Bedrock tab's dropdown. */
+export async function refreshBedrockProfiles(): Promise<void> {
+  const reply = await sendControlAwait('bedrock.profiles.list');
+  if (Array.isArray(reply.profiles)) {
+    state.bedrockProfilesState = reply.profiles.map(String);
+  }
   pushCloudAiSettingsState();
-  void maybeRefreshBedrockCatalog();
 }
 
 /** Re-fetch Bedrock's model catalog for the configured region (kodo/doc/
@@ -247,44 +288,32 @@ export function setBedrockRegion(region: string): void {
  *  button.
  *
  *  Unlike every other command in this file, this one **sends credentials**:
- *  `ListFoundationModels` is a signed AWS call and the server holds no
+ *  `ListFoundationModels` is an authenticated AWS call and the server holds no
  *  Bedrock credentials of its own, while a control-connection handler has no
- *  session response channel to pull them over. The blob sent here is exactly
+ *  session response channel to pull them over. The token sent here is exactly
  *  what an `api_key.request` for this vendor would be answered with, over the
  *  same local WebSocket.
  *
- *  Resolves the *active* key without falling back to the interactive add
- *  flow: a catalog refresh must never pop a credential prompt (see
- *  `maybeRefreshBedrockCatalog`, which runs unattended on every `hello.ack`).
- *  Returns `false` when there was no key to send. */
-export async function refreshBedrockCatalog(): Promise<boolean> {
-  if (!state.extensionContext) {
-    return false;
-  }
-  const apiKey = await cloudCredentials.getActiveKey(state.extensionContext, 'bedrock');
-  if (!apiKey) {
-    return false;
-  }
-  const resp = await sendControlAwait('bedrock.models.refresh', {
-    api_key: apiKey,
-    region: readBedrockRegion(),
-  });
+ *  @throws When no token can be minted; the message is for the user. */
+export async function refreshBedrockCatalog(): Promise<void> {
+  const region = readBedrockRegion();
+  const apiKey = await getBedrockToken();
+  const resp = await sendControlAwait('bedrock.models.refresh', { api_key: apiKey, region });
   if (Array.isArray(resp.models)) {
     state.bedrockCatalogState = resp.models as import('../llm-registry-types').BedrockModelInfo[];
   }
   pushCloudAiSettingsState();
-  return true;
 }
 
-/** Fetch the Bedrock catalog if it's missing and we have a key to fetch it
- *  with — the unattended counterpart of `refreshBedrockCatalog`.
+/** Fetch the Bedrock catalog if it's missing — the unattended counterpart of
+ *  `refreshBedrockCatalog`.
  *
- *  Called on every `hello.ack` and after a region change or a new key. Silent
- *  in every failure mode on purpose: a window with no Bedrock credentials
- *  configured (the common case) must not be nagged, and a server that isn't
- *  reachable will get another chance on the next `hello.ack`. */
+ *  Called on every `hello.ack`, so it does nothing for a window not using
+ *  Bedrock: minting a token there would mean talking to AWS on behalf of a user
+ *  of some other vendor. Silent in every failure mode on purpose, since a server
+ *  that isn't reachable will get another chance on the next `hello.ack`. */
 export async function maybeRefreshBedrockCatalog(): Promise<void> {
-  if (state.bedrockCatalogState.length > 0) {
+  if (state.bedrockCatalogState.length > 0 || !isBedrockInUse()) {
     return;
   }
   try {
@@ -343,6 +372,20 @@ export async function handleApiKeyRequest(
     return;
   }
 
+  // No stored key and nothing to prompt for: the token is minted from the
+  // AWS profile, and a failure to do so (an expired SSO login, say) is what the
+  // session has to show, so its message goes back as the error.
+  if (vendor === 'bedrock') {
+    try {
+      const token = await getBedrockToken();
+      void maybeRefreshBedrockCatalog();
+      send(makeResponse(requestId, { api_key: token }));
+    } catch (err) {
+      send(makeResponse(requestId, { error: err instanceof Error ? err.message : String(err) }));
+    }
+    return;
+  }
+
   try {
     // A key whose secret is gone must not be mistaken for one that merely
     // failed to resolve: prune it (and tell the user why the prompt below is
@@ -351,11 +394,6 @@ export async function handleApiKeyRequest(
 
     const key = await cloudCredentials.resolveApiKey(state.extensionContext, vendor);
     pushCloudAiSettingsState();
-    // A Bedrock key that was just added is also what the (credential-gated)
-    // model catalog fetch needs, and the picker is empty until it lands.
-    if (vendor === 'bedrock') {
-      void maybeRefreshBedrockCatalog();
-    }
     if (key) {
       send(makeResponse(requestId, { api_key: key }));
       return;

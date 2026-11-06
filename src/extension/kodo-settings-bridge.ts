@@ -22,7 +22,9 @@ import {
   pruneMissingCloudKeys,
   pushCloudAiSettingsState,
   refreshBedrockCatalog,
+  refreshBedrockProfiles,
   refreshOpenRouterCatalog,
+  setBedrockProfile,
   setBedrockRegion,
   setCloudModel,
   setCloudUniformEnabled,
@@ -1156,19 +1158,25 @@ async function onKodoSettingsMessage(msg: KodoSettingsMessage): Promise<void> {
     setCloudUniformModel(msg.vendor, msg.model_id);
     return;
   }
+  if (msg.type === 'set_bedrock_profile') {
+    setBedrockProfile(msg.profile);
+    return;
+  }
+  if (msg.type === 'refresh_bedrock_profiles') {
+    try {
+      await refreshBedrockProfiles();
+    } catch {
+      // The dropdown keeps what it has, and the Custom box still works.
+    }
+    return;
+  }
   if (msg.type === 'refresh_bedrock_catalog') {
     try {
-      // Unlike OpenRouter's, this refresh needs credentials -- `false` means
-      // there are none stored yet, which is a configuration state to point at
-      // rather than a failure to report.
-      const sent = await refreshBedrockCatalog();
-      if (!sent) {
-        vscode.window.showWarningMessage(
-          'Kōdo: add an AWS access key for Bedrock first — the model list is fetched with it.',
-        );
-      }
-    } catch {
-      vscode.window.showErrorMessage('Kōdo: could not reach the server to refresh the AWS Bedrock model list.');
+      await refreshBedrockCatalog();
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Kōdo: could not refresh the AWS Bedrock model list — ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     return;
   }

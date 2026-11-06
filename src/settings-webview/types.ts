@@ -493,6 +493,16 @@ export interface OpenRouterModelInfo {
   supports_reasoning: boolean;
 }
 
+/** Mirrors `BedrockTokenStatus` in `llm-registry-types.ts`: the state of the
+ *  stored token, never the token itself. */
+export interface BedrockTokenStatus {
+  hasToken: boolean;
+  /** Epoch seconds; `0` without a token. */
+  expiresAt: number;
+  /** Why the last attempt to mint one failed; `''` when it did not. */
+  error: string;
+}
+
 /** One invocable AWS Bedrock target from the server's fetched/cached catalog
  * (kodo/doc/LLM_REGISTRY.md §3b) -- a fourth registry shape, and the only
  * region-scoped one. Unlike OpenRouter's entries it carries no pricing:
@@ -659,6 +669,13 @@ export interface KodoSettingsState {
   /** Which AWS region Bedrock is called in; the catalog above is scoped to
    * it. */
   bedrockRegion: string;
+  /** The AWS profile Bedrock's token is minted from; `''` for botocore's
+   * default credential chain (kodo/doc/SETTINGS.md §2.2c). */
+  bedrockProfile: string;
+  /** The AWS profiles the server can see, for the dropdown. */
+  bedrockProfiles: string[];
+  /** The state of the stored token; never the token itself. */
+  bedrockToken: BedrockTokenStatus;
   /** vendor -> its "use one model for all effort levels" shortcut state. See
    * CloudUniformEntry. */
   cloudUniform: Record<string, CloudUniformEntry>;
@@ -812,6 +829,8 @@ export type OutboundMessage =
   | { type: 'set_openrouter_auto_mode'; enabled: boolean }
   | { type: 'refresh_openrouter_catalog' }
   | { type: 'set_bedrock_region'; region: string }
+  | { type: 'set_bedrock_profile'; profile: string }
+  | { type: 'refresh_bedrock_profiles' }
   | { type: 'refresh_bedrock_catalog' }
   | { type: 'set_cloud_uniform_enabled'; vendor: string; enabled: boolean }
   | { type: 'set_cloud_uniform_model'; vendor: string; model_id: string }

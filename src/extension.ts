@@ -30,6 +30,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import * as cloudCredentials from './cloud-credentials';
 import { initKodoDiagnostics, kodoDiagnostics, showKodoDiagnostics } from './diagnostics';
 import { makeRequest } from './envelope';
 import type { Envelope } from './envelope';
@@ -48,6 +49,8 @@ import {
   setCloudUniformModel,
 } from './extension/cloud-ai-settings';
 import { registerAgentSchemas } from './extension/agent-schemas';
+import { startBedrockTokenRefresher } from './extension/bedrock-token';
+import { pushCloudAiSettingsState } from './extension/cloud-ai-settings';
 import { handleControlEnvelope } from './extension/control-channel';
 import { sendControl, sendControlHello } from './extension/control-send';
 import { createProject } from './extension/create-project';
@@ -97,6 +100,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerAgentSchemas().catch((err: unknown) => {
     kodoDiagnostics().appendLine(`could not register the agent JSON Schemas: ${String(err)}`);
   });
+
+  // Bedrock no longer uses stored IAM access keys, and the panel no longer has
+  // a way to remove them, so they go now, before anything reads the key list.
+  // A failure leaves them listed for the next activation to retry.
+  await cloudCredentials.forgetAllKeys(context, 'bedrock').catch((err: unknown) => {
+    kodoDiagnostics().appendLine(`could not remove the old AWS Bedrock keys: ${String(err)}`);
+  });
+  startBedrockTokenRefresher(context, pushCloudAiSettingsState);
 
   // Window-global, independent of the WS connection/session model — polls
   // manager-state.json directly off disk (see local-model-downloads.ts) so a

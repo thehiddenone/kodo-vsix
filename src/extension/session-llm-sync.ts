@@ -51,7 +51,8 @@ function sidebarSelection(): LlmSelection | null {
 
 async function availabilityFacts(selection: LlmSelection): Promise<AvailabilityFacts> {
   let keyStored = true;
-  if (selection.kind === 'cloud' && state.extensionContext) {
+  // Bedrock has no stored key to look for: its token is minted when needed.
+  if (selection.kind === 'cloud' && selection.vendor !== 'bedrock' && state.extensionContext) {
     keyStored = (await cloudCredentials.getActiveKey(state.extensionContext, selection.vendor)) !== undefined;
   }
   return {

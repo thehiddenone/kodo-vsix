@@ -25,6 +25,7 @@ import * as vscode from 'vscode';
 import WebSocket from 'ws';
 import { logDiag as log } from './diagnostics';
 import { makeRequest, fromJson, toJson } from './envelope';
+import { assertServerPrerequisites } from './prerequisites';
 import { decideAttach, type LaunchOutcome, type ServerDiscovery, type ServerProbe, type ServerState } from './server-attach-policy';
 import { ensureKodoEnvironment, planKodoUpgrade, rebuildKodoVenv, withKodoEnvLock } from './uv-setup';
 
@@ -355,6 +356,15 @@ export class ServerLauncher {
       }
     } else {
       log(this.output, '[launch] No kodo-server discovery file — starting a new singleton server');
+    }
+
+    // Before any download: a missing git makes the server exit 1 at startup,
+    // which no amount of venv setup (or rebuilding) can fix.
+    try {
+      assertServerPrerequisites();
+    } catch (e) {
+      log(this.output, `[launch] ${e instanceof Error ? e.message : String(e)}`);
+      throw e;
     }
 
     if (opts.rebuildVenv) {

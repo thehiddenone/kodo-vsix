@@ -234,6 +234,15 @@ export function readBedrockRegion(): string {
   return typeof value === 'string' && value ? value : DEFAULT_BEDROCK_REGION;
 }
 
+/** The AWS profile Bedrock's token is minted from (kodo/doc/SETTINGS.md §2.2c).
+ *  `''` means none: AWS_PROFILE stays unset and botocore's default credential
+ *  chain applies, which is what an instance role or environment credentials
+ *  need. */
+export function readBedrockProfile(): string {
+  const value = readSettings()['bedrock_profile'];
+  return typeof value === 'string' ? value : '';
+}
+
 /** Every vendor's "use one model for all effort levels" shortcut
  *  (kodo/doc/SETTINGS.md's `models.cloud_uniform`) -- `{enabled: false,
  *  modelId: null}` for a vendor missing from settings.json entirely (a fresh

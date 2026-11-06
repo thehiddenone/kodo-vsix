@@ -22,6 +22,7 @@ import {
   decideAttach,
   startFailureAction,
 } from '../server-attach-policy';
+import { MissingPrerequisiteError } from '../prerequisites';
 import { probeServer } from '../server-launcher';
 import type { FailureVerdict } from '../ws-client';
 import { state } from './state';
@@ -96,8 +97,26 @@ export function launchKodoServer(port: number, rebuildVenv = false): void {
     })
     .catch((e: unknown) => {
       state.serverLaunchInFlight = false;
+      if (e instanceof MissingPrerequisiteError) {
+        reportMissingPrerequisite(port, e.message);
+        return;
+      }
       handleServerStartFailure(port, e instanceof Error ? e.message : String(e));
     });
+}
+
+/**
+ * A prerequisite such as git is missing. Retrying on our own or rebuilding the
+ * venv cannot fix that, so it skips {@link handleServerStartFailure}'s ladder
+ * and waits for the user to install it and click Retry.
+ */
+function reportMissingPrerequisite(port: number, message: string): void {
+  endServerStartupProgress();
+  void vscode.window.showErrorMessage(message, 'Retry').then((choice) => {
+    if (choice === 'Retry' && !state.serverLaunchInFlight && !state.deactivating) {
+      launchKodoServer(port);
+    }
+  });
 }
 
 /**

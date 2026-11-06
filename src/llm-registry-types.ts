@@ -45,6 +45,17 @@ export interface OpenRouterModelInfo {
   supports_reasoning: boolean;
 }
 
+/** What the settings panel shows about the AWS Bedrock token in SecretStorage.
+ *  Never carries the token itself. */
+export interface BedrockTokenStatus {
+  /** A token that works for the configured profile and region is stored. */
+  hasToken: boolean;
+  /** When that token expires, in epoch seconds; `0` without one. */
+  expiresAt: number;
+  /** Why the last attempt to mint one failed; `''` when it did not. */
+  error: string;
+}
+
 /**
  * One invocable AWS Bedrock target from the server's fetched/cached catalog
  * (kodo/doc/LLM_REGISTRY.md §3b) — a **fourth** registry shape, alongside

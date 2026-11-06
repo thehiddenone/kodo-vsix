@@ -1199,7 +1199,9 @@ function buildHtml(): string {
         ? 'Search ' + options.length + ' ' + placeholderNoun + '…'
         // Without a key the catalog can never populate, so don't pretend it
         // is still loading.
-        : (hasKey ? 'Loading model list…' : 'API key is required to load model list');
+        : (hasKey
+          ? 'Loading model list…'
+          : (key.indexOf('bedrock|') === 0 ? 'AWS credentials are' : 'API key is') + ' required to load model list');
       input.value = _pickerUi.key === key ? _pickerUi.query : '';
 
       const dropdown = document.createElement('div');

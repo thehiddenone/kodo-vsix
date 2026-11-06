@@ -17,10 +17,14 @@
 import * as cloudCredentials from '../cloud-credentials';
 import { KodoSettingsPanel } from '../settings-panel/panel';
 import type { HarborModelOption, HarborOptionsResult } from '../settings-panel/types';
+import { peekBedrockToken } from './bedrock-token';
 import { sendControlAwait } from './control-send';
 import { state } from './state';
 
 async function storedKey(vendor: string): Promise<string | undefined> {
+  if (vendor === 'bedrock') {
+    return peekBedrockToken();
+  }
   const context = state.extensionContext;
   return context ? cloudCredentials.getActiveKey(context, vendor) : undefined;
 }

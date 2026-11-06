@@ -17,6 +17,7 @@ import type { SessionDeps, SessionLaunch } from '../session/types';
 import { SessionController } from '../session/controller';
 import { PanelSessionHost } from '../session/session-host';
 import { applyLlamaState } from './llamacpp';
+import { clearBedrockToken } from './bedrock-token';
 import { handleApiKeyRequest, pushCloudAiSettingsState } from './cloud-ai-settings';
 import { handleChooseProjectFolder } from './create-project';
 import { confirmLocalLlamaLaunch } from './local-llm-registry';
@@ -74,7 +75,10 @@ export function sessionDeps(overrides: Partial<SessionDeps> = {}): SessionDeps {
       );
     },
     revokeApiKey: (vendor) => {
-      void cloudCredentials.revokeActiveKey(state.extensionContext!, vendor).then(() => pushCloudAiSettingsState());
+      const revoked = vendor === 'bedrock'
+        ? clearBedrockToken()
+        : cloudCredentials.revokeActiveKey(state.extensionContext!, vendor);
+      void revoked.then(() => pushCloudAiSettingsState());
     },
     refreshLocalRegistry: () => sendControl(makeRequest('local_llm.registry_get', {})),
     onSessionAssigned: (_c, sessionId) => rememberOpenSession(sessionId),

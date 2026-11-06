@@ -1184,6 +1184,26 @@
       margin-bottom: 8px;
     }
     .model-select { max-width: 360px; }
+    .bedrock-profile-input {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 360px;
+      margin-top: 8px;
+      padding: 4px 8px;
+      color: var(--vscode-input-foreground);
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, transparent);
+      font-family: inherit;
+      font-size: inherit;
+    }
+    .bedrock-profile-input:disabled { opacity: 0.5; cursor: not-allowed; }
+    .bedrock-token-line {
+      margin-top: 8px;
+      font-size: 0.88em;
+      color: var(--vscode-descriptionForeground);
+    }
+    .bedrock-token-error { color: var(--vscode-errorForeground); }
     .model-detail {
       margin-top: 8px;
       display: flex;

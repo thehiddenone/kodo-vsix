@@ -103,7 +103,9 @@ export async function pruneMissingKeys(
 
   for (const v of vendor ? [vendor] : Object.keys(settings)) {
     const vendorMap = settings[v];
-    if (!vendorMap) {
+    // Bedrock's entries here are only ever on their way out, via
+    // forgetAllKeys, and that removal must not read as a lost key.
+    if (!vendorMap || v === 'bedrock') {
       continue;
     }
     for (const [name, uuid] of Object.entries(vendorMap.keys)) {
@@ -244,6 +246,14 @@ export async function forgetKey(
     vendorMap.active = null;
   }
   _writeCloudSettings(settings);
+}
+
+/** Forget every key stored for *vendor*. A key whose secret can't be deleted
+ *  stays listed, so a later call tries it again. */
+export async function forgetAllKeys(context: vscode.ExtensionContext, vendor: string): Promise<void> {
+  for (const { uuid } of listKeys(vendor)) {
+    await forgetKey(context, vendor, uuid);
+  }
 }
 
 /** Forget whichever key is currently active for *vendor* (server-initiated revoke). */

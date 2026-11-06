@@ -1,7 +1,8 @@
 import type { ComponentChildren } from 'preact';
-import { useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { CUSTOM_PROFILE_VALUE, DEFAULT_CHAIN_VALUE, selectedProfileValue } from './bedrockProfile';
 import { BEDROCK_REGIONS, CLOUD_VENDORS, EFFORT_EXAMPLES, EFFORT_LABELS, EFFORT_LEVELS } from './types';
-import type { ApiKeyEntry, BedrockModelInfo, CloudRegistry, CloudUniformEntry, CloudVendorRegistryInfo, EffortLevel, OpenRouterModelInfo } from './types';
+import type { ApiKeyEntry, BedrockModelInfo, BedrockTokenStatus, CloudRegistry, CloudUniformEntry, CloudVendorRegistryInfo, EffortLevel, OpenRouterModelInfo } from './types';
 import { vscode } from './vscode';
 
 function CloudKeysSection({ vendor, vendorLabel, keys, onAddKey }: {
@@ -257,7 +258,7 @@ interface PickerOption {
  * `openrouter_catalog`/`bedrock_catalog`) and filtered client-side here, no
  * per-keystroke round trip. Replaces EffortSection's plain <select> for those
  * two vendors, since a several-hundred-option <select> is unusable. */
-function CatalogModelPicker({ modelId, options, disabled, placeholderNoun, hasKey, onSelect }: {
+function CatalogModelPicker({ modelId, options, disabled, placeholderNoun, hasKey, missingKeyText, onSelect }: {
   modelId: string;
   options: PickerOption[];
   disabled: boolean;
@@ -267,6 +268,8 @@ function CatalogModelPicker({ modelId, options, disabled, placeholderNoun, hasKe
    * without one the catalog can never populate, so the empty state should
    * say so rather than claim to still be loading. */
   hasKey: boolean;
+  /** The empty state without a credential, for a vendor that has no API key. */
+  missingKeyText?: string;
   onSelect: (modelId: string) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -305,7 +308,7 @@ function CatalogModelPicker({ modelId, options, disabled, placeholderNoun, hasKe
             ? `Search ${options.length} ${placeholderNoun}…`
             : hasKey
               ? 'Loading model list…'
-              : 'API key is required to load model list'
+              : missingKeyText ?? 'API key is required to load model list'
         }
         value={query}
         onInput={(e) => { setQuery((e.target as HTMLInputElement).value); setOpen(true); }}
@@ -476,22 +479,98 @@ function OpenRouterVendorPanel({
   );
 }
 
-/** AWS Bedrock's credentials are a **pair** — an IAM access key id and a
- * secret access key — where every other vendor's is a single string. They are
- * still stored and listed through exactly the same named-multi-key mechanism
- * (`cloud-credentials.ts`); only the add form differs, which is why this
- * reuses {@link CloudKeysSection} unchanged and the two-field form lives in
- * `AddKeyModal.tsx`. See kodo/doc/LLM_REGISTRY.md §3b. */
-function BedrockCredentialsHelp() {
+const BEDROCK_MISSING_KEY_TEXT = 'AWS credentials are required to load model list';
+
+/** How the token line under the profile picker reads. */
+function bedrockTokenLine(token: BedrockTokenStatus): string {
+  if (token.error) {
+    return `Could not get a token: ${token.error}`;
+  }
+  if (token.hasToken) {
+    const until = new Date(token.expiresAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `Token valid until ${until}, refreshed automatically.`;
+  }
+  return 'A token is generated the first time Bedrock is used.';
+}
+
+/** Which AWS credentials Bedrock's short-term token is minted from. Takes the
+ *  place of the "API access keys" section every other vendor has: there is
+ *  nothing stored to manage, only a profile to point at, and the region is
+ *  chosen right below. See kodo/doc/LLM_REGISTRY.md §3b. */
+function BedrockProfileSection({ profile, profiles, token, onChange }: {
+  profile: string;
+  profiles: string[];
+  token: BedrockTokenStatus;
+  onChange: (profile: string) => void;
+}) {
+  // Picking "Custom" saves nothing until a name is typed, so that choice only
+  // lives here. selectedProfileValue covers the saved case.
+  const [customChosen, setCustomChosen] = useState(false);
+  const [customName, setCustomName] = useState('');
+  useEffect(() => { vscode.postMessage({ type: 'refresh_bedrock_profiles' }); }, []);
+
+  const selected = selectedProfileValue(profile, profiles, customChosen);
+  const isCustom = selected === CUSTOM_PROFILE_VALUE;
+  const shownName = customChosen ? customName : isCustom ? profile : '';
+
+  function choose(value: string) {
+    if (value === CUSTOM_PROFILE_VALUE) {
+      setCustomChosen(true);
+      setCustomName('');
+      return;
+    }
+    setCustomChosen(false);
+    onChange(value);
+  }
+
+  function commitCustomName(name: string) {
+    const trimmed = name.trim();
+    if (trimmed && trimmed !== profile) {
+      onChange(trimmed);
+    }
+    if (trimmed) {
+      setCustomChosen(false);
+    }
+  }
+
   return (
-    <p className="intro-text">
-      Kōdo signs Bedrock requests with a long-term IAM user access key — an access key ID and a secret
-      access key, entered together. Create a dedicated IAM user for this, grant it just{' '}
-      <span className="value-code">bedrock:InvokeModelWithResponseStream</span>,{' '}
-      <span className="value-code">bedrock:ListFoundationModels</span> and{' '}
-      <span className="value-code">bedrock:ListInferenceProfiles</span>, and make sure the models you want
-      are enabled for your account in the Bedrock console.
-    </p>
+    <div>
+      <div className="section-heading">AWS profile</div>
+      <hr className="section-divider" />
+      <p className="intro-text">
+        Kōdo uses this profile's credentials to generate a short-term Bedrock token, valid for up to an hour
+        and renewed automatically. The credentials need <span className="value-code">bedrock:CallWithBearerToken</span>,{' '}
+        <span className="value-code">bedrock:InvokeModelWithResponseStream</span>,{' '}
+        <span className="value-code">bedrock:ListFoundationModels</span> and{' '}
+        <span className="value-code">bedrock:ListInferenceProfiles</span>, and the models you want must be
+        enabled for your account in the Bedrock console.
+      </p>
+      <select
+        className="settings-select model-select"
+        aria-label="AWS profile"
+        value={selected}
+        onChange={(e) => choose((e.target as HTMLSelectElement).value)}
+      >
+        <option value={DEFAULT_CHAIN_VALUE}>Default credential chain</option>
+        {profiles.map((name) => <option key={name} value={name}>{name}</option>)}
+        <option value={CUSTOM_PROFILE_VALUE}>Custom</option>
+      </select>
+      <input
+        type="text"
+        className="bedrock-profile-input"
+        aria-label="Custom AWS profile name"
+        autocomplete="off"
+        placeholder="Profile name"
+        disabled={!isCustom}
+        value={shownName}
+        onInput={(e) => { setCustomChosen(true); setCustomName((e.target as HTMLInputElement).value); }}
+        onBlur={(e) => commitCustomName((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') { commitCustomName((e.target as HTMLInputElement).value); } }}
+      />
+      <div className={token.error ? 'bedrock-token-line bedrock-token-error' : 'bedrock-token-line'}>
+        {bedrockTokenLine(token)}
+      </div>
+    </div>
   );
 }
 
@@ -543,6 +622,7 @@ function BedrockEffortSection({ effort, modelId, options, disabled, hasKey, onSe
         disabled={disabled}
         placeholderNoun="models and inference profiles"
         hasKey={hasKey}
+        missingKeyText={BEDROCK_MISSING_KEY_TEXT}
         onSelect={onSelect}
       />
       {disabled && (
@@ -562,15 +642,17 @@ function BedrockEffortSection({ effort, modelId, options, disabled, hasKey, onSe
  * Auto mode — Bedrock has no router pseudo-model, so every effort tier names
  * a concrete model or inference profile. */
 function BedrockVendorPanel({
-  keys, modelsByVendor, catalog, region, onAddKey, onSetRegion, onRefreshCatalog,
+  modelsByVendor, catalog, region, profile, profiles, token, onSetRegion, onSetProfile, onRefreshCatalog,
   cloudUniform, onSetCloudUniformEnabled, onSetCloudUniformModel,
 }: {
-  keys: ApiKeyEntry[];
   modelsByVendor: Record<string, string>;
   catalog: BedrockModelInfo[];
   region: string;
-  onAddKey: () => void;
+  profile: string;
+  profiles: string[];
+  token: BedrockTokenStatus;
   onSetRegion: (region: string) => void;
+  onSetProfile: (profile: string) => void;
   onRefreshCatalog: () => void;
   cloudUniform: CloudUniformEntry;
   onSetCloudUniformEnabled: (enabled: boolean) => void;
@@ -597,8 +679,7 @@ function BedrockVendorPanel({
         each vendor separately. Pick a region, then assign one of its models — or a cross-region inference
         profile — to each level of effort.
       </p>
-      <BedrockCredentialsHelp />
-      <CloudKeysSection vendor="bedrock" vendorLabel="AWS Bedrock" keys={keys} onAddKey={onAddKey} />
+      <BedrockProfileSection profile={profile} profiles={profiles} token={token} onChange={onSetProfile} />
       <hr className="section-divider" />
       <BedrockRegionSection region={region} onChange={onSetRegion} />
       <hr className="section-divider" />
@@ -606,7 +687,7 @@ function BedrockVendorPanel({
       <p className="intro-text">
         {catalog.length
           ? `${catalog.length} models and inference profiles available in ${region}.`
-          : `Model list not loaded for ${region} yet — add an access key above, then refresh. Kōdo fetches the list from your own AWS account.`}
+          : `Model list not loaded for ${region} yet. Choose a profile above, then refresh. Kōdo fetches the list from your own AWS account.`}
       </p>
       <button className="secondary-btn" onClick={onRefreshCatalog}>Refresh model list</button>
       <UniformModelSection
@@ -618,7 +699,8 @@ function BedrockVendorPanel({
             options={pickerOptions}
             disabled={false}
             placeholderNoun="models and inference profiles"
-            hasKey={keys.length > 0}
+            hasKey={token.hasToken}
+            missingKeyText={BEDROCK_MISSING_KEY_TEXT}
             onSelect={onSetCloudUniformModel}
           />
         )}
@@ -632,7 +714,7 @@ function BedrockVendorPanel({
             modelId={modelsByVendor[effort]}
             options={pickerOptions}
             disabled={cloudUniform.enabled}
-            hasKey={keys.length > 0}
+            hasKey={token.hasToken}
             onSelect={(model_id) => vscode.postMessage({ type: 'set_cloud_model', vendor: 'bedrock', effort, model_id })}
           />
         </div>
@@ -668,6 +750,10 @@ interface CloudVendorSectionProps {
   bedrockCatalog: BedrockModelInfo[];
   bedrockRegion: string;
   onSetBedrockRegion: (region: string) => void;
+  bedrockProfile: string;
+  bedrockProfiles: string[];
+  bedrockToken: BedrockTokenStatus;
+  onSetBedrockProfile: (profile: string) => void;
   onRefreshBedrockCatalog: () => void;
   /** vendor -> its "use one model for all effort levels" shortcut state
    *  (kodo/doc/SETTINGS.md's `models.cloud_uniform`). */
@@ -682,6 +768,7 @@ export function CloudVendorSection({
   vendor, cloudRegistry, modelsByVendor, keysByVendor, onAddKey, metaContributorTier, onSetMetaContributorTier,
   openRouterCatalog, openRouterAutoMode, onSetOpenRouterAutoMode, onRefreshOpenRouterCatalog,
   bedrockCatalog, bedrockRegion, onSetBedrockRegion, onRefreshBedrockCatalog,
+  bedrockProfile, bedrockProfiles, bedrockToken, onSetBedrockProfile,
   cloudUniform, onSetCloudUniformEnabled, onSetCloudUniformModel,
 }: CloudVendorSectionProps) {
   const uniform = cloudUniform[vendor] ?? EMPTY_CLOUD_UNIFORM;
@@ -710,12 +797,14 @@ export function CloudVendorSection({
   if (vendor === 'bedrock') {
     return (
       <BedrockVendorPanel
-        keys={keysByVendor.bedrock || []}
         modelsByVendor={modelsByVendor.bedrock || {}}
         catalog={bedrockCatalog}
         region={bedrockRegion}
-        onAddKey={() => onAddKey('bedrock')}
+        profile={bedrockProfile}
+        profiles={bedrockProfiles}
+        token={bedrockToken}
         onSetRegion={onSetBedrockRegion}
+        onSetProfile={onSetBedrockProfile}
         onRefreshCatalog={onRefreshBedrockCatalog}
         cloudUniform={uniform}
         onSetCloudUniformEnabled={(enabled) => onSetCloudUniformEnabled('bedrock', enabled)}
